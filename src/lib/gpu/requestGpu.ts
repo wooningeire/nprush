@@ -42,6 +42,13 @@ export const requestGpu = async ({
         onErr?.("gpu device was lost. please reload the page!");
     });
 
+    if (typeof window !== "undefined") {
+        (window as any).__wgpu_errors = [];
+        device.addEventListener("uncapturederror", (e: any) => {
+            (window as any).__wgpu_errors.push(e.error.message);
+        });
+    }
+
 
     const context = canvas.getContext("webgpu");
     if (context === null) {

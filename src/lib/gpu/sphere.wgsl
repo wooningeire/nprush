@@ -17,13 +17,13 @@ struct VertexOutput {
 @vertex
 fn vert(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.position = uniforms.viewProjMat * vec4f(in.position, 1.0);
+    out.position = uniforms.viewProjMat * vec4f(in.position, 1);
     out.normal = in.normal;
     return out;
 }
 
 @fragment
 fn frag(in: VertexOutput) -> @location(0) vec4f {
-    let color = (normalize(in.normal) + vec3f(1.0)) * 0.5;
-    return vec4f(color, 1.0);
+    let color = (normalize(in.normal) + 1) * 0.5;
+    return vec4f(color, 1);
 }
