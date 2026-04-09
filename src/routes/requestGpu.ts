@@ -1,0 +1,66 @@
+export const requestGpu = async ({
+    onStatusChange,
+    onErr,
+    canvas,
+}: {
+    onStatusChange?: (text: string) => void,
+    onErr?: (text: string) => void,
+    canvas: HTMLCanvasElement,
+}) => {
+    onStatusChange?.("accessing gpu adapter");
+    if (navigator.gpu === undefined) {
+        onErr?.("webgpu not supported");
+        return null;
+    }
+
+    const adapter = await navigator.gpu.requestAdapter();
+    if (adapter === null) {
+        onErr?.("could not get adapter");
+        return null;
+    }
+
+    const supportsTimestamp = adapter.features.has("timestamp-query");
+    const requiredFeatures: GPUFeatureName[] = [];
+    if (supportsTimestamp) {
+        requiredFeatures.push("timestamp-query");
+    }
+
+    onStatusChange?.("accessing gpu device");
+    const device = await adapter.requestDevice({
+        requiredFeatures,
+        // requiredLimits: {
+        //     maxStorageBufferBindingSize: Math.min(536_870_912, adapter.limits.maxStorageBufferBindingSize),
+        //     maxStorageBuffersPerShaderStage: 10,
+        // },
+    });
+    if (device === null) {
+        onErr?.("could not get device");
+        return null;
+    }
+
+    device.lost.then(() => {
+        onErr?.("gpu device was lost. please reload the page!");
+    });
+
+
+    const context = canvas.getContext("webgpu");
+    if (context === null) {
+        onErr?.("could not get context");
+        return null;
+    }
+
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({
+        device,
+        format,
+        alphaMode: "premultiplied",
+    });
+
+
+    return {
+        device,
+        context,
+        format,
+        supportsTimestamp,
+    };
+};
