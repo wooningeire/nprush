@@ -11,6 +11,8 @@ export class GpuRunner {
     readonly uniformsManager: GpuUniformsBufferManager;
     readonly sphereRenderPipelineManager: GpuSphereRenderPipelineManager;
 
+    readonly destroy: () => void;
+
     constructor({
         device,
         context,
@@ -35,7 +37,7 @@ export class GpuRunner {
             uniformsManager: this.uniformsManager,
         });
 
-        $effect.root(() => {
+        this.destroy = $effect.root(() => {
             $effect(() => this.uniformsManager.writeViewProjMat(this.camera.viewProjMat));
         });
     }
