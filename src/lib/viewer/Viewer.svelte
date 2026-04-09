@@ -2,12 +2,12 @@
 import { onMount } from "svelte";
 
 import Canvas from "./Canvas.svelte";
-import { SimulationState } from "./SimulationState.svelte";
+import { ViewerState } from "./ViewerState.svelte.ts";
 
 let canvas = $state<HTMLCanvasElement | null>(null);
 let canvasPromise = Promise.withResolvers<HTMLCanvasElement>();
 
-const simulationState = SimulationState.mount({
+const viewerState = ViewerState.mount({
     canvasPromise: canvasPromise.promise,
 });
 
@@ -18,7 +18,7 @@ onMount(() => {
 
 <main>
     <Canvas
-        {simulationState}
+        {viewerState}
         bind:canvas
     />
 

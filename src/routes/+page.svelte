@@ -1,5 +1,5 @@
 <script lang="ts">
-import Viewer from "./Viewer.svelte";
+import Viewer from "$/viewer/Viewer.svelte";
 </script>
 
 <Viewer />

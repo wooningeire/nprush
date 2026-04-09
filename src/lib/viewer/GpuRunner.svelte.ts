@@ -1,6 +1,6 @@
 import type { Camera } from "./Camera.svelte";
-import { GpuUniformsBufferManager } from "./gpu/GpuUniformsBufferManager";
-import { GpuSphereRenderPipelineManager } from "./gpu/GpuSphereRenderPipelineManager";
+import { GpuUniformsBufferManager } from "$/gpu/GpuUniformsBufferManager";
+import { GpuSphereRenderPipelineManager } from "$/gpu/GpuSphereRenderPipelineManager";
 
 export class GpuRunner {
     private readonly device: GPUDevice;

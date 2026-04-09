@@ -1,19 +1,19 @@
 <script lang="ts">
 import {Draggable} from "@vaie/hui";
-import type { SimulationState } from "./SimulationState.svelte";
+import type { ViewerState } from "./ViewerState.svelte";
 
 let {
-    simulationState,
+    viewerState,
     canvas = $bindable(),
 }: {
-    simulationState: SimulationState,
+    viewerState: ViewerState,
     canvas?: HTMLCanvasElement | null;
 } = $props();
 </script>
 
 <section
-    bind:clientWidth={null, clientWidth => simulationState.width = clientWidth!}
-    bind:clientHeight={null, clientHeight => simulationState.height = clientHeight!}
+    bind:clientWidth={null, clientWidth => viewerState.width = clientWidth!}
+    bind:clientHeight={null, clientHeight => viewerState.height = clientHeight!}
 >
     <Draggable
         onDown={({ pointerEvent }) => {
@@ -29,15 +29,15 @@ let {
         onDrag={async ({ movement, button, pointerEvent }) => {
             switch (button) {
                 case 0:
-                    simulationState.orbit.turn(movement);
+                    viewerState.orbit.turn(movement);
                     break;
 
                 case 1:
-                    simulationState.orbit.pan(movement);
+                    viewerState.orbit.pan(movement);
                     break;
                 
                 case 2:
-                    // simulationState.onInteractionDrag(pointerEvent.clientX, pointerEvent.clientY, canvas!);
+                    // viewerState.onInteractionDrag(pointerEvent.clientX, pointerEvent.clientY, canvas!);
                     break;
             }
 
@@ -46,7 +46,7 @@ let {
 
         onUp={({ pointerEvent }) => {
             if (pointerEvent.button === 2) {
-                // simulationState.onInteractionEnd();
+                // viewerState.onInteractionEnd();
             } else {
                 document.exitPointerLock();
             }
@@ -55,12 +55,12 @@ let {
         {#snippet dragTarget({ onpointerdown })}
             <canvas
                 bind:this={canvas}
-                width={simulationState.width}
-                height={simulationState.height}
+                width={viewerState.width}
+                height={viewerState.height}
                 {onpointerdown}
                 oncontextmenu={(e) => { e.preventDefault(); }}
                 onwheel={(event) => {
-                    simulationState.orbit.radius *= 2 ** (event.deltaY * 0.001);
+                    viewerState.orbit.radius *= 2 ** (event.deltaY * 0.001);
                     event.preventDefault();
                 }}
             ></canvas>

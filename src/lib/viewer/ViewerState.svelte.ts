@@ -1,10 +1,10 @@
 import { onMount } from "svelte";
-import { Camera } from "./Camera.svelte";
-import { CameraOrbit } from "./CameraOrbit.svelte";
-import { requestGpu } from "./requestGpu.ts";
+import { Camera } from "./Camera.svelte.ts";
+import { CameraOrbit } from "./CameraOrbit.svelte.ts";
+import { requestGpu } from "$/gpu/requestGpu.ts";
 import { GpuRunner } from "./GpuRunner.svelte.ts";
 
-export class SimulationState {
+export class ViewerState {
     width = $state(300);
     height = $state(150);
     
@@ -19,7 +19,7 @@ export class SimulationState {
     }: {
         canvasPromise: Promise<HTMLCanvasElement>,
     }) {
-        const state = new SimulationState();
+        const state = new ViewerState();
         
         onMount(async () => {
             const gpu = await requestGpu({canvas: await canvasPromise});
