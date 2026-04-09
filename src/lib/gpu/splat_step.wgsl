@@ -55,20 +55,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         
         // Learning rates per parameter type
         var lr = 0.03;
-        // position — aggressive to let splats find the sphere
-        if (local_param == 0u || local_param == 1u) { lr = 0.1; }
+        // position
+        if (local_param == 0u || local_param == 1u) { lr = 0.05; }
         // scale
         if (local_param == 2u || local_param == 3u) { lr = 0.01; }
-        // color — start slow then ramp up
-        if (local_param == 4u || local_param == 5u || local_param == 6u) {
-            lr = select(0.005, 0.05, t > 300.0);
-        }
-        // opacity — hold back early so splats don't vanish
-        if (local_param == 7u) {
-            lr = select(0.001, 0.03, t > 300.0);
-        }
+        // color
+        if (local_param >= 4u && local_param <= 6u) { lr = 0.02; }
+        // opacity
+        if (local_param == 7u) { lr = 0.01; }
         // rotation
-        if (local_param == 8u) { lr = 0.03; }
+        if (local_param == 8u) { lr = 0.02; }
         
         var m = adam.m[param_idx];
         var v = adam.v[param_idx];
@@ -83,7 +79,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         
         // Per-parameter update clip to enforce position-first convergence
         var max_update = 0.01;
-        if (local_param == 0u || local_param == 1u) { max_update = 0.05; }  // position
+        if (local_param == 0u || local_param == 1u) { max_update = 0.02; }  // position
         if (local_param == 2u || local_param == 3u) { max_update = 0.005; }  // scale
         if (local_param >= 4u && local_param <= 6u) { max_update = 0.001; }  // color
         if (local_param == 7u) { max_update = 0.0005; }  // opacity
@@ -92,13 +88,34 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         
         if (local_param == 0u) { s.transform.x -= update; }
         else if (local_param == 1u) { s.transform.y -= update; }
-        else if (local_param == 2u) { s.transform.z = clamp(s.transform.z - update, 0.01, 2.0); }
-        else if (local_param == 3u) { s.transform.w = clamp(s.transform.w - update, 0.01, 2.0); }
+        else if (local_param == 2u) { s.transform.z = clamp(s.transform.z - update, 0.001, 2.0); }
+        else if (local_param == 3u) { s.transform.w = clamp(s.transform.w - update, 0.001, 2.0); }
         else if (local_param == 4u) { s.color.r = clamp(s.color.r - update, 0.05, 1.0); }
         else if (local_param == 5u) { s.color.g = clamp(s.color.g - update, 0.05, 1.0); }
         else if (local_param == 6u) { s.color.b = clamp(s.color.b - update, 0.05, 1.0); }
-        else if (local_param == 7u) { s.color.a = clamp(s.color.a - update, 0.15, 0.99); }
+        else if (local_param == 7u) { s.color.a = clamp(s.color.a - update, 0.01, 0.99); }
         else if (local_param == 8u) { s.rot_pad.x -= update; }
+    }
+    
+    // Respawn splats that have shrunk below the px threshold or alpha threshold
+    if (s.transform.z * s.transform.w < 0.0004 || s.color.a < 0.05) {
+        let seed = f32(splat_id) * 3.14159 + t;
+        s.transform.x = (fract(sin(seed * 12.9898) * 43758.5453) * 2.0 - 1.0) * 0.5;
+        s.transform.y = (fract(sin(seed * 78.233) * 43758.5453) * 2.0 - 1.0) * 0.5;
+        s.transform.z = 0.1 + fract(sin(seed * 39.346) * 43758.5453) * 0.15;
+        s.transform.w = 0.1 + fract(sin(seed * 54.123) * 43758.5453) * 0.15;
+        s.color.r = fract(sin(seed * 83.456) * 43758.5453);
+        s.color.g = fract(sin(seed * 13.579) * 43758.5453);
+        s.color.b = fract(sin(seed * 97.531) * 43758.5453);
+        s.color.a = 0.3 + fract(sin(seed * 24.680) * 43758.5453) * 0.4;
+        s.rot_pad.x = fract(sin(seed * 86.420) * 43758.5453) * 6.283185307;
+        
+        // Reset Adam state
+        for (var local_param = 0u; local_param < 9u; local_param++) {
+            let param_idx = base_idx + local_param;
+            adam.m[param_idx] = 0.0;
+            adam.v[param_idx] = 0.0;
+        }
     }
     
     splats.splats[splat_id] = s;
