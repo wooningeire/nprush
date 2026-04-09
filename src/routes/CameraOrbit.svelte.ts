@@ -5,14 +5,14 @@ import { mod, PI, PI_2, REV } from "./util";
 type Point = { x: number; y: number };
 
 
-const ORBIT_CONTROL_SCALE = 0.005;
+const ORBIT_CONTROL_SCALE = 0.01;
 
 export class CameraOrbit implements CameraControlScheme {
     radius = $state(3);
-    lat = $state(PI / 6);
-    long = $state(7 * PI / 8);
+    lat = $state(0);
+    long = $state(0);
     
-    offset = $state(vec3.fromValues(1, 0, 1.5));
+    offset = $state(vec3.fromValues(0, 0, 0));
 
     readonly orientation = $derived(mat4.mul(
         mat4.rotationZ(-this.long),
@@ -47,12 +47,12 @@ export class CameraOrbit implements CameraControlScheme {
     }
 
     turn(movement: Point) {
-        this.lat = mod(this.lat + movement.y * ORBIT_CONTROL_SCALE, REV);
+        this.lat = mod(this.lat - movement.y * ORBIT_CONTROL_SCALE, REV);
 
         if (PI_2 < this.lat && this.lat < 3 * PI_2) {
-            this.long = mod(this.long - movement.x * ORBIT_CONTROL_SCALE, REV);
-        } else {
             this.long = mod(this.long + movement.x * ORBIT_CONTROL_SCALE, REV);
+        } else {
+            this.long = mod(this.long - movement.x * ORBIT_CONTROL_SCALE, REV);
         }
     }
 }
