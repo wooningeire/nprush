@@ -1,6 +1,7 @@
 import backwardModuleSrc from "./splat_backward.wgsl?raw";
 import stepModuleSrc from "./splat_step.wgsl?raw";
 import renderModuleSrc from "./splat_render.wgsl?raw";
+import adcModuleSrc from "./splat_adc.wgsl?raw";
 
 export class GpuSplatOptimizerManager {
     private readonly device: GPUDevice;
@@ -11,9 +12,11 @@ export class GpuSplatOptimizerManager {
     readonly splatBuffer: GPUBuffer;
     readonly gradBuffer: GPUBuffer;
     readonly adamBuffer: GPUBuffer;
+    readonly adcBuffer: GPUBuffer;
 
     private readonly backwardPipeline: GPUComputePipeline;
     private readonly stepPipeline: GPUComputePipeline;
+    private readonly adcPipeline: GPUComputePipeline;
     private readonly renderPipeline: GPURenderPipeline;
 
     private backwardBindGroupLayout: GPUBindGroupLayout;
@@ -22,7 +25,10 @@ export class GpuSplatOptimizerManager {
 
     private backwardBindGroup!: GPUBindGroup;
     private stepBindGroup: GPUBindGroup;
+    private adcBindGroup: GPUBindGroup;
     private renderBindGroup!: GPUBindGroup;
+    
+    private stepCount: number = 0;
 
     private dims: { width: number, height: number } = { width: 0, height: 0 };
 
@@ -85,6 +91,12 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
+        this.adcBuffer = device.createBuffer({
+            label: "splat adc buffer",
+            size: this.numSplats * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
         const injectConstants = (src: string) => src
             .replace(/NUM_SPLATS_PLUS_ONE/g, `${this.numSplats + 1}u`)
             .replace(/NUM_SPLATS_MINUS_ONE/g, `${this.numSplats - 1}u`)
@@ -114,6 +126,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
             ],
         });
         const stepModule = device.createShaderModule({ label: "splat step", code: injectConstants(stepModuleSrc) });
@@ -131,6 +144,33 @@ export class GpuSplatOptimizerManager {
                 { binding: 0, resource: { buffer: this.splatBuffer } },
                 { binding: 1, resource: { buffer: this.gradBuffer } },
                 { binding: 2, resource: { buffer: this.adamBuffer } },
+                { binding: 3, resource: { buffer: this.adcBuffer } },
+            ],
+        });
+
+        // ADC Pipeline
+        const adcBindGroupLayout = device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+            ],
+        });
+        const adcModule = device.createShaderModule({ label: "splat adc", code: injectConstants(adcModuleSrc) });
+        adcModule.getCompilationInfo().then(info => {
+            for (const msg of info.messages) console.warn(`[splat_adc] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
+        });
+        this.adcPipeline = device.createComputePipeline({
+            layout: device.createPipelineLayout({ bindGroupLayouts: [adcBindGroupLayout] }),
+            compute: { module: adcModule, entryPoint: "main" },
+        });
+
+        this.adcBindGroup = device.createBindGroup({
+            layout: adcBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.splatBuffer } },
+                { binding: 1, resource: { buffer: this.adamBuffer } },
+                { binding: 2, resource: { buffer: this.adcBuffer } },
             ],
         });
 
@@ -184,7 +224,14 @@ export class GpuSplatOptimizerManager {
         
         pass.setPipeline(this.stepPipeline);
         pass.setBindGroup(0, this.stepBindGroup);
-        pass.dispatchWorkgroups(8);
+        pass.dispatchWorkgroups(Math.ceil(this.numSplats / 64));
+        
+        this.stepCount++;
+        if (this.stepCount % 100 === 0) {
+            pass.setPipeline(this.adcPipeline);
+            pass.setBindGroup(0, this.adcBindGroup);
+            pass.dispatchWorkgroups(1);
+        }
         
         pass.end();
     }

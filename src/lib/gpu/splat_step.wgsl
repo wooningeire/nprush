@@ -19,9 +19,14 @@ struct AdamState {
     pad: vec3f,
 }
 
+struct ADCArray {
+    grad_accum: array<f32, NUM_SPLATS>,
+}
+
 @group(0) @binding(0) var<storage, read_write> splats: SplatArray;
 @group(0) @binding(1) var<storage, read_write> grads: GradArray;
 @group(0) @binding(2) var<storage, read_write> adam: AdamState;
+@group(0) @binding(3) var<storage, read_write> adc: ADCArray;
 
 @compute @workgroup_size(64, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3u) {
@@ -39,6 +44,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     var s = splats.splats[splat_id];
     let base_idx = splat_id * 11u;
     let t = current_t + 1.0;
+    
+    var pos_grad_norm2 = 0.0;
     
     for (var local_param = 0u; local_param < 11u; local_param++) {
         let param_idx = base_idx + local_param;
@@ -89,8 +96,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         if (local_param == 9u || local_param == 10u) { max_update = 0.05; }  // shape
         let update = clamp(raw_update, -max_update, max_update);
         
-        if (local_param == 0u) { s.transform.x -= update; }
-        else if (local_param == 1u) { s.transform.y -= update; }
+        if (local_param == 0u) { 
+            s.transform.x -= update; 
+            pos_grad_norm2 += grad * grad;
+        }
+        else if (local_param == 1u) { 
+            s.transform.y -= update; 
+            pos_grad_norm2 += grad * grad;
+        }
         else if (local_param == 2u) { s.transform.z = clamp(s.transform.z - update, 0.001, 2.0); }
         else if (local_param == 3u) { s.transform.w = clamp(s.transform.w - update, 0.001, 2.0); }
         else if (local_param == 4u) { s.color.r = clamp(s.color.r - update, 0.05, 1.0); }
@@ -102,27 +115,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         else if (local_param == 10u) { s.rot_pad.z = clamp(s.rot_pad.z - update, 0.01, 5.0); }
     }
     
-    // Respawn splats that have shrunk below the px threshold or alpha threshold
-    if (s.transform.z * s.transform.w < 0.0004 || s.color.a < 0.05) {
-        let seed = f32(splat_id) * 3.14159 + t;
-        s.transform.x = (fract(sin(seed * 12.9898) * 43758.5453) * 2.0 - 1.0) * 0.5;
-        s.transform.y = (fract(sin(seed * 78.233) * 43758.5453) * 2.0 - 1.0) * 0.5;
-        s.transform.z = 0.1 + fract(sin(seed * 39.346) * 43758.5453) * 0.15;
-        s.transform.w = 0.1 + fract(sin(seed * 54.123) * 43758.5453) * 0.15;
-        s.color.r = fract(sin(seed * 83.456) * 43758.5453);
-        s.color.g = fract(sin(seed * 13.579) * 43758.5453);
-        s.color.b = fract(sin(seed * 97.531) * 43758.5453);
-        s.color.a = 0.3 + fract(sin(seed * 24.680) * 43758.5453) * 0.4;
-        s.rot_pad.x = fract(sin(seed * 86.420) * 43758.5453) * 6.283185307;
-        s.rot_pad.y = 2.0;
-        s.rot_pad.z = 0.5;
-        
-        // Reset Adam state
-        for (var local_param = 0u; local_param < 11u; local_param++) {
-            let param_idx = base_idx + local_param;
-            adam.m[param_idx] = 0.0;
-            adam.v[param_idx] = 0.0;
-        }
+    // Accumulate gradient norm
+    adc.grad_accum[splat_id] += sqrt(pos_grad_norm2);
+    
+    // Kill splats that have shrunk below the px threshold
+    // Instead of randomizing, we just set opacity to 0 to act as a free slot for ADC
+    if (s.transform.z * s.transform.w < 0.0004) {
+        s.color.a = 0.0;
     }
     
     splats.splats[splat_id] = s;
