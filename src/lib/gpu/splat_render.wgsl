@@ -5,7 +5,7 @@ struct Splat {
 }
 
 struct SplatArray {
-    splats: array<Splat, 512>,
+    splats: array<Splat, NUM_SPLATS>,
 }
 
 @group(0) @binding(0) var targetTex: texture_2d<f32>;
@@ -40,7 +40,7 @@ fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
 fn eval_splats(p: vec2f) -> vec3f {
     var Ts = 1.0;
     var c = vec3f(0.0);
-    for (var i = 0u; i < 512u; i = i + 1u) {
+    for (var i = 0u; i < NUM_SPLATS; i = i + 1u) {
         let s = splats.splats[i];
         let d = p - s.transform.xy;
         let rot = s.rot_pad.x;
@@ -49,7 +49,8 @@ fn eval_splats(p: vec2f) -> vec3f {
         let lp = vec2f(co * d.x + si * d.y, -si * d.x + co * d.y);
         let ss = max(vec2f(0.0001), s.transform.zw);
         let sp = lp / ss;
-        let pw = -0.5 * dot(sp, sp);
+        let r = max(length(sp), 0.0001);
+        let pw = -s.rot_pad.z * pow(r, s.rot_pad.y);
 
         var a = 0.0;
         if (pw > -15.0) {

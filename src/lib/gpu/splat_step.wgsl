@@ -5,16 +5,16 @@ struct Splat {
 }
 
 struct SplatArray {
-    splats: array<Splat, 512>,
+    splats: array<Splat, NUM_SPLATS>,
 }
 
 struct GradArray {
-    data: array<atomic<i32>, 4608>,
+    data: array<atomic<i32>, NUM_PARAMS>,
 }
 
 struct AdamState {
-    m: array<f32, 4608>,
-    v: array<f32, 4608>,
+    m: array<f32, NUM_PARAMS>,
+    v: array<f32, NUM_PARAMS>,
     t: f32,
     pad: vec3f,
 }
@@ -34,17 +34,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         adam.t = current_t + 1.0;
     }
     
-    if (splat_id >= 512u) { return; }
+    if (splat_id >= NUM_SPLATS) { return; }
 
     var s = splats.splats[splat_id];
-    let base_idx = splat_id * 9u;
+    let base_idx = splat_id * 11u;
     let t = current_t + 1.0;
     
-    for (var local_param = 0u; local_param < 9u; local_param++) {
+    for (var local_param = 0u; local_param < 11u; local_param++) {
         let param_idx = base_idx + local_param;
         let raw_grad = atomicExchange(&grads.data[param_idx], 0);
         var fp_scale = 100000.0;
-        if (local_param <= 3u || local_param == 8u) {
+        if (local_param <= 3u || local_param == 8u || local_param == 9u || local_param == 10u) {
             fp_scale = 10000.0;
         }
         let grad = f32(raw_grad) / fp_scale / 16384.0;
@@ -65,6 +65,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         if (local_param == 7u) { lr = 0.01; }
         // rotation
         if (local_param == 8u) { lr = 0.02; }
+        // shape_a & shape_b
+        if (local_param == 9u || local_param == 10u) { lr = 0.01; }
         
         var m = adam.m[param_idx];
         var v = adam.v[param_idx];
@@ -84,6 +86,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         if (local_param >= 4u && local_param <= 6u) { max_update = 0.001; }  // color
         if (local_param == 7u) { max_update = 0.0005; }  // opacity
         if (local_param == 8u) { max_update = 0.01; }  // rotation
+        if (local_param == 9u || local_param == 10u) { max_update = 0.05; }  // shape
         let update = clamp(raw_update, -max_update, max_update);
         
         if (local_param == 0u) { s.transform.x -= update; }
@@ -95,6 +98,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         else if (local_param == 6u) { s.color.b = clamp(s.color.b - update, 0.05, 1.0); }
         else if (local_param == 7u) { s.color.a = clamp(s.color.a - update, 0.01, 0.99); }
         else if (local_param == 8u) { s.rot_pad.x -= update; }
+        else if (local_param == 9u) { s.rot_pad.y = clamp(s.rot_pad.y - update, 0.1, 10.0); }
+        else if (local_param == 10u) { s.rot_pad.z = clamp(s.rot_pad.z - update, 0.01, 5.0); }
     }
     
     // Respawn splats that have shrunk below the px threshold or alpha threshold
@@ -109,9 +114,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         s.color.b = fract(sin(seed * 97.531) * 43758.5453);
         s.color.a = 0.3 + fract(sin(seed * 24.680) * 43758.5453) * 0.4;
         s.rot_pad.x = fract(sin(seed * 86.420) * 43758.5453) * 6.283185307;
+        s.rot_pad.y = 2.0;
+        s.rot_pad.z = 0.5;
         
         // Reset Adam state
-        for (var local_param = 0u; local_param < 9u; local_param++) {
+        for (var local_param = 0u; local_param < 11u; local_param++) {
             let param_idx = base_idx + local_param;
             adam.m[param_idx] = 0.0;
             adam.v[param_idx] = 0.0;

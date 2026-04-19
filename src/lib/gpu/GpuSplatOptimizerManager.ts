@@ -5,6 +5,9 @@ import renderModuleSrc from "./splat_render.wgsl?raw";
 export class GpuSplatOptimizerManager {
     private readonly device: GPUDevice;
     
+    readonly numSplats: number;
+    readonly numParams: number;
+
     readonly splatBuffer: GPUBuffer;
     readonly gradBuffer: GPUBuffer;
     readonly adamBuffer: GPUBuffer;
@@ -26,15 +29,19 @@ export class GpuSplatOptimizerManager {
     constructor({
         device,
         format,
+        numSplats = 512,
     }: {
         device: GPUDevice,
         format: GPUTextureFormat,
+        numSplats?: number,
     }) {
         this.device = device;
+        this.numSplats = numSplats;
+        this.numParams = numSplats * 11;
         
         // Init Buffers
-        const splatData = new Float32Array(512 * 12);
-        for (let i = 0; i < 512; i++) {
+        const splatData = new Float32Array(this.numSplats * 12);
+        for (let i = 0; i < this.numSplats; i++) {
             const o = i * 12;
             // position: cluster near center
             splatData[o + 0] = (Math.random() * 2 - 1) * 0.5;
@@ -52,6 +59,10 @@ export class GpuSplatOptimizerManager {
             
             // rotation
             splatData[o + 8] = Math.random() * Math.PI * 2;
+            // shape_a (power)
+            splatData[o + 9] = 2.0;
+            // shape_b (multiplier)
+            splatData[o + 10] = 0.5;
         }
 
         this.splatBuffer = device.createBuffer({
@@ -63,15 +74,22 @@ export class GpuSplatOptimizerManager {
 
         this.gradBuffer = device.createBuffer({
             label: "splat grad buffer",
-            size: 4608 * 4,
+            size: this.numParams * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
+        // m (numParams * 4) + v (numParams * 4) + t (4) + pad (12) + extra padding (16)
         this.adamBuffer = device.createBuffer({
             label: "splat adam buffer",
-            size: 36896,
+            size: this.numParams * 8 + 32,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
+
+        const injectConstants = (src: string) => src
+            .replace(/NUM_SPLATS_PLUS_ONE/g, `${this.numSplats + 1}u`)
+            .replace(/NUM_SPLATS_MINUS_ONE/g, `${this.numSplats - 1}u`)
+            .replace(/NUM_SPLATS/g, `${this.numSplats}u`)
+            .replace(/NUM_PARAMS/g, `${this.numParams}u`);
 
         // Backward Pipeline
         this.backwardBindGroupLayout = device.createBindGroupLayout({
@@ -81,7 +99,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
             ],
         });
-        const backwardModule = device.createShaderModule({ label: "splat backward", code: backwardModuleSrc });
+        const backwardModule = device.createShaderModule({ label: "splat backward", code: injectConstants(backwardModuleSrc) });
         backwardModule.getCompilationInfo().then(info => {
             for (const msg of info.messages) console.warn(`[splat_backward] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
@@ -98,7 +116,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
             ],
         });
-        const stepModule = device.createShaderModule({ label: "splat step", code: stepModuleSrc });
+        const stepModule = device.createShaderModule({ label: "splat step", code: injectConstants(stepModuleSrc) });
         stepModule.getCompilationInfo().then(info => {
             for (const msg of info.messages) console.warn(`[splat_step] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
@@ -116,7 +134,7 @@ export class GpuSplatOptimizerManager {
             ],
         });
 
-        const renderModule = device.createShaderModule({ label: "splat render", code: renderModuleSrc });
+        const renderModule = device.createShaderModule({ label: "splat render", code: injectConstants(renderModuleSrc) });
         renderModule.getCompilationInfo().then(info => {
             for (const msg of info.messages) console.warn(`[splat_render] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });

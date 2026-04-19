@@ -5,11 +5,11 @@ struct Splat {
 }
 
 struct SplatArray {
-    splats: array<Splat, 512>,
+    splats: array<Splat, NUM_SPLATS>,
 }
 
 struct GradArray {
-    data: array<atomic<i32>, 4608>,
+    data: array<atomic<i32>, NUM_PARAMS>,
 }
 
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
@@ -29,12 +29,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
 
-    var alphas = array<f32, 512>();
-    var Ts = array<f32, 513>();
+    var alphas = array<f32, NUM_SPLATS>();
+    var Ts = array<f32, NUM_SPLATS_PLUS_ONE>();
     Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
     
-    for (var i = 0u; i < 512u; i++) {
+    for (var i = 0u; i < NUM_SPLATS; i++) {
         let s = splats.splats[i];
         let pos = s.transform.xy;
         let scale = s.transform.zw;
@@ -48,7 +48,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let local_p = vec2f(co * d.x + si * d.y, -si * d.x + co * d.y);
         let safe_scale = max(vec2f(0.0001), scale);
         let scaled_p = local_p / safe_scale;
-        let power = -0.5 * dot(scaled_p, scaled_p);
+        let r = max(length(scaled_p), 0.0001);
+        let power = -s.rot_pad.z * pow(r, s.rot_pad.y);
         
         var a = 0.0;
         if (power > -15.0) {
@@ -63,15 +64,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     }
 
     let background = vec3f(0.1);
-    C_pred += Ts[512] * background;
+    C_pred += Ts[NUM_SPLATS] * background;
     
     let dC = 2.0 * (C_pred - tgt_color);
     var dT = dot(dC, background);
     
     let FP_SCALE = 1000.0;
 
-    for (var j = 0u; j < 512u; j++) {
-        let i = 511u - j;
+    for (var j = 0u; j < NUM_SPLATS; j++) {
+        let i = NUM_SPLATS_MINUS_ONE - j;
         let s = splats.splats[i];
         let pos = s.transform.xy;
         let scale = s.transform.zw;
@@ -92,19 +93,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let local_p = vec2f(co * d.x + si * d.y, -si * d.x + co * d.y);
         let safe_scale = max(vec2f(0.0001), scale);
         let scaled_p = local_p / safe_scale;
-        let power = -0.5 * dot(scaled_p, scaled_p);
+        let r = max(length(scaled_p), 0.0001);
+        let shape_a = s.rot_pad.y;
+        let shape_b = s.rot_pad.z;
+        let power = -shape_b * pow(r, shape_a);
         
         var d_opacity = 0.0;
         var d_pos = vec2f(0.0);
         var d_scale = vec2f(0.0);
         var d_rot = 0.0;
+        var d_shape_a = 0.0;
+        var d_shape_b = 0.0;
         
         if (power > -15.0) {
             let a_unscaled = exp(power);
             d_opacity = da * a_unscaled;
             let d_power = da * opacity * a_unscaled;
             
-            let d_scaled_p = d_power * (-scaled_p);
+            let r_pow_a = pow(r, shape_a);
+            let r_pow_a_minus_2 = pow(r, shape_a - 2.0);
+            
+            d_shape_a = d_power * (-shape_b * r_pow_a * log(r));
+            d_shape_b = d_power * (-r_pow_a);
+            
+            let d_scaled_p = d_power * (-shape_b * shape_a * r_pow_a_minus_2) * scaled_p;
             d_scale = d_scaled_p * (-local_p / (safe_scale * safe_scale));
             let d_local_p = d_scaled_p / safe_scale;
             
@@ -122,7 +134,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let FP_SCALE_POS = 10000.0;
         let FP_SCALE_COL = 100000.0;
         
-        let base_idx = i * 9u;
+        let base_idx = i * 11u;
         atomicAdd(&grads.data[base_idx + 0u], i32(d_pos.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 1u], i32(d_pos.y * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 2u], i32(d_scale.x * FP_SCALE_POS));
@@ -132,5 +144,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         atomicAdd(&grads.data[base_idx + 6u], i32(dColor.b * FP_SCALE_COL));
         atomicAdd(&grads.data[base_idx + 7u], i32(d_opacity * FP_SCALE_COL));
         atomicAdd(&grads.data[base_idx + 8u], i32(d_rot * FP_SCALE_POS));
+        atomicAdd(&grads.data[base_idx + 9u], i32(d_shape_a * FP_SCALE_POS));
+        atomicAdd(&grads.data[base_idx + 10u], i32(d_shape_b * FP_SCALE_POS));
     }
 }

@@ -29,11 +29,13 @@ export class GpuRunner {
         context,
         format,
         camera,
+        numSplats = 512,
     }: {
         device: GPUDevice,
         context: GPUCanvasContext,
         format: GPUTextureFormat,
         camera: Camera,
+        numSplats?: number,
     }) {
         this.device = device;
         this.context = context;
@@ -51,6 +53,7 @@ export class GpuRunner {
         this.splatOptimizerManager = new GpuSplatOptimizerManager({
             device,
             format,
+            numSplats,
         });
 
         // Create fixed small-res texture for gradient computation

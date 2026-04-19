@@ -18,8 +18,10 @@ export class ViewerState {
 
     static mount({
         canvasPromise,
+        numSplats = 512,
     }: {
         canvasPromise: Promise<HTMLCanvasElement>,
+        numSplats?: number,
     }) {
         const state = new ViewerState();
         
@@ -32,6 +34,7 @@ export class ViewerState {
                 context: gpu.context,
                 format: gpu.format,
                 camera: state.camera,
+                numSplats,
             });
             state.runner = gpuRunner;
 
