@@ -66,6 +66,9 @@ export class GpuSphereRenderPipelineManager {
                     {
                         format,
                     },
+                    {
+                        format,
+                    },
                 ],
             },
 

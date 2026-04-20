@@ -17,10 +17,20 @@ export class GpuRunner {
 
     private targetTexture: GPUTexture | null = null;
     private targetTextureView: GPUTextureView | null = null;
+    private targetDepthTexture: GPUTexture | null = null;
+    private targetDepthTextureView: GPUTextureView | null = null;
 
-    // Small resolution texture for gradient computation
+    // Small resolution textures for gradient computation
     private optimTexture: GPUTexture;
     private optimTextureView: GPUTextureView;
+    private optimDepthTexture: GPUTexture;
+    private optimDepthTextureView: GPUTextureView;
+
+    // Edge map textures (optim-res for loss, full-res for display)
+    private optimEdgeTexture: GPUTexture;
+    private optimEdgeTextureView: GPUTextureView;
+    private fullEdgeTexture: GPUTexture | null = null;
+    private fullEdgeTextureView: GPUTextureView | null = null;
 
     readonly destroy: () => void;
 
@@ -56,7 +66,7 @@ export class GpuRunner {
             numSplats,
         });
 
-        // Create fixed small-res texture for gradient computation
+        // Create fixed small-res color texture for gradient computation
         this.optimTexture = device.createTexture({
             label: "optimization target texture",
             size: [OPTIM_RES, OPTIM_RES],
@@ -64,7 +74,28 @@ export class GpuRunner {
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.optimTextureView = this.optimTexture.createView();
-        this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, OPTIM_RES, OPTIM_RES);
+
+        // Create fixed small-res depth texture for gradient computation
+        this.optimDepthTexture = device.createTexture({
+            label: "optimization depth texture",
+            size: [OPTIM_RES, OPTIM_RES],
+            format,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.optimDepthTextureView = this.optimDepthTexture.createView();
+
+        // Edge map at optim resolution (writable storage texture)
+        this.optimEdgeTexture = device.createTexture({
+            label: "optimization edge texture",
+            size: [OPTIM_RES, OPTIM_RES],
+            format: "rgba8unorm",
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.optimEdgeTextureView = this.optimEdgeTexture.createView();
+
+        // Wire optim-res edge detection
+        this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView);
+        this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimEdgeTextureView, OPTIM_RES, OPTIM_RES);
 
         this.destroy = $effect.root(() => {
             $effect(() => this.uniformsManager.writeViewProjMat(this.camera.viewProjMat));
@@ -83,16 +114,34 @@ export class GpuRunner {
             // Full-res target for visualization
             if (!this.targetTexture || this.targetTexture.width !== width || this.targetTexture.height !== height) {
                 if (this.targetTexture) this.targetTexture.destroy();
+                if (this.targetDepthTexture) this.targetDepthTexture.destroy();
+                if (this.fullEdgeTexture) this.fullEdgeTexture.destroy();
+
                 this.targetTexture = this.device.createTexture({
                     size: [width, height],
                     format: this.format,
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
                 });
                 this.targetTextureView = this.targetTexture.createView();
-                this.splatOptimizerManager.setRenderTarget(this.targetTextureView);
+
+                this.targetDepthTexture = this.device.createTexture({
+                    size: [width, height],
+                    format: this.format,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+                });
+                this.targetDepthTextureView = this.targetDepthTexture.createView();
+
+                this.fullEdgeTexture = this.device.createTexture({
+                    size: [width, height],
+                    format: "rgba8unorm",
+                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                });
+                this.fullEdgeTextureView = this.fullEdgeTexture.createView();
+
+                this.splatOptimizerManager.setRenderTarget(this.targetTextureView, this.targetDepthTextureView, this.fullEdgeTextureView);
             }
 
-            if (!this.targetTextureView) {
+            if (!this.targetTextureView || !this.targetDepthTextureView) {
                 if (!canceled) requestAnimationFrame(loop);
                 return;
             }
@@ -101,7 +150,7 @@ export class GpuRunner {
                 label: "loop command encoder",
             });
 
-            // 1a. Render Sphere to full-res targetTexture (for visualization)
+            // 1a. Render Sphere to full-res targetTexture + targetDepthTexture (for visualization)
             const spherePassEncoder = commandEncoder.beginRenderPass({
                 label: "sphere render pass (full res)",
                 colorAttachments: [
@@ -111,12 +160,18 @@ export class GpuRunner {
                         storeOp: "store",
                         view: this.targetTextureView,
                     },
+                    {
+                        clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+                        loadOp: "clear",
+                        storeOp: "store",
+                        view: this.targetDepthTextureView!,
+                    },
                 ],
             });
             this.sphereRenderPipelineManager.addDraw(spherePassEncoder);
             spherePassEncoder.end();
 
-            // 1b. Render Sphere to small-res optimTexture (for gradient computation)
+            // 1b. Render Sphere to small-res optimTexture + optimDepthTexture (for gradient computation)
             const optimPassEncoder = commandEncoder.beginRenderPass({
                 label: "sphere render pass (optim res)",
                 colorAttachments: [
@@ -126,15 +181,31 @@ export class GpuRunner {
                         storeOp: "store",
                         view: this.optimTextureView,
                     },
+                    {
+                        clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+                        loadOp: "clear",
+                        storeOp: "store",
+                        view: this.optimDepthTextureView,
+                    },
                 ],
             });
             this.sphereRenderPipelineManager.addDraw(optimPassEncoder);
             optimPassEncoder.end();
 
-            // 2. Dispatch Splat Optimizer Compute Passes (uses small-res texture)
+            // 2. Run edge detection on optim-res depth
+            this.splatOptimizerManager.dispatchEdge(commandEncoder);
+
+            // 3. Dispatch Splat Optimizer Compute Passes (uses small-res texture + edge map)
             this.splatOptimizerManager.dispatch(commandEncoder);
 
-            // 3. Render Splat Visualization to Screen View (uses full-res texture)
+            // 4. Run edge detection on full-res depth (for display)
+            // Temporarily swap the edge bind group for full-res
+            this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);
+            this.splatOptimizerManager.dispatchEdge(commandEncoder);
+            // Restore optim-res edge bind group for next frame
+            this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView);
+
+            // 5. Render Splat Visualization to Screen View (uses full-res textures)
             const screenView = currentTexture.createView();
             const finalPassEncoder = commandEncoder.beginRenderPass({
                 label: "final render pass",

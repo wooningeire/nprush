@@ -15,6 +15,7 @@ struct GradArray {
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
 @group(0) @binding(1) var<storage, read_write> grads: GradArray;
 @group(0) @binding(2) var targetTex: texture_2d<f32>;
+@group(0) @binding(3) var targetEdgeTex: texture_2d<f32>;
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3u) {
@@ -28,11 +29,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     p.y = -p.y;
     
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
+    let tgt_edge = textureLoad(targetEdgeTex, global_id.xy, 0).r;
 
     var alphas = array<f32, NUM_SPLATS>();
     var Ts = array<f32, NUM_SPLATS_PLUS_ONE>();
     Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
+    
+    // Also compute a pseudo-depth from splat opacity accumulation
+    var splat_depth = 0.0;
     
     for (var i = 0u; i < NUM_SPLATS; i++) {
         let s = splats.splats[i];
@@ -60,14 +65,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         
         alphas[i] = a;
         C_pred += Ts[i] * a * color;
+        // Accumulate a weighted depth (closer splats get heavier weight via transmittance)
+        splat_depth += Ts[i] * a * f32(i) / f32(NUM_SPLATS);
         Ts[i+1] = Ts[i] * (1.0 - a);
     }
 
     let background = vec3f(0.1);
     C_pred += Ts[NUM_SPLATS] * background;
     
+    // Color loss gradient
     let dC = 2.0 * (C_pred - tgt_color);
-    var dT = dot(dC, background);
+    
+    // Edge loss: weight the color gradient by target edge intensity
+    // This amplifies gradients at edges, encouraging splats to sharpen there
+    let edge_weight = 1.0 + tgt_edge * 4.0;
+    let dC_weighted = dC * edge_weight;
+    
+    var dT = dot(dC_weighted, background);
     
     let FP_SCALE = 1000.0;
 
@@ -83,9 +97,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let a = alphas[i];
         let T_prev = Ts[i];
         
-        let dColor = dC * (T_prev * a);
-        let da = dT * (-T_prev) + dot(dC, T_prev * color);
-        dT = dT * (1.0 - a) + dot(dC, a * color);
+        let dColor = dC_weighted * (T_prev * a);
+        let da = dT * (-T_prev) + dot(dC_weighted, T_prev * color);
+        dT = dT * (1.0 - a) + dot(dC_weighted, a * color);
 
         let d = p - pos;
         let co = cos(rot);
