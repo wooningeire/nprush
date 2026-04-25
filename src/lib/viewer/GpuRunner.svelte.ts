@@ -9,7 +9,7 @@ const OPTIM_SHORT = 128;
 
 // The edge layer is now cubic bezier curves. A handful is enough since each
 // curve is a 1D primitive that natively traces a contour.
-const NUM_EDGE_LAYER_BEZIERS = 16;
+const NUM_EDGE_LAYER_BEZIERS = 4;
 
 export class GpuRunner {
     private readonly device: GPUDevice;

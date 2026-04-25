@@ -32,7 +32,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
     
     let edge = sqrt(gx * gx + gy * gy);
-    let edgeClamped = clamp(edge * 8.0, 0.0, 1.0);
-    
-    textureStore(edgeTex, p, vec4f(edgeClamped, edgeClamped, edgeClamped, 1.0));
+
+    // Threshold filter: suppress low-magnitude depth noise to 0 and saturate
+    // strong silhouette transitions to 1. Smoothstep keeps a thin soft edge
+    // (~one pixel wide) so anything optimizing an MSE against this image
+    // still has a usable gradient at the boundary instead of a hard step.
+    let thresholded = smoothstep(0.05, 0.15, edge);
+
+    textureStore(edgeTex, p, vec4f(thresholded, thresholded, thresholded, 1.0));
 }
