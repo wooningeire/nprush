@@ -40,14 +40,21 @@ export class GpuSplatOptimizerManager {
         device,
         format,
         numSplats = 512,
+        numSplatsEdge,
     }: {
         device: GPUDevice,
         format: GPUTextureFormat,
         numSplats?: number,
+        // Splat count of the *other* (edge) layer rendered by this instance's
+        // render shader. The render pipeline composites both layers and needs
+        // a separate compile-time constant for the edge-layer loop bound. Only
+        // used by the instance that owns the visualization; defaults to numSplats.
+        numSplatsEdge?: number,
     }) {
         this.device = device;
         this.numSplats = numSplats;
         this.numParams = numSplats * 11;
+        const numSplatsEdgeRender = numSplatsEdge ?? numSplats;
         
         // Init Buffers
         const splatData = new Float32Array(this.numSplats * 12);
@@ -101,7 +108,11 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
+        // Order matters: NUM_SPLATS_EDGE / NUM_SPLATS_PLUS_ONE / NUM_SPLATS_MINUS_ONE
+        // must be replaced BEFORE NUM_SPLATS, because the latter is a substring of
+        // each and the regexes are unanchored.
         const injectConstants = (src: string) => src
+            .replace(/NUM_SPLATS_EDGE/g, `${numSplatsEdgeRender}u`)
             .replace(/NUM_SPLATS_PLUS_ONE/g, `${this.numSplats + 1}u`)
             .replace(/NUM_SPLATS_MINUS_ONE/g, `${this.numSplats - 1}u`)
             .replace(/NUM_SPLATS/g, `${this.numSplats}u`)
@@ -234,7 +245,12 @@ export class GpuSplatOptimizerManager {
         });
     }
 
-    setRenderTarget(targetTextureView: GPUTextureView, depthTextureView: GPUTextureView, edgeTextureView: GPUTextureView) {
+    setRenderTarget(
+        targetTextureView: GPUTextureView,
+        depthTextureView: GPUTextureView,
+        edgeTextureView: GPUTextureView,
+        edgeLayerSplatBuffer: GPUBuffer,
+    ) {
         this.renderBindGroup = this.device.createBindGroup({
             layout: this.renderBindGroupLayout,
             entries: [
@@ -242,6 +258,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 1, resource: { buffer: this.splatBuffer } },
                 { binding: 2, resource: depthTextureView },
                 { binding: 3, resource: edgeTextureView },
+                { binding: 4, resource: { buffer: edgeLayerSplatBuffer } },
             ],
         });
     }

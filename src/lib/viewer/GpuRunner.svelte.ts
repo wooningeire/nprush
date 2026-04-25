@@ -6,6 +6,11 @@ import { STRIP_HEIGHT_FRAC } from "$/util";
 
 const OPTIM_SHORT = 128;
 
+// The edge layer has a sparse target (a thin silhouette) so it needs far fewer
+// splats than the color layer. Keeping it small also makes the layer converge
+// faster and prevents the overlay from washing out the underlying color.
+const NUM_EDGE_LAYER_SPLATS = 64;
+
 export class GpuRunner {
     private readonly device: GPUDevice;
     private readonly context: GPUCanvasContext;
@@ -15,6 +20,9 @@ export class GpuRunner {
     readonly uniformsManager: GpuUniformsBufferManager;
     readonly sphereRenderPipelineManager: GpuSphereRenderPipelineManager;
     readonly splatOptimizerManager: GpuSplatOptimizerManager;
+    // A second splat layer trained directly against the depth-edge texture,
+    // i.e. it learns to reconstruct the silhouette as a grayscale image.
+    readonly edgeLayerSplatOptimizerManager: GpuSplatOptimizerManager;
 
     // Full-res textures (sized to the visible main panel area: half-width x height-minus-strip).
     // These match the camera projection aspect, so the sphere is circular in pixels.
@@ -65,10 +73,20 @@ export class GpuRunner {
             uniformsManager: this.uniformsManager,
         });
 
+        // The color-layer instance owns the visualization render pipeline, which
+        // composites both layers. We tell it the edge layer's splat count via
+        // numSplatsEdge so its render shader sizes the second loop correctly.
         this.splatOptimizerManager = new GpuSplatOptimizerManager({
             device,
             format,
             numSplats,
+            numSplatsEdge: NUM_EDGE_LAYER_SPLATS,
+        });
+
+        this.edgeLayerSplatOptimizerManager = new GpuSplatOptimizerManager({
+            device,
+            format,
+            numSplats: NUM_EDGE_LAYER_SPLATS,
         });
 
         this.destroy = $effect.root(() => {
@@ -123,6 +141,11 @@ export class GpuRunner {
         // Rebind
         this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView);
         this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimEdgeTextureView, ow, oh);
+
+        // Edge layer: target IS the edge texture itself. The backward shader takes
+        // (target, edgeWeight); we pass edge for both, so the layer learns to
+        // reconstruct the edge image with extra weighting on edge pixels.
+        this.edgeLayerSplatOptimizerManager.setBackwardTarget(this.optimEdgeTextureView, this.optimEdgeTextureView, ow, oh);
     }
 
     loop() {
@@ -172,7 +195,12 @@ export class GpuRunner {
                 });
                 this.fullEdgeTextureView = this.fullEdgeTexture.createView();
 
-                this.splatOptimizerManager.setRenderTarget(this.targetTextureView, this.targetDepthTextureView, this.fullEdgeTextureView);
+                this.splatOptimizerManager.setRenderTarget(
+                    this.targetTextureView,
+                    this.targetDepthTextureView,
+                    this.fullEdgeTextureView,
+                    this.edgeLayerSplatOptimizerManager.splatBuffer,
+                );
             }
 
             if (!this.targetTextureView || !this.targetDepthTextureView || !this.optimTextureView) {
@@ -231,6 +259,10 @@ export class GpuRunner {
 
             // 3. Dispatch Splat Optimizer Compute Passes (uses optim-res texture + edge map)
             this.splatOptimizerManager.dispatch(commandEncoder);
+
+            // 3b. Train the edge layer: its target is the freshly-computed edge texture,
+            // so the splats learn to reconstruct the depth-edge image directly.
+            this.edgeLayerSplatOptimizerManager.dispatch(commandEncoder);
 
             // 4. Run edge detection on full-res depth (for display)
             this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);

@@ -8,10 +8,15 @@ struct SplatArray {
     splats: array<Splat, NUM_SPLATS>,
 }
 
+struct SplatArrayEdge {
+    splats: array<Splat, NUM_SPLATS_EDGE>,
+}
+
 @group(0) @binding(0) var targetTex: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read> splats: SplatArray;
 @group(0) @binding(2) var targetDepthTex: texture_2d<f32>;
 @group(0) @binding(3) var targetEdgeTex: texture_2d<f32>;
+@group(0) @binding(4) var<storage, read> splatsEdge: SplatArrayEdge;
 
 struct VsOut {
     @builtin(position) pos: vec4f,
@@ -65,6 +70,38 @@ fn eval_splats(p: vec2f) -> vec3f {
     return c + Ts * vec3f(0.1);
 }
 
+// Alpha-composite the edge-layer splats and return a single grayscale value.
+// This layer is trained to reconstruct the depth-edge image (black background,
+// bright silhouette), so the output is "edge intensity": near 1 on the contour
+// and near 0 elsewhere. We use this value directly as alpha when overlaying
+// the layer, which avoids the splats' overall coverage (their accumulated
+// opacity) from masking out the underlying color layer in dark regions.
+fn eval_splats_edge_layer(p: vec2f) -> f32 {
+    var Ts = 1.0;
+    var c = 0.0;
+    for (var i = 0u; i < NUM_SPLATS_EDGE; i = i + 1u) {
+        let s = splatsEdge.splats[i];
+        let d = p - s.transform.xy;
+        let rot = s.rot_pad.x;
+        let co = cos(rot);
+        let si = sin(rot);
+        let lp = vec2f(co * d.x + si * d.y, -si * d.x + co * d.y);
+        let ss = max(vec2f(0.0001), s.transform.zw);
+        let sp = lp / ss;
+        let r = max(length(sp), 0.0001);
+        let pw = -s.rot_pad.z * pow(r, s.rot_pad.y);
+
+        var a = 0.0;
+        if (pw > -15.0) {
+            a = exp(pw) * s.color.a;
+        }
+        a = clamp(a, 0.0, 0.999);
+        c = c + Ts * a * dot(s.color.rgb, vec3f(0.333));
+        Ts = Ts * (1.0 - a);
+    }
+    return c;
+}
+
 // Compute splat edge by sampling eval_splats at neighboring pixels
 fn eval_splat_edge(p: vec2f, pixel_size: vec2f) -> f32 {
     let tl = dot(eval_splats(p + vec2f(-1.0, -1.0) * pixel_size), vec3f(0.333));
@@ -83,7 +120,7 @@ fn eval_splat_edge(p: vec2f, pixel_size: vec2f) -> f32 {
 }
 
 const STRIP_HEIGHT: f32 = 0.18;
-const NUM_PANELS: f32 = 5.0;
+const NUM_PANELS: f32 = 6.0;
 
 // Fit a source with given aspect into a panel with given aspect
 fn fitInPanel(panel_uv: vec2f, panel_aspect: f32, src_aspect: f32) -> vec2f {
@@ -172,8 +209,8 @@ fn frag(v: VsOut) -> @location(0) vec4f {
             let px = vec2i(fitted * edge_dims);
             let e = textureLoad(targetEdgeTex, px, 0).r;
             return vec4f(e, e, e, 1.0);
-        } else {
-            // Panel 4: Splat edges, in the splats' native aspect-correct domain
+        } else if (panel_idx < 4.5) {
+            // Panel 4: Splat edges (Sobel of color-splat output)
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             var p = fitted * 2.0 - 1.0;
@@ -181,6 +218,16 @@ fn frag(v: VsOut) -> @location(0) vec4f {
             p.x = p.x * splat_aspect;
             let pixel_size = vec2f(2.0 * splat_aspect, 2.0) / dims;
             let e = eval_splat_edge(p, pixel_size);
+            return vec4f(e, e, e, 1.0);
+        } else {
+            // Panel 5: Edge-layer splats (separate set of splats trained
+            // to directly reconstruct the depth-edge image).
+            let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
+            if (fitted.x < 0.0) { return bg; }
+            var p = fitted * 2.0 - 1.0;
+            p.y = -p.y;
+            p.x = p.x * splat_aspect;
+            let e = eval_splats_edge_layer(p);
             return vec4f(e, e, e, 1.0);
         }
     }
@@ -205,6 +252,15 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     var p = su * 2.0 - 1.0;
     p.y = -p.y;
     p.x = p.x * splat_aspect;
-    return vec4f(eval_splats(p), 1.0);
+
+    // Composite the edge-layer (silhouette) over the color-layer reconstruction.
+    // The edge layer outputs grayscale "edge intensity"; we use that intensity
+    // directly as alpha against a white overlay so dark non-edge regions reveal
+    // the underlying color layer rather than being occluded by the splats'
+    // accumulated coverage.
+    let base = eval_splats(p);
+    let edge_a = clamp(eval_splats_edge_layer(p), 0.0, 1.0);
+    let composite = mix(base, vec3f(1.0), edge_a);
+    return vec4f(composite, 1.0);
 }
 
