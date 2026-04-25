@@ -40,21 +40,26 @@ export class GpuSplatOptimizerManager {
         device,
         format,
         numSplats = 512,
-        numSplatsEdge,
+        numBeziers,
     }: {
         device: GPUDevice,
         format: GPUTextureFormat,
         numSplats?: number,
-        // Splat count of the *other* (edge) layer rendered by this instance's
-        // render shader. The render pipeline composites both layers and needs
-        // a separate compile-time constant for the edge-layer loop bound. Only
-        // used by the instance that owns the visualization; defaults to numSplats.
-        numSplatsEdge?: number,
+        // Bezier-curve count of the edge layer rendered by this instance's
+        // render shader. The render pipeline composites both the splat color
+        // layer and the bezier edge layer and needs a separate compile-time
+        // constant for the bezier loop bound. Only meaningful for the instance
+        // that owns the visualization; if omitted the bezier loop compiles to
+        // zero iterations (the edge layer is simply not rendered).
+        numBeziers?: number,
     }) {
         this.device = device;
         this.numSplats = numSplats;
         this.numParams = numSplats * 11;
-        const numSplatsEdgeRender = numSplatsEdge ?? numSplats;
+        // WGSL array<T, N> requires N >= 1, so use 1 as a sentinel when no
+        // edge layer is configured — the bezier loop just runs once over a
+        // dummy curve whose buffer the caller is still required to bind.
+        const numBeziersRender = numBeziers ?? 1;
         
         // Init Buffers
         const splatData = new Float32Array(this.numSplats * 12);
@@ -108,11 +113,11 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
-        // Order matters: NUM_SPLATS_EDGE / NUM_SPLATS_PLUS_ONE / NUM_SPLATS_MINUS_ONE
-        // must be replaced BEFORE NUM_SPLATS, because the latter is a substring of
-        // each and the regexes are unanchored.
+        // Order matters: NUM_SPLATS_PLUS_ONE / NUM_SPLATS_MINUS_ONE must be
+        // replaced BEFORE NUM_SPLATS, because the latter is a substring of
+        // each and the regexes are unanchored. NUM_BEZIERS is independent.
         const injectConstants = (src: string) => src
-            .replace(/NUM_SPLATS_EDGE/g, `${numSplatsEdgeRender}u`)
+            .replace(/NUM_BEZIERS/g, `${numBeziersRender}u`)
             .replace(/NUM_SPLATS_PLUS_ONE/g, `${this.numSplats + 1}u`)
             .replace(/NUM_SPLATS_MINUS_ONE/g, `${this.numSplats - 1}u`)
             .replace(/NUM_SPLATS/g, `${this.numSplats}u`)
@@ -249,7 +254,7 @@ export class GpuSplatOptimizerManager {
         targetTextureView: GPUTextureView,
         depthTextureView: GPUTextureView,
         edgeTextureView: GPUTextureView,
-        edgeLayerSplatBuffer: GPUBuffer,
+        bezierBuffer: GPUBuffer,
     ) {
         this.renderBindGroup = this.device.createBindGroup({
             layout: this.renderBindGroupLayout,
@@ -258,7 +263,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 1, resource: { buffer: this.splatBuffer } },
                 { binding: 2, resource: depthTextureView },
                 { binding: 3, resource: edgeTextureView },
-                { binding: 4, resource: { buffer: edgeLayerSplatBuffer } },
+                { binding: 4, resource: { buffer: bezierBuffer } },
             ],
         });
     }

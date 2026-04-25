@@ -2,14 +2,14 @@ import type { Camera } from "./Camera.svelte";
 import { GpuUniformsBufferManager } from "$/gpu/GpuUniformsBufferManager";
 import { GpuSphereRenderPipelineManager } from "$/gpu/GpuSphereRenderPipelineManager";
 import { GpuSplatOptimizerManager } from "$/gpu/GpuSplatOptimizerManager";
+import { GpuBezierOptimizerManager } from "$/gpu/GpuBezierOptimizerManager";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 
 const OPTIM_SHORT = 128;
 
-// The edge layer has a sparse target (a thin silhouette) so it needs far fewer
-// splats than the color layer. Keeping it small also makes the layer converge
-// faster and prevents the overlay from washing out the underlying color.
-const NUM_EDGE_LAYER_SPLATS = 64;
+// The edge layer is now cubic bezier curves. A handful is enough since each
+// curve is a 1D primitive that natively traces a contour.
+const NUM_EDGE_LAYER_BEZIERS = 16;
 
 export class GpuRunner {
     private readonly device: GPUDevice;
@@ -20,9 +20,10 @@ export class GpuRunner {
     readonly uniformsManager: GpuUniformsBufferManager;
     readonly sphereRenderPipelineManager: GpuSphereRenderPipelineManager;
     readonly splatOptimizerManager: GpuSplatOptimizerManager;
-    // A second splat layer trained directly against the depth-edge texture,
-    // i.e. it learns to reconstruct the silhouette as a grayscale image.
-    readonly edgeLayerSplatOptimizerManager: GpuSplatOptimizerManager;
+    // The edge layer is a separate optimizer of cubic bezier curves trained
+    // against the depth-edge texture. Curves natively represent 1D contours,
+    // which is a much better fit for the silhouette target than gaussians.
+    readonly edgeLayerBezierManager: GpuBezierOptimizerManager;
 
     // Full-res textures (sized to the visible main panel area: half-width x height-minus-strip).
     // These match the camera projection aspect, so the sphere is circular in pixels.
@@ -74,19 +75,18 @@ export class GpuRunner {
         });
 
         // The color-layer instance owns the visualization render pipeline, which
-        // composites both layers. We tell it the edge layer's splat count via
-        // numSplatsEdge so its render shader sizes the second loop correctly.
+        // composites both layers. We tell it the edge layer's bezier count via
+        // numBeziers so its render shader sizes the bezier loop correctly.
         this.splatOptimizerManager = new GpuSplatOptimizerManager({
             device,
             format,
             numSplats,
-            numSplatsEdge: NUM_EDGE_LAYER_SPLATS,
+            numBeziers: NUM_EDGE_LAYER_BEZIERS,
         });
 
-        this.edgeLayerSplatOptimizerManager = new GpuSplatOptimizerManager({
+        this.edgeLayerBezierManager = new GpuBezierOptimizerManager({
             device,
-            format,
-            numSplats: NUM_EDGE_LAYER_SPLATS,
+            numBeziers: NUM_EDGE_LAYER_BEZIERS,
         });
 
         this.destroy = $effect.root(() => {
@@ -142,10 +142,11 @@ export class GpuRunner {
         this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView);
         this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimEdgeTextureView, ow, oh);
 
-        // Edge layer: target IS the edge texture itself. The backward shader takes
-        // (target, edgeWeight); we pass edge for both, so the layer learns to
-        // reconstruct the edge image with extra weighting on edge pixels.
-        this.edgeLayerSplatOptimizerManager.setBackwardTarget(this.optimEdgeTextureView, this.optimEdgeTextureView, ow, oh);
+        // Edge layer: target IS the edge texture itself. The bezier backward
+        // shader takes (target, edgeWeight); we pass edge for both, so the
+        // curves learn to reconstruct the edge image with extra weighting on
+        // edge pixels (parity with how the splat manager treats its edge loss).
+        this.edgeLayerBezierManager.setBackwardTarget(this.optimEdgeTextureView, this.optimEdgeTextureView, ow, oh);
     }
 
     loop() {
@@ -199,7 +200,7 @@ export class GpuRunner {
                     this.targetTextureView,
                     this.targetDepthTextureView,
                     this.fullEdgeTextureView,
-                    this.edgeLayerSplatOptimizerManager.splatBuffer,
+                    this.edgeLayerBezierManager.bezierBuffer,
                 );
             }
 
@@ -260,9 +261,9 @@ export class GpuRunner {
             // 3. Dispatch Splat Optimizer Compute Passes (uses optim-res texture + edge map)
             this.splatOptimizerManager.dispatch(commandEncoder);
 
-            // 3b. Train the edge layer: its target is the freshly-computed edge texture,
-            // so the splats learn to reconstruct the depth-edge image directly.
-            this.edgeLayerSplatOptimizerManager.dispatch(commandEncoder);
+            // 3b. Train the bezier edge layer: its target is the freshly-computed
+            // edge texture, so the curves learn to trace the depth silhouette.
+            this.edgeLayerBezierManager.dispatch(commandEncoder);
 
             // 4. Run edge detection on full-res depth (for display)
             this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);

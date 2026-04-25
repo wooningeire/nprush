@@ -8,15 +8,23 @@ struct SplatArray {
     splats: array<Splat, NUM_SPLATS>,
 }
 
-struct SplatArrayEdge {
-    splats: array<Splat, NUM_SPLATS_EDGE>,
+// Edge layer is now a set of cubic bezier curves (see GpuBezierOptimizerManager).
+struct Bezier {
+    p0_p1: vec4f,
+    p2_p3: vec4f,
+    color: vec4f,
+    width_soft_pad: vec4f,
+}
+
+struct BezierArray {
+    items: array<Bezier, NUM_BEZIERS>,
 }
 
 @group(0) @binding(0) var targetTex: texture_2d<f32>;
 @group(0) @binding(1) var<storage, read> splats: SplatArray;
 @group(0) @binding(2) var targetDepthTex: texture_2d<f32>;
 @group(0) @binding(3) var targetEdgeTex: texture_2d<f32>;
-@group(0) @binding(4) var<storage, read> splatsEdge: SplatArrayEdge;
+@group(0) @binding(4) var<storage, read> beziers: BezierArray;
 
 struct VsOut {
     @builtin(position) pos: vec4f,
@@ -70,33 +78,49 @@ fn eval_splats(p: vec2f) -> vec3f {
     return c + Ts * vec3f(0.1);
 }
 
-// Alpha-composite the edge-layer splats and return a single grayscale value.
-// This layer is trained to reconstruct the depth-edge image (black background,
-// bright silhouette), so the output is "edge intensity": near 1 on the contour
-// and near 0 elsewhere. We use this value directly as alpha when overlaying
-// the layer, which avoids the splats' overall coverage (their accumulated
-// opacity) from masking out the underlying color layer in dark regions.
-fn eval_splats_edge_layer(p: vec2f) -> f32 {
+const N_BEZIER_SEG: u32 = 16u;
+
+fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
+    let omt = 1.0 - t;
+    return omt*omt*omt * p0
+         + 3.0 * omt*omt * t * p1
+         + 3.0 * omt * t*t * p2
+         + t*t*t * p3;
+}
+
+// Evaluate the edge-layer bezier curves at point p in splat-space and return
+// a single grayscale "edge intensity" value, alpha-composited front-to-back
+// to match bezier_backward.wgsl. This is used both for the dedicated debug
+// panel and as the alpha when compositing the edge layer over the color layer.
+fn eval_beziers(p: vec2f) -> f32 {
     var Ts = 1.0;
     var c = 0.0;
-    for (var i = 0u; i < NUM_SPLATS_EDGE; i = i + 1u) {
-        let s = splatsEdge.splats[i];
-        let d = p - s.transform.xy;
-        let rot = s.rot_pad.x;
-        let co = cos(rot);
-        let si = sin(rot);
-        let lp = vec2f(co * d.x + si * d.y, -si * d.x + co * d.y);
-        let ss = max(vec2f(0.0001), s.transform.zw);
-        let sp = lp / ss;
-        let r = max(length(sp), 0.0001);
-        let pw = -s.rot_pad.z * pow(r, s.rot_pad.y);
+    for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
+        let b = beziers.items[i];
+        let p0 = b.p0_p1.xy;
+        let p1 = b.p0_p1.zw;
+        let p2 = b.p2_p3.xy;
+        let p3 = b.p2_p3.zw;
+        let width = max(b.width_soft_pad.x, 0.001);
+        let softness = max(b.width_soft_pad.y, 0.001);
 
-        var a = 0.0;
-        if (pw > -15.0) {
-            a = exp(pw) * s.color.a;
+        var min_d = 1e9;
+        var prev = p0;
+        for (var k = 1u; k <= N_BEZIER_SEG; k = k + 1u) {
+            let curr = bezier_at(p0, p1, p2, p3, f32(k) / f32(N_BEZIER_SEG));
+            let seg = curr - prev;
+            let len2 = max(dot(seg, seg), 1e-8);
+            let u = clamp(dot(p - prev, seg) / len2, 0.0, 1.0);
+            let proj = prev + u * seg;
+            min_d = min(min_d, length(p - proj));
+            prev = curr;
         }
-        a = clamp(a, 0.0, 0.999);
-        c = c + Ts * a * dot(s.color.rgb, vec3f(0.333));
+
+        let inner = width - softness;
+        let outer = width + softness;
+        let a_geom = 1.0 - smoothstep(inner, outer, min_d);
+        var a = clamp(a_geom * b.color.a, 0.0, 0.999);
+        c = c + Ts * a * dot(b.color.rgb, vec3f(0.333));
         Ts = Ts * (1.0 - a);
     }
     return c;
@@ -220,14 +244,14 @@ fn frag(v: VsOut) -> @location(0) vec4f {
             let e = eval_splat_edge(p, pixel_size);
             return vec4f(e, e, e, 1.0);
         } else {
-            // Panel 5: Edge-layer splats (separate set of splats trained
-            // to directly reconstruct the depth-edge image).
+            // Panel 5: Edge layer (cubic beziers trained to reconstruct the
+            // depth-edge image directly).
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             var p = fitted * 2.0 - 1.0;
             p.y = -p.y;
             p.x = p.x * splat_aspect;
-            let e = eval_splats_edge_layer(p);
+            let e = eval_beziers(p);
             return vec4f(e, e, e, 1.0);
         }
     }
@@ -253,13 +277,13 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     p.y = -p.y;
     p.x = p.x * splat_aspect;
 
-    // Composite the edge-layer (silhouette) over the color-layer reconstruction.
-    // The edge layer outputs grayscale "edge intensity"; we use that intensity
+    // Composite the edge-layer (cubic beziers) over the color-layer reconstruction.
+    // eval_beziers returns grayscale "edge intensity"; we use that intensity
     // directly as alpha against a white overlay so dark non-edge regions reveal
-    // the underlying color layer rather than being occluded by the splats'
+    // the underlying color layer rather than being occluded by the curves'
     // accumulated coverage.
     let base = eval_splats(p);
-    let edge_a = clamp(eval_splats_edge_layer(p), 0.0, 1.0);
+    let edge_a = clamp(eval_beziers(p), 0.0, 1.0);
     let composite = mix(base, vec3f(1.0), edge_a);
     return vec4f(composite, 1.0);
 }
