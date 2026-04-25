@@ -85,9 +85,36 @@ fn eval_splat_edge(p: vec2f, pixel_size: vec2f) -> f32 {
 const STRIP_HEIGHT: f32 = 0.18;
 const NUM_PANELS: f32 = 5.0;
 
+// Fit a source with given aspect into a panel with given aspect
+fn fitInPanel(panel_uv: vec2f, panel_aspect: f32, src_aspect: f32) -> vec2f {
+    let rel = panel_aspect / src_aspect;
+    if (rel > 1.0) {
+        // Panel is relatively wider: pillarbox
+        let content_width = 1.0 / rel;
+        let margin = (1.0 - content_width) * 0.5;
+        if (panel_uv.x < margin || panel_uv.x > 1.0 - margin) {
+            return vec2f(-1.0);
+        }
+        return vec2f((panel_uv.x - margin) / content_width, panel_uv.y);
+    } else {
+        // Panel is relatively taller: letterbox
+        let content_height = rel;
+        let margin = (1.0 - content_height) * 0.5;
+        if (panel_uv.y < margin || panel_uv.y > 1.0 - margin) {
+            return vec2f(-1.0);
+        }
+        return vec2f(panel_uv.x, (panel_uv.y - margin) / content_height);
+    }
+}
+
 @fragment
 fn frag(v: VsOut) -> @location(0) vec4f {
+    // targetTex is sized to the visible main panel (half-width x height-minus-strip),
+    // so its aspect IS the splat coordinate aspect. The full canvas aspect is recovered
+    // by undoing the half-width and the strip-fraction adjustments.
     let dims = vec2f(textureDimensions(targetTex));
+    let splat_aspect = dims.x / dims.y;
+    let screen_aspect = splat_aspect * 2.0 * (1.0 - STRIP_HEIGHT);
     
     // Bottom strip: show intermediate textures
     if (v.uv.y > (1.0 - STRIP_HEIGHT)) {
@@ -105,34 +132,54 @@ fn frag(v: VsOut) -> @location(0) vec4f {
             return vec4f(0.3, 0.3, 0.3, 1.0);
         }
         
-        let sample_uv = vec2f(panel_uv_x, strip_uv_y);
+        // Each panel's pixel aspect ratio
+        let panel_aspect = screen_aspect / (NUM_PANELS * STRIP_HEIGHT);
+        let panel_uv = vec2f(panel_uv_x, strip_uv_y);
+        
         let depth_dims = vec2f(textureDimensions(targetDepthTex));
         let edge_dims = vec2f(textureDimensions(targetEdgeTex));
+        let depth_aspect = depth_dims.x / depth_dims.y;
+        let edge_aspect = edge_dims.x / edge_dims.y;
+        let target_aspect = dims.x / dims.y;
+        
+        let bg = vec4f(0.05, 0.05, 0.05, 1.0);
         
         if (panel_idx < 0.5) {
             // Panel 0: Target color
-            let px = vec2i(sample_uv * dims);
+            let fitted = fitInPanel(panel_uv, panel_aspect, target_aspect);
+            if (fitted.x < 0.0) { return bg; }
+            let px = vec2i(fitted * dims);
             return textureLoad(targetTex, px, 0);
         } else if (panel_idx < 1.5) {
-            // Panel 1: Splat color
-            var p = sample_uv * 2.0 - 1.0;
+            // Panel 1: Splat color, in the splats' native aspect-correct domain
+            let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
+            if (fitted.x < 0.0) { return bg; }
+            var p = fitted * 2.0 - 1.0;
             p.y = -p.y;
+            p.x = p.x * splat_aspect;
             return vec4f(eval_splats(p), 1.0);
         } else if (panel_idx < 2.5) {
             // Panel 2: Target depth
-            let px = vec2i(sample_uv * depth_dims);
+            let fitted = fitInPanel(panel_uv, panel_aspect, depth_aspect);
+            if (fitted.x < 0.0) { return bg; }
+            let px = vec2i(fitted * depth_dims);
             let d = textureLoad(targetDepthTex, px, 0).r;
             return vec4f(d, d, d, 1.0);
         } else if (panel_idx < 3.5) {
             // Panel 3: Target edges
-            let px = vec2i(sample_uv * edge_dims);
+            let fitted = fitInPanel(panel_uv, panel_aspect, edge_aspect);
+            if (fitted.x < 0.0) { return bg; }
+            let px = vec2i(fitted * edge_dims);
             let e = textureLoad(targetEdgeTex, px, 0).r;
             return vec4f(e, e, e, 1.0);
         } else {
-            // Panel 4: Splat edges (computed live)
-            var p = sample_uv * 2.0 - 1.0;
+            // Panel 4: Splat edges, in the splats' native aspect-correct domain
+            let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
+            if (fitted.x < 0.0) { return bg; }
+            var p = fitted * 2.0 - 1.0;
             p.y = -p.y;
-            let pixel_size = 2.0 / dims;
+            p.x = p.x * splat_aspect;
+            let pixel_size = vec2f(2.0 * splat_aspect, 2.0) / dims;
             let e = eval_splat_edge(p, pixel_size);
             return vec4f(e, e, e, 1.0);
         }
@@ -140,7 +187,7 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     
     let main_uv_y = v.uv.y / (1.0 - STRIP_HEIGHT);
 
-    // Left half: target
+    // Left half: target (full-res target texture, sampled across the half-width panel)
     if (v.uv.x < 0.498) {
         let tx = v.uv.x * 2.0;
         let px = vec2i(vec2f(tx, main_uv_y) * dims);
@@ -152,9 +199,12 @@ fn frag(v: VsOut) -> @location(0) vec4f {
         return vec4f(1.0);
     }
 
-    // Right half: splats
+    // Right half: splats. The splats' coordinate domain is [-splat_aspect, splat_aspect] x [-1, 1],
+    // and this panel's pixel aspect matches splat_aspect, so circles stay circles.
     let su = vec2f((v.uv.x - 0.5) * 2.0, main_uv_y);
     var p = su * 2.0 - 1.0;
     p.y = -p.y;
+    p.x = p.x * splat_aspect;
     return vec4f(eval_splats(p), 1.0);
 }
+

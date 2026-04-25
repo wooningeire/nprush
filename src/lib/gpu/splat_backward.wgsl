@@ -24,9 +24,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         return;
     }
     
+    // Map texture pixels to splat coords with aspect correction so that a circular
+    // ball in the optim texture trains splats as a circle (not an ellipse) in p-space.
+    // Splats live in [-aspect, aspect] x [-1, 1].
+    let aspect = f32(dims.x) / f32(dims.y);
     let uv = (vec2f(global_id.xy) + vec2f(0.5)) / vec2f(dims.xy);
     var p = uv * 2.0 - 1.0;
     p.y = -p.y;
+    p.x = p.x * aspect;
     
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
     let tgt_edge = textureLoad(targetEdgeTex, global_id.xy, 0).r;

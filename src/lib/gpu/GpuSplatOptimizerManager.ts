@@ -270,13 +270,13 @@ export class GpuSplatOptimizerManager {
         pass.end();
     }
 
-    dispatchEdge(commandEncoder: GPUCommandEncoder) {
+    dispatchEdge(commandEncoder: GPUCommandEncoder, width: number, height: number) {
         if (!this.edgeBindGroup) return;
         
         const pass = commandEncoder.beginComputePass();
         pass.setPipeline(this.edgePipeline);
         pass.setBindGroup(0, this.edgeBindGroup);
-        pass.dispatchWorkgroups(Math.ceil(this.dims.width / 16), Math.ceil(this.dims.height / 16));
+        pass.dispatchWorkgroups(Math.ceil(width / 16), Math.ceil(height / 16));
         pass.end();
     }
 
