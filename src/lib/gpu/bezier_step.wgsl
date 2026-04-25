@@ -31,9 +31,14 @@ struct AdamState {
     pad: vec3f,
 }
 
+struct ADCArray {
+    grad_accum: array<f32, NUM_BEZIERS>,
+}
+
 @group(0) @binding(0) var<storage, read_write> beziers: BezierArray;
 @group(0) @binding(1) var<storage, read_write> grads: GradArray;
 @group(0) @binding(2) var<storage, read_write> adam: AdamState;
+@group(0) @binding(3) var<storage, read_write> adc: ADCArray;
 
 @compute @workgroup_size(64, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3u) {
@@ -52,6 +57,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     var b = beziers.items[bid];
     let base_idx = bid * 14u;
     let t = current_t + 1.0;
+
+    // Accumulate the L2 norm of the control-point gradient over an ADC
+    // period. ADC uses this to decide which curves to clone/split.
+    var pos_grad_norm2 = 0.0;
 
     for (var lp = 0u; lp < 14u; lp = lp + 1u) {
         let pidx = base_idx + lp;
@@ -96,6 +105,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         else if (lp == 13u) { max_update = 0.001; }
         let update = clamp(raw_update, -max_update, max_update);
 
+        if (lp < 8u) {
+            pos_grad_norm2 = pos_grad_norm2 + grad * grad;
+        }
+
         if (lp == 0u) { b.p0_p1.x -= update; }
         else if (lp == 1u) { b.p0_p1.y -= update; }
         else if (lp == 2u) { b.p0_p1.z -= update; }
@@ -107,9 +120,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         else if (lp == 8u)  { b.color.r = clamp(b.color.r - update, 0.0, 1.0); }
         else if (lp == 9u)  { b.color.g = clamp(b.color.g - update, 0.0, 1.0); }
         else if (lp == 10u) { b.color.b = clamp(b.color.b - update, 0.0, 1.0); }
+        // Floor at 0.05 keeps a single bad step from tripping the kill below.
+        // The kill criterion is on the (width * opacity) product, not on
+        // either factor alone, so a curve that's only thin OR only faint
+        // can still recover under future gradient updates.
         else if (lp == 11u) { b.color.a = clamp(b.color.a - update, 0.05, 0.99); }
         else if (lp == 12u) { b.width_soft_pad.x = clamp(b.width_soft_pad.x - update, 0.005, 0.5); }
         else if (lp == 13u) { b.width_soft_pad.y = clamp(b.width_soft_pad.y - update, 0.001, 0.1); }
+    }
+
+    adc.grad_accum[bid] += sqrt(pos_grad_norm2);
+
+    // Mark dead via "effective area" (width * opacity) — analogous to the
+    // splat kill on (scale.x * scale.y). Initial product is 0.04 * 0.6 =
+    // 0.024 so the 0.0008 threshold means a curve must drop ~30x in
+    // effective coverage before being recycled. This is far more forgiving
+    // than the previous either-factor-at-clamp-floor check, so transient
+    // bad fits no longer trip an instant kill.
+    if (b.width_soft_pad.x * b.color.a <= 0.0008) {
+        b.color.a = 0.0;
     }
 
     beziers.items[bid] = b;

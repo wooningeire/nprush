@@ -1,5 +1,6 @@
 import backwardModuleSrc from "./bezier_backward.wgsl?raw";
 import stepModuleSrc from "./bezier_step.wgsl?raw";
+import adcModuleSrc from "./bezier_adc.wgsl?raw";
 
 // Each cubic bezier is 14 optimizable parameters but stored with 16-float
 // stride (4 vec4f) so the WGSL struct lays out cleanly without per-field
@@ -16,14 +17,18 @@ export class GpuBezierOptimizerManager {
     readonly bezierBuffer: GPUBuffer;
     readonly gradBuffer: GPUBuffer;
     readonly adamBuffer: GPUBuffer;
+    readonly adcBuffer: GPUBuffer;
 
     private readonly backwardPipeline: GPUComputePipeline;
     private readonly stepPipeline: GPUComputePipeline;
+    private readonly adcPipeline: GPUComputePipeline;
 
     private readonly backwardBindGroupLayout: GPUBindGroupLayout;
     private readonly stepBindGroup: GPUBindGroup;
+    private readonly adcBindGroup: GPUBindGroup;
 
     private backwardBindGroup: GPUBindGroup | null = null;
+    private stepCount: number = 0;
 
     private dims: { width: number, height: number } = { width: 0, height: 0 };
 
@@ -95,6 +100,14 @@ export class GpuBezierOptimizerManager {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
+        // One f32 per curve: positional gradient norm accumulated across each
+        // ADC period; reset to 0 inside the ADC shader.
+        this.adcBuffer = device.createBuffer({
+            label: "bezier adc buffer",
+            size: this.numBeziers * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
         // NUM_BEZIERS_PLUS_ONE / NUM_BEZIERS_MINUS_ONE must come before
         // NUM_BEZIERS for the same substring reason as the splat shaders.
         const inject = (src: string) => src
@@ -128,6 +141,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
             ],
         });
         const stepModule = device.createShaderModule({
@@ -148,6 +162,36 @@ export class GpuBezierOptimizerManager {
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
                 { binding: 1, resource: { buffer: this.gradBuffer } },
                 { binding: 2, resource: { buffer: this.adamBuffer } },
+                { binding: 3, resource: { buffer: this.adcBuffer } },
+            ],
+        });
+
+        // ADC pipeline: clones/splits high-gradient curves into dead slots.
+        const adcBindGroupLayout = device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+            ],
+        });
+        const adcModule = device.createShaderModule({
+            label: "bezier adc",
+            code: inject(adcModuleSrc),
+        });
+        adcModule.getCompilationInfo().then(info => {
+            for (const m of info.messages) console.warn(`[bezier_adc] ${m.type}: ${m.message} (line ${m.lineNum})`);
+        });
+        this.adcPipeline = device.createComputePipeline({
+            layout: device.createPipelineLayout({ bindGroupLayouts: [adcBindGroupLayout] }),
+            compute: { module: adcModule, entryPoint: "main" },
+        });
+
+        this.adcBindGroup = device.createBindGroup({
+            layout: adcBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.bezierBuffer } },
+                { binding: 1, resource: { buffer: this.adamBuffer } },
+                { binding: 2, resource: { buffer: this.adcBuffer } },
             ],
         });
     }
@@ -183,6 +227,15 @@ export class GpuBezierOptimizerManager {
         pass.setPipeline(this.stepPipeline);
         pass.setBindGroup(0, this.stepBindGroup);
         pass.dispatchWorkgroups(Math.ceil(this.numBeziers / 64));
+
+        // ADC fires every ADC_PERIOD steps in lockstep with the splat ADC.
+        // Period must match the ADC_PERIOD constant inside bezier_adc.wgsl.
+        this.stepCount++;
+        if (this.stepCount % 100 === 0) {
+            pass.setPipeline(this.adcPipeline);
+            pass.setBindGroup(0, this.adcBindGroup);
+            pass.dispatchWorkgroups(1);
+        }
 
         pass.end();
     }

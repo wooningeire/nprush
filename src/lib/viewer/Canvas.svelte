@@ -11,12 +11,16 @@ let {
     canvas?: HTMLCanvasElement | null;
 } = $props();
 
+// Order and length must match NUM_PANELS in splat_render.wgsl. Each label
+// is positioned at i / STRIP_LABELS.length, so a missing entry shifts
+// every subsequent label out of alignment with its panel.
 const STRIP_LABELS = [
     "Target Color",
     "Splat Color",
     "Target Depth",
     "Target Edges",
     "Splat Edges",
+    "Bezier Edges",
 ];
 </script>
 
