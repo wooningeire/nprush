@@ -8,9 +8,9 @@ type Point = { x: number; y: number };
 const ORBIT_CONTROL_SCALE = 0.01;
 
 export class CameraOrbit implements CameraControlScheme {
-    radius = $state(3);
-    lat = $state(0);
-    long = $state(0);
+    radius = $state(1);
+    lat = $state(Math.PI * 1/4);
+    long = $state(Math.PI * 3/4);
     
     offset = $state(vec3.fromValues(0, 0, 0));
 
@@ -47,12 +47,12 @@ export class CameraOrbit implements CameraControlScheme {
     }
 
     turn(movement: Point) {
-        this.lat = mod(this.lat - movement.y * ORBIT_CONTROL_SCALE, REV);
+        this.lat = mod(this.lat + movement.y * ORBIT_CONTROL_SCALE, REV);
 
         if (PI_2 < this.lat && this.lat < 3 * PI_2) {
-            this.long = mod(this.long + movement.x * ORBIT_CONTROL_SCALE, REV);
-        } else {
             this.long = mod(this.long - movement.x * ORBIT_CONTROL_SCALE, REV);
+        } else {
+            this.long = mod(this.long + movement.x * ORBIT_CONTROL_SCALE, REV);
         }
     }
 }

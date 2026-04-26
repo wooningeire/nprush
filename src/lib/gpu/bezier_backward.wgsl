@@ -120,7 +120,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     // control point / color channel / width / softness.
     // ------------------------------------------------------------------
     let dC_raw = 2.0 * (C_pred - tgt_color);
-    let edge_weight = 1.0 + tgt_edge * 4.0;
+    // 2x boost on edge pixels (vs 5x previously). The boost gives curves a
+    // strong "lock onto edge" gradient when they're far from one, but if it's
+    // too high the equilibrium width grows: matching all of an edge pixel
+    // (weight w) outvalues the off-edge penalty for being a bit too wide
+    // (weight 1), so the optimizer happily makes strokes fat. 2x is enough
+    // to find edges quickly without sliding the equilibrium fat.
+    let edge_weight = 1.0 + tgt_edge * 1.0;
     let dC = dC_raw * edge_weight;
 
     var dT = dot(dC, background);

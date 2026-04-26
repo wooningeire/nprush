@@ -3,6 +3,8 @@ import { Camera } from "./Camera.svelte.ts";
 import { CameraOrbit } from "./CameraOrbit.svelte.ts";
 import { requestGpu } from "$/gpu/requestGpu.ts";
 import { GpuRunner } from "./GpuRunner.svelte.ts";
+import { loadGlb } from "$/gpu/loadGlb.ts";
+import artelorianUrl from "$/assets/artelorian.glb?url";
 
 export class ViewerState {
     width = $state(300);
@@ -26,7 +28,12 @@ export class ViewerState {
         const state = new ViewerState();
         
         onMount(async () => {
-            const gpu = await requestGpu({canvas: await canvasPromise});
+            // Kick off mesh load and gpu request concurrently; both are awaited
+            // before we build the runner since the mesh is a constructor input.
+            const [gpu, mesh] = await Promise.all([
+                requestGpu({ canvas: await canvasPromise }),
+                loadGlb(artelorianUrl),
+            ]);
             if (!gpu) return;
 
             const gpuRunner = new GpuRunner({
@@ -34,6 +41,7 @@ export class ViewerState {
                 context: gpu.context,
                 format: gpu.format,
                 camera: state.camera,
+                mesh,
                 numSplats,
             });
             state.runner = gpuRunner;

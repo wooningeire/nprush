@@ -1,15 +1,16 @@
 import type { Camera } from "./Camera.svelte";
 import { GpuUniformsBufferManager } from "$/gpu/GpuUniformsBufferManager";
-import { GpuSphereRenderPipelineManager } from "$/gpu/GpuSphereRenderPipelineManager";
+import { GpuMeshRenderPipelineManager, MESH_DEPTH_FORMAT } from "$/gpu/GpuMeshRenderPipelineManager";
 import { GpuSplatOptimizerManager } from "$/gpu/GpuSplatOptimizerManager";
 import { GpuBezierOptimizerManager } from "$/gpu/GpuBezierOptimizerManager";
+import type { MeshData } from "$/gpu/loadGlb";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 
 const OPTIM_SHORT = 128;
 
 // The edge layer is now cubic bezier curves. A handful is enough since each
 // curve is a 1D primitive that natively traces a contour.
-const NUM_EDGE_LAYER_BEZIERS = 32;
+const NUM_EDGE_LAYER_BEZIERS = 512;
 
 export class GpuRunner {
     private readonly device: GPUDevice;
@@ -18,7 +19,7 @@ export class GpuRunner {
     private readonly camera: Camera;
 
     readonly uniformsManager: GpuUniformsBufferManager;
-    readonly sphereRenderPipelineManager: GpuSphereRenderPipelineManager;
+    readonly meshRenderPipelineManager: GpuMeshRenderPipelineManager;
     readonly splatOptimizerManager: GpuSplatOptimizerManager;
     // The edge layer is a separate optimizer of cubic bezier curves trained
     // against the depth-edge texture. Curves natively represent 1D contours,
@@ -26,11 +27,19 @@ export class GpuRunner {
     readonly edgeLayerBezierManager: GpuBezierOptimizerManager;
 
     // Full-res textures (sized to the visible main panel area: half-width x height-minus-strip).
-    // These match the camera projection aspect, so the sphere is circular in pixels.
+    // These match the camera projection aspect so the rendered model has the same pixel
+    // proportions as a square-rendered version (no horizontal/vertical squash).
+    //
+    // Note: targetDepthTexture is an RGBA8 *visualization* depth (linear view-space depth
+    // remapped to grayscale, used by Sobel for edge detection). It is NOT the hardware
+    // Z-buffer. The hardware Z-buffer is targetZTexture below; without it, triangles draw
+    // in submission order which causes back-face leakage on overlapping geometry.
     private targetTexture: GPUTexture | null = null;
     private targetTextureView: GPUTextureView | null = null;
     private targetDepthTexture: GPUTexture | null = null;
     private targetDepthTextureView: GPUTextureView | null = null;
+    private targetZTexture: GPUTexture | null = null;
+    private targetZTextureView: GPUTextureView | null = null;
     private fullEdgeTexture: GPUTexture | null = null;
     private fullEdgeTextureView: GPUTextureView | null = null;
     private fullWidth = 0;
@@ -41,6 +50,8 @@ export class GpuRunner {
     private optimTextureView: GPUTextureView | null = null;
     private optimDepthTexture: GPUTexture | null = null;
     private optimDepthTextureView: GPUTextureView | null = null;
+    private optimZTexture: GPUTexture | null = null;
+    private optimZTextureView: GPUTextureView | null = null;
     private optimEdgeTexture: GPUTexture | null = null;
     private optimEdgeTextureView: GPUTextureView | null = null;
     private optimWidth = 0;
@@ -53,12 +64,14 @@ export class GpuRunner {
         context,
         format,
         camera,
+        mesh,
         numSplats = 512,
     }: {
         device: GPUDevice,
         context: GPUCanvasContext,
         format: GPUTextureFormat,
         camera: Camera,
+        mesh: MeshData,
         numSplats?: number,
     }) {
         this.device = device;
@@ -67,11 +80,12 @@ export class GpuRunner {
         this.camera = camera;
 
         this.uniformsManager = new GpuUniformsBufferManager({ device });
-        
-        this.sphereRenderPipelineManager = new GpuSphereRenderPipelineManager({
+
+        this.meshRenderPipelineManager = new GpuMeshRenderPipelineManager({
             device,
             format,
             uniformsManager: this.uniformsManager,
+            mesh,
         });
 
         // The color-layer instance owns the visualization render pipeline, which
@@ -95,8 +109,8 @@ export class GpuRunner {
     }
 
     private rebuildOptimTextures(panelAspect: number) {
-        // Size optim textures to match the visible panel aspect ratio so the sphere
-        // rendered into them is circular in pixels.
+        // Size optim textures to match the visible panel aspect ratio so the model
+        // rendered into them has matching pixel proportions for the gradient pass.
         let ow: number, oh: number;
         if (panelAspect >= 1) {
             oh = OPTIM_SHORT;
@@ -112,6 +126,7 @@ export class GpuRunner {
 
         if (this.optimTexture) this.optimTexture.destroy();
         if (this.optimDepthTexture) this.optimDepthTexture.destroy();
+        if (this.optimZTexture) this.optimZTexture.destroy();
         if (this.optimEdgeTexture) this.optimEdgeTexture.destroy();
 
         this.optimTexture = this.device.createTexture({
@@ -129,6 +144,14 @@ export class GpuRunner {
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.optimDepthTextureView = this.optimDepthTexture.createView();
+
+        this.optimZTexture = this.device.createTexture({
+            label: "optimization z-buffer",
+            size: [ow, oh],
+            format: MESH_DEPTH_FORMAT,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        this.optimZTextureView = this.optimZTexture.createView();
 
         this.optimEdgeTexture = this.device.createTexture({
             label: "optimization edge texture",
@@ -164,12 +187,13 @@ export class GpuRunner {
             this.rebuildOptimTextures(panelAspect);
 
             // Full-res target for visualization, sized to the visible main panel so the
-            // texture aspect matches the camera projection aspect (sphere stays circular).
+            // texture aspect matches the camera projection aspect.
             const fullW = Math.max(1, Math.floor(width / 2));
             const fullH = Math.max(1, Math.floor(height * (1 - STRIP_HEIGHT_FRAC)));
             if (!this.targetTexture || this.fullWidth !== fullW || this.fullHeight !== fullH) {
                 if (this.targetTexture) this.targetTexture.destroy();
                 if (this.targetDepthTexture) this.targetDepthTexture.destroy();
+                if (this.targetZTexture) this.targetZTexture.destroy();
                 if (this.fullEdgeTexture) this.fullEdgeTexture.destroy();
 
                 this.fullWidth = fullW;
@@ -188,6 +212,14 @@ export class GpuRunner {
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
                 });
                 this.targetDepthTextureView = this.targetDepthTexture.createView();
+
+                this.targetZTexture = this.device.createTexture({
+                    label: "full-res z-buffer",
+                    size: [fullW, fullH],
+                    format: MESH_DEPTH_FORMAT,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+                });
+                this.targetZTextureView = this.targetZTexture.createView();
 
                 this.fullEdgeTexture = this.device.createTexture({
                     size: [fullW, fullH],
@@ -213,9 +245,9 @@ export class GpuRunner {
                 label: "loop command encoder",
             });
 
-            // 1a. Render Sphere to full-res targetTexture + targetDepthTexture (for visualization)
+            // 1a. Render the model into the full-res target + depth textures (for visualization).
             const spherePassEncoder = commandEncoder.beginRenderPass({
-                label: "sphere render pass (full res)",
+                label: "mesh render pass (full res)",
                 colorAttachments: [
                     {
                         clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
@@ -230,13 +262,19 @@ export class GpuRunner {
                         view: this.targetDepthTextureView!,
                     },
                 ],
+                depthStencilAttachment: {
+                    view: this.targetZTextureView!,
+                    depthClearValue: 1.0,
+                    depthLoadOp: "clear",
+                    depthStoreOp: "store",
+                },
             });
-            this.sphereRenderPipelineManager.addDraw(spherePassEncoder);
+            this.meshRenderPipelineManager.addDraw(spherePassEncoder);
             spherePassEncoder.end();
 
-            // 1b. Render Sphere to optim-res (aspect-matched) textures for gradient computation
+            // 1b. Render the model into the optim-res (aspect-matched) textures for gradient computation.
             const optimPassEncoder = commandEncoder.beginRenderPass({
-                label: "sphere render pass (optim res)",
+                label: "mesh render pass (optim res)",
                 colorAttachments: [
                     {
                         clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
@@ -251,8 +289,14 @@ export class GpuRunner {
                         view: this.optimDepthTextureView!,
                     },
                 ],
+                depthStencilAttachment: {
+                    view: this.optimZTextureView!,
+                    depthClearValue: 1.0,
+                    depthLoadOp: "clear",
+                    depthStoreOp: "store",
+                },
             });
-            this.sphereRenderPipelineManager.addDraw(optimPassEncoder);
+            this.meshRenderPipelineManager.addDraw(optimPassEncoder);
             optimPassEncoder.end();
 
             // 2. Run edge detection on optim-res depth

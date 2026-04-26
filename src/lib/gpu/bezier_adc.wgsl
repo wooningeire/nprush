@@ -42,28 +42,49 @@ var<workgroup> dead_indices: array<u32, NUM_BEZIERS>;
 fn main() {
     var dead_count = 0u;
 
-    // Pass 1: collect dead curves (free list).
+    // Pass 1: collect dead curves (free list). The kill check in
+    // bezier_step.wgsl writes literal 0.0 to alpha; the alive clamp floor
+    // is 0.01. We treat anything below 0.005 as dead, which separates the
+    // two cases without colliding with valid alive states.
     for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
-        if (beziers.items[i].color.a < 0.05) {
+        if (beziers.items[i].color.a < 0.005) {
             dead_indices[dead_count] = i;
             dead_count = dead_count + 1u;
         }
     }
 
-    let ADC_PERIOD = 100.0;
-    let TAU_POS = 0.001;
+    // ADC_PERIOD must match the JS dispatch cadence in
+    // GpuBezierOptimizerManager.ts. It is used here only as the divisor that
+    // normalizes accumulated gradient into a per-step average; the actual
+    // dispatch cadence is set in JS.
+    let ADC_PERIOD = 200.0;
+    let TAU_POS = 0.005;
     let SPLIT_LEN_THRESHOLD = 0.25;
+    // Always preserve at least this fraction of dead slots. A productive
+    // curve is never *perfectly* fit and so always has some residual
+    // gradient; without this gate, ADC would keep splitting productive
+    // curves even when every slot is alive, the resulting clone+parent
+    // pairs would compete for the same edge, the loser would drift off as
+    // a stray, and the system would never stabilize. Maintaining 30% dead
+    // headroom means a freshly-killed stray's slot is *not* immediately
+    // refilled, so the population gradually decays toward "as many curves
+    // as the silhouette actually demands."
+    let MIN_DEAD_FRACTION = 0.3;
+    let MIN_DEAD_SLOTS = u32(f32(NUM_BEZIERS) * MIN_DEAD_FRACTION);
 
     // Pass 2: clone or split high-gradient curves into dead slots.
     for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
         var b = beziers.items[i];
-        if (b.color.a < 0.05) { continue; }
+        if (b.color.a < 0.005) { continue; }
 
         let grad_norm = adc.grad_accum[i] / ADC_PERIOD;
         adc.grad_accum[i] = 0.0;
 
         if (grad_norm <= TAU_POS) { continue; }
-        if (dead_count == 0u) { continue; }
+        // Both checks are on the live dead_count: stop spawning as soon as
+        // the headroom drops to MIN_DEAD_SLOTS so the next ADC tick still
+        // has slack for whichever new high-grad curve emerges.
+        if (dead_count <= MIN_DEAD_SLOTS) { continue; }
 
         dead_count = dead_count - 1u;
         let new_idx = dead_indices[dead_count];
@@ -114,63 +135,20 @@ fn main() {
         }
     }
 
-    // Pass 3: smart fill. Any dead slots clone/split didn't consume get
-    // populated by cloning the live curve with the highest effective
-    // coverage (width * opacity), with jitter, into all remaining dead
-    // slots.
+    // No pass 3. Dead slots stay dead. Earlier revisions tried two ways of
+    // refilling them — random respawn, then "smart fill" by cloning the
+    // highest-coverage live curve into every remaining dead slot — and both
+    // produced visible stray strokes in empty space:
     //
-    // Why not random respawn? A previous version spawned new curves at
-    // random positions across the field. Most landed in empty space where
-    // the curve's alpha is non-zero only inside its narrow soft band, so
-    // it picked up only a trickle of "wrong-place" gradient and took ~1000
-    // steps to decay through the kill threshold. During that whole time
-    // it was visible as a stray ghost blob, and each ADC tick spawned more
-    // strays into empty space, so they accumulated.
+    //   - Random respawn: ghosts that decayed slowly in unused regions.
+    //   - Smart fill: bright high-alpha clones planted near the silhouette
+    //     each ADC tick; the fraction whose jitter pushed them off-edge
+    //     drifted into empty space and accumulated faster than the step-
+    //     shader kill could clean them up.
     //
-    // Cloning an established live curve instead seeds the new slot near
-    // where the silhouette is already being learned, so the clone either
-    // contributes (joins or extends an arc) or quickly dies and is re-
-    // cloned next period — no long-lived strays in empty space.
-    if (dead_count > 0u) {
-        var best_score = -1.0;
-        var best_idx = 0u;
-        var found_live = false;
-        for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
-            let bi = beziers.items[i];
-            if (bi.color.a < 0.05) { continue; }
-            let score = bi.width_soft_pad.x * bi.color.a;
-            if (score > best_score) {
-                best_score = score;
-                best_idx = i;
-                found_live = true;
-            }
-        }
-
-        if (found_live) {
-            let src = beziers.items[best_idx];
-            for (var k = 0u; k < dead_count; k = k + 1u) {
-                let idx = dead_indices[k];
-                var nb = src;
-
-                // Larger jitter than the in-pass-2 clone case so multiple
-                // copies into multiple dead slots actually spread out.
-                let seed = f32(idx + 1u) * 17.31 + adam.t * 0.97 + f32(k) * 4.13;
-                let jx = (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.06;
-                let jy = (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.06;
-                nb.p0_p1 = nb.p0_p1 + vec4f(jx, jy, jx, jy);
-                nb.p2_p3 = nb.p2_p3 + vec4f(jx, jy, jx, jy);
-                beziers.items[idx] = nb;
-
-                adc.grad_accum[idx] = 0.0;
-                for (var p = 0u; p < 14u; p = p + 1u) {
-                    adam.m[idx * 14u + p] = 0.0;
-                    adam.v[idx * 14u + p] = 0.0;
-                }
-            }
-        }
-        // If no live curves remain at all, leave dead slots dead. This is
-        // an extreme failure mode (the optimizer killed everything) and
-        // would require external re-seeding to recover; in practice the
-        // conservative kill criterion in bezier_step.wgsl prevents it.
-    }
+    // Letting dead slots stay dead lets the population settle at "as many
+    // curves as the target actually demands." Pass 2 still re-grows
+    // capacity wherever there's real gradient signal (a high-grad live
+    // curve gets cloned/split into a free slot), and that's the only
+    // mechanism by which dead slots ever come back.
 }

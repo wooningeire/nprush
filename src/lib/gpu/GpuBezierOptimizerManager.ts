@@ -73,9 +73,15 @@ export class GpuBezierOptimizerManager {
             data[o + 9] = 0.7 + Math.random() * 0.3;
             data[o + 10] = 0.7 + Math.random() * 0.3;
             data[o + 11] = 0.6;
-            // width, softness, pad, pad
-            data[o + 12] = 0.04;
-            data[o + 13] = 0.02;
+            // width, softness, pad, pad. Bezier coordinates are normalized
+            // [-1, 1] so 1 norm unit ~= dims.y/2 pixels at any resolution.
+            // We optimize at 128 px (~64 px per norm unit) but visualize at
+            // ~500 px panels (~250 px per norm unit). The width therefore
+            // appears ~4x larger on screen than during training. Picking
+            // values ~half what they look "right" at training resolution
+            // keeps the display panel from rendering fat strokes.
+            data[o + 12] = 0.008;
+            data[o + 13] = 0.003;
             data[o + 14] = 0.0;
             data[o + 15] = 0.0;
         }
@@ -228,10 +234,12 @@ export class GpuBezierOptimizerManager {
         pass.setBindGroup(0, this.stepBindGroup);
         pass.dispatchWorkgroups(Math.ceil(this.numBeziers / 64));
 
-        // ADC fires every ADC_PERIOD steps in lockstep with the splat ADC.
-        // Period must match the ADC_PERIOD constant inside bezier_adc.wgsl.
+        // ADC fires every ADC_PERIOD steps. Period must match the ADC_PERIOD
+        // constant inside bezier_adc.wgsl (used there as the grad_accum
+        // averaging divisor). Less frequent ADC reduces churn so transient
+        // strays from clone+parent edge competition don't accumulate.
         this.stepCount++;
-        if (this.stepCount % 100 === 0) {
+        if (this.stepCount % 200 === 0) {
             pass.setPipeline(this.adcPipeline);
             pass.setBindGroup(0, this.adcBindGroup);
             pass.dispatchWorkgroups(1);
