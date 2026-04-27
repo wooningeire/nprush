@@ -5,11 +5,14 @@ import { requestGpu } from "$/gpu/requestGpu.ts";
 import { GpuRunner } from "./GpuRunner.svelte.ts";
 import { loadGlb } from "$/gpu/loadGlb.ts";
 import artelorianUrl from "$/assets/artelorian.glb?url";
+import matcapUrl from "$/assets/overcast_soil_puresky_2k.png?url";
+import { loadTexture } from "$/gpu/loadTexture.ts";
 
 export class ViewerState {
     width = $state(300);
     height = $state(150);
     beziersEnabled = $state(false);
+    shadingMode = $state<'normals' | 'shaded'>('normals');
 
     runner = $state<GpuRunner | null>(null);
     
@@ -37,6 +40,8 @@ export class ViewerState {
             ]);
             if (!gpu) return;
 
+            const matcapTexture = await loadTexture(gpu.device, matcapUrl);
+
             const gpuRunner = new GpuRunner({
                 device: gpu.device,
                 context: gpu.context,
@@ -44,6 +49,7 @@ export class ViewerState {
                 camera: state.camera,
                 viewerState: state,
                 mesh,
+                matcapTexture,
                 numSplats,
             });
             state.runner = gpuRunner;

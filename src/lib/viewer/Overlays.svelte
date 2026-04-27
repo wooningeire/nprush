@@ -13,6 +13,20 @@ const {
         <input type="checkbox" bind:checked={viewerState.beziersEnabled} />
         Beziers
     </label>
+    <div class="shading-toggle">
+        <button 
+            class:active={viewerState.shadingMode === 'normals'} 
+            onclick={() => viewerState.shadingMode = 'normals'}
+        >
+            Normals
+        </button>
+        <button 
+            class:active={viewerState.shadingMode === 'shaded'} 
+            onclick={() => viewerState.shadingMode = 'shaded'}
+        >
+            Shaded
+        </button>
+    </div>
 </div>
 
 <style lang="scss">
@@ -40,6 +54,35 @@ const {
 
         input {
             cursor: pointer;
+        }
+
+        .shading-toggle {
+            display: flex;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            padding: 2px;
+            margin-top: 0.5rem;
+
+            button {
+                flex: 1;
+                background: transparent;
+                border: none;
+                color: rgba(255, 255, 255, 0.5);
+                font-size: 0.8rem;
+                padding: 4px 12px;
+                border-radius: 3px;
+                cursor: pointer;
+                transition: all 0.2s;
+
+                &.active {
+                    background: rgba(255, 255, 255, 0.2);
+                    color: white;
+                }
+
+                &:hover:not(.active) {
+                    color: rgba(255, 255, 255, 0.8);
+                }
+            }
         }
     }
 </style>

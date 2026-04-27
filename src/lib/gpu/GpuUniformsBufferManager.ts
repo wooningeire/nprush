@@ -9,6 +9,8 @@ export class GpuUniformsBufferManager {
     readonly uniformsBuffer: GPUBuffer;
     
     private readonly viewProjMatOffset = 0;
+    private readonly viewMatOffset = 64;
+    private readonly shadingModeOffset = 128;
 
     constructor({
         device,
@@ -17,8 +19,8 @@ export class GpuUniformsBufferManager {
     }) {
         this.device = device;
         
-        // 64 bytes for viewProjMat
-        const bufferSize = 64; 
+        // 64 bytes for viewProjMat, 64 for viewMat, 16 for shadingMode + padding
+        const bufferSize = 144; 
 
         this.uniformsBuffer = device.createBuffer({
             label: "uniforms buffer",
@@ -60,6 +62,24 @@ export class GpuUniformsBufferManager {
             (mat as Float32Array).buffer, 
             (mat as Float32Array).byteOffset, 
             (mat as Float32Array).byteLength
+        );
+    }
+
+    writeViewMat(mat: Mat4) {
+        this.device.queue.writeBuffer(
+            this.uniformsBuffer, 
+            this.viewMatOffset, 
+            (mat as Float32Array).buffer, 
+            (mat as Float32Array).byteOffset, 
+            (mat as Float32Array).byteLength
+        );
+    }
+
+    writeShadingMode(mode: 'normals' | 'shaded') {
+        this.device.queue.writeBuffer(
+            this.uniformsBuffer,
+            this.shadingModeOffset,
+            new Float32Array([mode === 'normals' ? 0 : 1])
         );
     }
 }

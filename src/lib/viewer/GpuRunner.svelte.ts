@@ -26,6 +26,8 @@ export class GpuRunner {
     // against the depth-edge texture. Curves natively represent 1D contours,
     // which is a much better fit for the silhouette target than gaussians.
     readonly edgeLayerBezierManager: GpuBezierOptimizerManager;
+    private readonly matcapTexture: GPUTexture;
+    private readonly matcapTextureView: GPUTextureView;
 
     // Full-res textures (sized to the visible main panel area: half-width x height-minus-strip).
     // These match the camera projection aspect so the rendered model has the same pixel
@@ -67,6 +69,7 @@ export class GpuRunner {
         camera,
         viewerState,
         mesh,
+        matcapTexture,
         numSplats = 512,
     }: {
         device: GPUDevice,
@@ -75,6 +78,7 @@ export class GpuRunner {
         camera: Camera,
         viewerState: any,
         mesh: MeshData,
+        matcapTexture: GPUTexture,
         numSplats?: number,
     }) {
         this.device = device;
@@ -82,6 +86,8 @@ export class GpuRunner {
         this.format = format;
         this.camera = camera;
         this.viewerState = viewerState;
+        this.matcapTexture = matcapTexture;
+        this.matcapTextureView = matcapTexture.createView();
 
         this.uniformsManager = new GpuUniformsBufferManager({ device });
 
@@ -109,6 +115,8 @@ export class GpuRunner {
 
         this.destroy = $effect.root(() => {
             $effect(() => this.uniformsManager.writeViewProjMat(this.camera.viewProjMat));
+            $effect(() => this.uniformsManager.writeViewMat(this.camera.viewMat));
+            $effect(() => this.uniformsManager.writeShadingMode(this.viewerState.shadingMode));
             $effect(() => this.splatOptimizerManager.writeRenderUniforms(this.viewerState.beziersEnabled));
         });
     }
@@ -274,7 +282,7 @@ export class GpuRunner {
                     depthStoreOp: "store",
                 },
             });
-            this.meshRenderPipelineManager.addDraw(spherePassEncoder);
+            this.meshRenderPipelineManager.addDraw(spherePassEncoder, this.matcapTextureView);
             spherePassEncoder.end();
 
             // 1b. Render the model into the optim-res (aspect-matched) textures for gradient computation.
@@ -301,7 +309,7 @@ export class GpuRunner {
                     depthStoreOp: "store",
                 },
             });
-            this.meshRenderPipelineManager.addDraw(optimPassEncoder);
+            this.meshRenderPipelineManager.addDraw(optimPassEncoder, this.matcapTextureView);
             optimPassEncoder.end();
 
             // 2. Run edge detection on optim-res depth

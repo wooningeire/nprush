@@ -20,6 +20,7 @@ export class GpuMeshRenderPipelineManager {
     readonly indexCount: number;
 
     private static readonly STRIDE = 24; // 6 floats * 4 bytes (pos + normal)
+    private readonly device: GPUDevice;
 
     constructor({
         device,
@@ -32,6 +33,7 @@ export class GpuMeshRenderPipelineManager {
         uniformsManager: GpuUniformsBufferManager,
         mesh: MeshData,
     }) {
+        this.device = device;
         this.uniformsManager = uniformsManager;
 
         const module = device.createShaderModule({
@@ -42,7 +44,25 @@ export class GpuMeshRenderPipelineManager {
         const pipelineLayout = device.createPipelineLayout({
             label: "mesh render pipeline layout",
             bindGroupLayouts: [
-                uniformsManager.bindGroupLayout,
+                device.createBindGroupLayout({
+                    entries: [
+                        {
+                            binding: 0,
+                            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                            buffer: { type: "uniform" },
+                        },
+                        {
+                            binding: 1,
+                            visibility: GPUShaderStage.FRAGMENT,
+                            texture: { sampleType: "float" },
+                        },
+                        {
+                            binding: 2,
+                            visibility: GPUShaderStage.FRAGMENT,
+                            sampler: { type: "filtering" },
+                        },
+                    ],
+                }),
             ],
         });
 
@@ -120,9 +140,32 @@ export class GpuMeshRenderPipelineManager {
         this.indexCount = mesh.indices.length;
     }
 
-    addDraw(renderPassEncoder: GPURenderPassEncoder) {
+    addDraw(renderPassEncoder: GPURenderPassEncoder, matcapTextureView: GPUTextureView) {
+        // We create a transient bind group because the texture might change or just for simplicity.
+        // Or we could store it if it's static. Let's create it once if possible.
+        const bindGroup = this.device.createBindGroup({
+            layout: this.renderPipeline.getBindGroupLayout(0),
+            entries: [
+                {
+                    binding: 0,
+                    resource: { buffer: this.uniformsManager.uniformsBuffer },
+                },
+                {
+                    binding: 1,
+                    resource: matcapTextureView,
+                },
+                {
+                    binding: 2,
+                    resource: this.device.createSampler({
+                        magFilter: "linear",
+                        minFilter: "linear",
+                    }),
+                },
+            ],
+        });
+
         renderPassEncoder.setPipeline(this.renderPipeline);
-        renderPassEncoder.setBindGroup(0, this.uniformsManager.bindGroup);
+        renderPassEncoder.setBindGroup(0, bindGroup);
         renderPassEncoder.setVertexBuffer(0, this.vertexBuffer);
         renderPassEncoder.setIndexBuffer(this.indexBuffer, "uint32");
         renderPassEncoder.drawIndexed(this.indexCount);
