@@ -37,8 +37,8 @@ fn main() {
         }
     }
     
-    let ADC_PERIOD = 20.0;
-    let TAU_POS = 0.0002;
+    let ADC_PERIOD = 50.0;
+    let TAU_POS = 0.00005;
     let SPLIT_SCALE_THRESHOLD = 0.01;
     
     // Pass 2: Clone or Split

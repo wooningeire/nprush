@@ -63,7 +63,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         // Learning rates per parameter type
         var lr = 0.03;
         // position
-        if (local_param == 0u || local_param == 1u) { lr = 0.05; }
+        if (local_param == 0u || local_param == 1u) { lr = 0.01; }
         // scale
         if (local_param == 2u || local_param == 3u) { lr = 0.01; }
         // color
@@ -88,7 +88,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         
         // Per-parameter update clip to enforce position-first convergence
         var max_update = 0.01;
-        if (local_param == 0u || local_param == 1u) { max_update = 0.02; }  // position
+        if (local_param == 0u || local_param == 1u) { max_update = 0.005; }  // position
         if (local_param == 2u || local_param == 3u) { max_update = 0.005; }  // scale
         if (local_param >= 4u && local_param <= 6u) { max_update = 0.001; }  // color
         if (local_param == 7u) { max_update = 0.0005; }  // opacity
@@ -118,9 +118,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     // Accumulate gradient norm
     adc.grad_accum[splat_id] += sqrt(pos_grad_norm2);
     
-    // Kill splats that have shrunk below the px threshold
-    // Instead of randomizing, we just set opacity to 0 to act as a free slot for ADC
-    if (s.transform.z * s.transform.w < 0.0004) {
+    // Kill splats that have become too thin (needles) to free up slots for ADC
+    let max_scale = max(s.transform.z, s.transform.w);
+    let min_scale = min(s.transform.z, s.transform.w);
+    if (max_scale / min_scale > 10.0 || s.color.a < 0.05) {
         s.color.a = 0.0;
     }
     
