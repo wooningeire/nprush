@@ -44,35 +44,103 @@ fn bernstein(t: f32) -> vec4f {
     return vec4f(omt*omt*omt, 3.0*omt*omt*t, 3.0*omt*t*t, t*t*t);
 }
 
+const MAX_TILE_BEZIERS = 1024u;
+var<workgroup> tile_mask: array<atomic<u32>, NUM_BEZIERS_DIV_32>;
+var<workgroup> tile_beziers: array<u32, MAX_TILE_BEZIERS>;
+var<workgroup> tile_bezier_count: atomic<u32>;
+
+fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32) -> vec2f {
+    let uv = (vec2f(px) + vec2f(0.5)) / vec2f(dims);
+    var p = uv * 2.0 - 1.0;
+    p.y = -p.y;
+    p.x = p.x * aspect;
+    return p;
+}
+
 @compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) global_id: vec3u) {
+fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_id) local_id: vec3u) {
     let dims = textureDimensions(targetTex);
+    let aspect = f32(dims.x) / f32(dims.y);
+    
+    // --- 1. COOPERATIVE TILE BINNING ---
+    let local_idx = local_id.y * 16u + local_id.x;
+    
+    for (var i = local_idx; i < NUM_BEZIERS_DIV_32; i += 256u) {
+        atomicStore(&tile_mask[i], 0u);
+    }
+    if (local_idx == 0u) {
+        atomicStore(&tile_bezier_count, 0u);
+    }
+    workgroupBarrier();
+    
+    let tile_min_px = workgroup_id.xy * 16u;
+    let tile_max_px = min(tile_min_px + vec2u(16u), dims);
+    let p00 = pixel_to_p(tile_min_px, dims, aspect);
+    let p11 = pixel_to_p(tile_max_px, dims, aspect);
+    let tile_min_p = vec2f(p00.x, p11.y);
+    let tile_max_p = vec2f(p11.x, p00.y);
+    
+    for (var bezier_id = local_idx; bezier_id < NUM_BEZIERS; bezier_id += 256u) {
+        let b = beziers.items[bezier_id];
+        if (b.color.a < 0.005) { continue; }
+        
+        let p0 = b.p0_p1.xy;
+        let p1 = b.p0_p1.zw;
+        let p2 = b.p2_p3.xy;
+        let p3 = b.p2_p3.zw;
+        let width = max(b.width_soft_pad.x, 0.001);
+        let softness = max(b.width_soft_pad.y, 0.001);
+        
+        let outer_cull = width + softness;
+        let min_p = min(min(p0, p1), min(p2, p3)) - vec2f(outer_cull);
+        let max_p = max(max(p0, p1), max(p2, p3)) + vec2f(outer_cull);
+        
+        if (!(min_p.x > tile_max_p.x || max_p.x < tile_min_p.x || 
+              min_p.y > tile_max_p.y || max_p.y < tile_min_p.y)) {
+            let word_idx = bezier_id / 32u;
+            let bit_idx = bezier_id % 32u;
+            atomicOr(&tile_mask[word_idx], 1u << bit_idx);
+        }
+    }
+    workgroupBarrier();
+    
+    if (local_idx == 0u) {
+        var count = 0u;
+        for (var word_idx = 0u; word_idx < NUM_BEZIERS_DIV_32; word_idx++) {
+            var word = atomicLoad(&tile_mask[word_idx]);
+            while (word != 0u) {
+                let bit_idx = countTrailingZeros(word);
+                let bezier_id = word_idx * 32u + bit_idx;
+                if (count < MAX_TILE_BEZIERS) {
+                    tile_beziers[count] = bezier_id;
+                    count++;
+                }
+                word ^= (1u << bit_idx);
+            }
+        }
+        atomicStore(&tile_bezier_count, count);
+    }
+    workgroupBarrier();
+    
+    let bezier_count = atomicLoad(&tile_bezier_count);
+
+    // --- 2. PIXEL EVALUATION ---
     if (global_id.x >= dims.x || global_id.y >= dims.y) {
         return;
     }
 
-    // Match the splat backward's pixel-to-curve coordinate mapping so both
-    // layers share the same domain: p in [-aspect, aspect] x [-1, 1].
-    let aspect = f32(dims.x) / f32(dims.y);
-    let uv = (vec2f(global_id.xy) + vec2f(0.5)) / vec2f(dims.xy);
-    var p = uv * 2.0 - 1.0;
-    p.y = -p.y;
-    p.x = p.x * aspect;
-
+    let p = pixel_to_p(global_id.xy, dims, aspect);
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
     let tgt_edge = textureLoad(targetEdgeTex, global_id.xy, 0).r;
 
-    // ------------------------------------------------------------------
-    // Forward pass: compute alphas, transmittances, and remember which
-    // polyline segment was closest for each curve (needed for backward).
-    // ------------------------------------------------------------------
-    var alphas: array<f32, NUM_BEZIERS>;
-    var min_seg: array<u32, NUM_BEZIERS>;
-    var Ts: array<f32, NUM_BEZIERS_PLUS_ONE>;
+    var alphas = array<f32, MAX_TILE_BEZIERS>();
+    var min_seg = array<u32, MAX_TILE_BEZIERS>();
+    var Ts = array<f32, MAX_TILE_BEZIERS + 1u>();
     Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
 
-    for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
+    for (var idx = 0u; idx < bezier_count; idx++) {
+        let i = tile_beziers[idx];
         let b = beziers.items[i];
         let p0 = b.p0_p1.xy;
         let p1 = b.p0_p1.zw;
@@ -81,18 +149,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let width = max(b.width_soft_pad.x, 0.001);
         let softness = max(b.width_soft_pad.y, 0.001);
         let opacity = b.color.a;
-
-        // --- AABB CULLING ---
-        let outer_cull = width + softness;
-        let min_p = min(min(p0, p1), min(p2, p3)) - vec2f(outer_cull);
-        let max_p = max(max(p0, p1), max(p2, p3)) + vec2f(outer_cull);
-        if (p.x < min_p.x || p.x > max_p.x || p.y < min_p.y || p.y > max_p.y) {
-            alphas[i] = -1.0;
-            min_seg[i] = 0u;
-            Ts[i + 1u] = Ts[i];
-            continue;
-        }
-        // --------------------
 
         var min_d = 1e9;
         var min_k = 1u;
@@ -116,43 +172,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let a_geom = 1.0 - smoothstep(inner, outer, min_d);
         var a = clamp(a_geom * opacity, 0.0, 0.999);
 
-        alphas[i] = a;
-        min_seg[i] = min_k;
-        C_pred += Ts[i] * a * b.color.rgb;
-        Ts[i + 1u] = Ts[i] * (1.0 - a);
+        alphas[idx] = a;
+        min_seg[idx] = min_k;
+        C_pred += Ts[idx] * a * b.color.rgb;
+        Ts[idx + 1u] = Ts[idx] * (1.0 - a);
     }
 
-    // Background is black for the edge layer (target is dark outside the
-    // silhouette); keep the chain rule terms consistent.
     let background = vec3f(0.0);
-    C_pred += Ts[NUM_BEZIERS] * background;
+    C_pred += Ts[bezier_count] * background;
 
-    // ------------------------------------------------------------------
-    // Backward pass: chain rule from L = ||C_pred - tgt||^2 down to each
-    // control point / color channel / width / softness.
-    // ------------------------------------------------------------------
-    // Plain MSE against the (already-thresholded) target edge image. Earlier
-    // revisions multiplied dC by an `edge_weight = 1 + tgt_edge * k` boost
-    // to "lock onto edges faster," but every nonzero k biases the
-    // equilibrium toward fat strokes — matching an edge pixel (weight 1+k)
-    // outvalues the off-edge penalty (weight 1) for being a bit too wide,
-    // so curves prefer "definitely covers the edge" over "just covers the
-    // edge." With k=0 the on-edge gain and off-edge cost balance, so the
-    // optimum width is *exactly* the target edge thickness rather than
-    // wider. The thresholded target image already has zero-loss outside
-    // edges, so we don't lose much in finding rate.
     let dC = 2.0 * (C_pred - tgt_color);
-
     var dT = dot(dC, background);
 
     let FP_SCALE_POS = 10000.0;
     let FP_SCALE_COL = 100000.0;
 
-    for (var j = 0u; j < NUM_BEZIERS; j = j + 1u) {
-        let i = NUM_BEZIERS_MINUS_ONE - j;
-        let stored_a = alphas[i];
-        if (stored_a < -0.5) { continue; }
+    for (var j = 0u; j < bezier_count; j++) {
+        let idx = bezier_count - 1u - j;
+        let a = alphas[idx];
+        if (a < 0.001) { continue; }
         
+        let i = tile_beziers[idx];
         let b = beziers.items[i];
         let p0 = b.p0_p1.xy;
         let p1 = b.p0_p1.zw;
@@ -163,15 +203,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let opacity = b.color.a;
         let color = b.color.rgb;
 
-        let a = stored_a;
-        let T_prev = Ts[i];
+        let T_prev = Ts[idx];
 
         let dColor = dC * (T_prev * a);
         let da = dT * (-T_prev) + dot(dC, T_prev * color);
         dT = dT * (1.0 - a) + dot(dC, a * color);
 
-        // Reconstruct the closest segment from min_seg[i].
-        let k = min_seg[i];
+        let k = min_seg[idx];
         let t_prev = f32(k - 1u) / f32(N_SEG);
         let t_curr = f32(k) / f32(N_SEG);
         let prev_pt = bezier_at(p0, p1, p2, p3, t_prev);
@@ -183,60 +221,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let d_vec = p - proj;
         let d = max(length(d_vec), 1e-6);
 
-        // a = (1 - smoothstep(inner, outer, d)) * opacity
         let inner = width - softness;
         let outer = width + softness;
         let denom = max(outer - inner, 1e-6);
-        let x = clamp((d - inner) / denom, 0.0, 1.0);
-        let smoothstep_deriv = 6.0 * x * (1.0 - x) / denom;
+        let x_inner = clamp((d - inner) / denom, 0.0, 1.0);
+        let smoothstep_deriv = 6.0 * x_inner * (1.0 - x_inner) / denom;
         let in_softband = (d > inner) && (d < outer);
 
-        // Stray kill: MSE gradients flow through front-to-back compositing
-        // (C_pred += T_prev * a * color, d/da uses T_prev). A curve buried
-        // under many slightly-opaque layers can have T_prev ≈ 0 on most
-        // pixels, so its da from the photometric loss vanishes even when
-        // the stroke is still visible (earlier layers already put white in
-        // the pixel). Those curves then never get a signal to reduce
-        // opacity and sit around as a "grid" of unkillable garbage.
-        //
-        // Add an auxiliary loss (not composite-weighted):
-        //   L_off = w * (1 - tgt_edge) * a
-        // with a = a_geom * opacity, same as the forward pass.  dL/d(opacity)
-        // = w * (1 - tgt_edge) * a_geom; on edge pixels tgt_edge ≈ 1, off;
-        // in black, every visible stroke gets a direct opacity/geometry
-        // gradient.  dL through a_geom to width, softness, and position uses
-        // the same chain as the photometric d(width) terms with
-        // (da + w*(1 - tgt_edge)) in place of da — but we must NOT add this
-        // to the transmittance adjoint dT, which is only for the MSE.
         let a_geom = a / max(opacity, 1e-4);
         let OFF_EDGE_ALPHA = 0.35;
         let off_w = OFF_EDGE_ALPHA * (1.0 - tgt_edge);
 
         var d_opacity = da * (1.0 - smoothstep(inner, outer, d)) + off_w * a_geom;
 
-        // Distance gradient flows only inside the soft band (outside it the
-        // alpha is constant 0 or opacity, so the curve is locally insensitive).
         var dD = 0.0;
         var dWidth = 0.0;
         var dSoft = 0.0;
         if (in_softband) {
             dD = -(da + off_w) * opacity * smoothstep_deriv;
-            // d(alpha)/d(width)    =  opacity * ss' / (2*softness)
-            // d(alpha)/d(softness) = -opacity * ss' * (width - d) / (2*softness^2)
             dWidth = (da + off_w) * opacity * smoothstep_deriv / denom;
             dSoft = -(da + off_w) * opacity * smoothstep_deriv * (width - d)
                 / max(2.0 * softness * softness, 1e-6);
         }
 
-        // d = |p - proj|  =>  d(d)/d(proj) = -d_vec / d
         let dProj = -dD * d_vec / d;
-        // proj = (1-u)*prev_pt + u*curr_pt, with u treated as constant
-        // (envelope theorem: in the interior u minimizes d, on the clamp
-        // boundaries the parameter is locked, so partials through u vanish).
         let dPrevPt = (1.0 - u_clamped) * dProj;
         let dCurrPt = u_clamped * dProj;
 
-        // Bernstein-basis chain rule from segment endpoints to control points.
         let B_prev = bernstein(t_prev);
         let B_curr = bernstein(t_curr);
         let dP0 = B_prev.x * dPrevPt + B_curr.x * dCurrPt;

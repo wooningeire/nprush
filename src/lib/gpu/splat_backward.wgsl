@@ -17,34 +17,100 @@ struct GradArray {
 @group(0) @binding(2) var targetTex: texture_2d<f32>;
 @group(0) @binding(3) var targetEdgeTex: texture_2d<f32>;
 
+const MAX_TILE_SPLATS = 1024u;
+var<workgroup> tile_mask: array<atomic<u32>, NUM_SPLATS_DIV_32>;
+var<workgroup> tile_splats: array<u32, MAX_TILE_SPLATS>;
+var<workgroup> tile_splat_count: atomic<u32>;
+
+fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32) -> vec2f {
+    let uv = (vec2f(px) + vec2f(0.5)) / vec2f(dims);
+    var p = uv * 2.0 - 1.0;
+    p.y = -p.y;
+    p.x = p.x * aspect;
+    return p;
+}
+
 @compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) global_id: vec3u) {
+fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_id) local_id: vec3u) {
     let dims = textureDimensions(targetTex);
+    let aspect = f32(dims.x) / f32(dims.y);
+    
+    // --- 1. COOPERATIVE TILE BINNING ---
+    let local_idx = local_id.y * 16u + local_id.x;
+    
+    for (var i = local_idx; i < NUM_SPLATS_DIV_32; i += 256u) {
+        atomicStore(&tile_mask[i], 0u);
+    }
+    if (local_idx == 0u) {
+        atomicStore(&tile_splat_count, 0u);
+    }
+    workgroupBarrier();
+    
+    let tile_min_px = workgroup_id.xy * 16u;
+    let tile_max_px = min(tile_min_px + vec2u(16u), dims);
+    let p00 = pixel_to_p(tile_min_px, dims, aspect);
+    let p11 = pixel_to_p(tile_max_px, dims, aspect);
+    let tile_min_p = vec2f(p00.x, p11.y);
+    let tile_max_p = vec2f(p11.x, p00.y);
+    
+    for (var splat_id = local_idx; splat_id < NUM_SPLATS; splat_id += 256u) {
+        let s = splats.splats[splat_id];
+        if (s.color.a < 0.005) { continue; }
+        
+        let pos = s.transform.xy;
+        let scale = s.transform.zw;
+        let safe_shape_b_cull = max(s.rot_pad.z, 0.0001);
+        let R = pow(15.0 / safe_shape_b_cull, 1.0 / s.rot_pad.y);
+        let max_r = R * max(scale.x, scale.y);
+        
+        let splat_min_p = pos - vec2f(max_r);
+        let splat_max_p = pos + vec2f(max_r);
+        
+        if (!(splat_min_p.x > tile_max_p.x || splat_max_p.x < tile_min_p.x || 
+              splat_min_p.y > tile_max_p.y || splat_max_p.y < tile_min_p.y)) {
+            let word_idx = splat_id / 32u;
+            let bit_idx = splat_id % 32u;
+            atomicOr(&tile_mask[word_idx], 1u << bit_idx);
+        }
+    }
+    workgroupBarrier();
+    
+    if (local_idx == 0u) {
+        var count = 0u;
+        for (var word_idx = 0u; word_idx < NUM_SPLATS_DIV_32; word_idx++) {
+            var word = atomicLoad(&tile_mask[word_idx]);
+            while (word != 0u) {
+                let bit_idx = countTrailingZeros(word);
+                let splat_id = word_idx * 32u + bit_idx;
+                if (count < MAX_TILE_SPLATS) {
+                    tile_splats[count] = splat_id;
+                    count++;
+                }
+                word ^= (1u << bit_idx);
+            }
+        }
+        atomicStore(&tile_splat_count, count);
+    }
+    workgroupBarrier();
+    
+    let splat_count = atomicLoad(&tile_splat_count);
+    
+    // --- 2. PIXEL EVALUATION ---
     if (global_id.x >= dims.x || global_id.y >= dims.y) {
         return;
     }
     
-    // Map texture pixels to splat coords with aspect correction so that a circular
-    // ball in the optim texture trains splats as a circle (not an ellipse) in p-space.
-    // Splats live in [-aspect, aspect] x [-1, 1].
-    let aspect = f32(dims.x) / f32(dims.y);
-    let uv = (vec2f(global_id.xy) + vec2f(0.5)) / vec2f(dims.xy);
-    var p = uv * 2.0 - 1.0;
-    p.y = -p.y;
-    p.x = p.x * aspect;
-    
+    let p = pixel_to_p(global_id.xy, dims, aspect);
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
     let tgt_edge = textureLoad(targetEdgeTex, global_id.xy, 0).r;
 
-    var alphas = array<f32, NUM_SPLATS>();
-    var Ts = array<f32, NUM_SPLATS_PLUS_ONE>();
+    var alphas = array<f32, MAX_TILE_SPLATS>();
+    var Ts = array<f32, MAX_TILE_SPLATS + 1u>();
     Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
     
-    // Also compute a pseudo-depth from splat opacity accumulation
-    var splat_depth = 0.0;
-    
-    for (var i = 0u; i < NUM_SPLATS; i++) {
+    for (var idx = 0u; idx < splat_count; idx++) {
+        let i = tile_splats[idx];
         let s = splats.splats[i];
         let pos = s.transform.xy;
         let scale = s.transform.zw;
@@ -53,17 +119,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let opacity = s.color.a;
         
         let d = p - pos;
-        
-        // --- AABB CULLING ---
-        let safe_shape_b_cull = max(s.rot_pad.z, 0.0001);
-        let R = pow(15.0 / safe_shape_b_cull, 1.0 / s.rot_pad.y);
-        let max_r = R * max(scale.x, scale.y);
-        if (abs(d.x) > max_r || abs(d.y) > max_r) {
-            alphas[i] = -1.0;
-            Ts[i+1] = Ts[i];
-            continue;
-        }
-        // --------------------
         
         let co = cos(rot);
         let si = sin(rot);
@@ -80,32 +135,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         
         a = clamp(a, 0.0, 0.999);
         
-        alphas[i] = a;
-        C_pred += Ts[i] * a * color;
-        // Accumulate a weighted depth (closer splats get heavier weight via transmittance)
-        splat_depth += Ts[i] * a * f32(i) / f32(NUM_SPLATS);
-        Ts[i+1] = Ts[i] * (1.0 - a);
+        alphas[idx] = a;
+        C_pred += Ts[idx] * a * color;
+        Ts[idx+1] = Ts[idx] * (1.0 - a);
     }
 
     let background = vec3f(0.1);
-    C_pred += Ts[NUM_SPLATS] * background;
+    C_pred += Ts[splat_count] * background;
     
-    // Color loss gradient
     let dC = 2.0 * (C_pred - tgt_color);
-    
-    // Edge loss: weight the color gradient by target edge intensity
-    // This amplifies gradients at edges, encouraging splats to sharpen there
     let edge_weight = 1.0 + tgt_edge * 4.0;
     let dC_weighted = dC * edge_weight;
     
     var dT = dot(dC_weighted, background);
-    
-    let FP_SCALE = 1000.0;
 
-    for (var j = 0u; j < NUM_SPLATS; j++) {
-        let i = NUM_SPLATS_MINUS_ONE - j;
-        let stored_a = alphas[i];
-        if (stored_a < -0.5) { continue; }
+    for (var j = 0u; j < splat_count; j++) {
+        let idx = splat_count - 1u - j;
+        let i = tile_splats[idx];
+        let a = alphas[idx];
+        if (a < 0.001) { continue; }
         
         let s = splats.splats[i];
         let pos = s.transform.xy;
@@ -114,8 +162,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let color = s.color.rgb;
         let opacity = s.color.a;
 
-        let a = stored_a;
-        let T_prev = Ts[i];
+        let T_prev = Ts[idx];
         
         let dColor = dC_weighted * (T_prev * a);
         let da = dT * (-T_prev) + dot(dC_weighted, T_prev * color);

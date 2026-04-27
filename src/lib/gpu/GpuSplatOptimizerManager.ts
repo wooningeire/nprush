@@ -76,8 +76,12 @@ export class GpuSplatOptimizerManager {
             splatData[o + 4] = Math.random();
             splatData[o + 5] = Math.random();
             splatData[o + 6] = Math.random();
-            // opacity: moderate
-            splatData[o + 7] = 0.3 + Math.random() * 0.4;
+            // opacity: moderate for first 512, dead for the rest
+            if (i < 512) {
+                splatData[o + 7] = 0.3 + Math.random() * 0.4;
+            } else {
+                splatData[o + 7] = 0.0;
+            }
             
             // rotation
             splatData[o + 8] = Math.random() * Math.PI * 2;
@@ -125,6 +129,7 @@ export class GpuSplatOptimizerManager {
         const injectConstants = (src: string) => src
             .replace(/NUM_SPLATS_PLUS_ONE/g, `${this.numSplats + 1}u`)
             .replace(/NUM_SPLATS_MINUS_ONE/g, `${this.numSplats - 1}u`)
+            .replace(/NUM_SPLATS_DIV_32/g, `${Math.ceil(this.numSplats / 32)}u`)
             .replace(/NUM_SPLATS/g, `${this.numSplats}u`)
             .replace(/NUM_PARAMS/g, `${this.numParams}u`);
 

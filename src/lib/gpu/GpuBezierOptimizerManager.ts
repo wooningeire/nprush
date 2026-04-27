@@ -128,6 +128,7 @@ export class GpuBezierOptimizerManager {
         const inject = (src: string) => src
             .replace(/NUM_BEZIERS_PLUS_ONE/g, `${numBeziers + 1}u`)
             .replace(/NUM_BEZIERS_MINUS_ONE/g, `${numBeziers - 1}u`)
+            .replace(/NUM_BEZIERS_DIV_32/g, `${Math.ceil(numBeziers / 32)}u`)
             .replace(/NUM_BEZIERS/g, `${numBeziers}u`)
             .replace(/NUM_BEZIER_PARAMS/g, `${this.numParams}u`);
 
