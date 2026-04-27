@@ -267,7 +267,7 @@ export class GpuRunner {
                     label: "full splat view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
-                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
                 });
                 this.fullSplatTextureView = this.fullSplatTexture.createView();
 
