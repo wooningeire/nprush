@@ -58,7 +58,7 @@ fn main() {
     // GpuBezierOptimizerManager.ts. It is used here only as the divisor that
     // normalizes accumulated gradient into a per-step average; the actual
     // dispatch cadence is set in JS.
-    let ADC_PERIOD = 100.0;
+    let ADC_PERIOD = 50.0;
     let TAU_POS = 0.005;
     let SPLIT_LEN_THRESHOLD = 0.25;
     // Always preserve at least this fraction of dead slots. A productive

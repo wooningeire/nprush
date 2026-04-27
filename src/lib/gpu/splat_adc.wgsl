@@ -37,7 +37,7 @@ fn main() {
         }
     }
     
-    let ADC_PERIOD = 100.0;
+    let ADC_PERIOD = 20.0;
     let TAU_POS = 0.0002;
     let SPLIT_SCALE_THRESHOLD = 0.01;
     
@@ -68,13 +68,13 @@ fn main() {
                     new_s.transform.w *= split_factor;
                     
                     // Simple perturbation: move them apart along X axis based on their scale
-                    s.transform.x -= s.transform.z * 0.5;
-                    new_s.transform.x += s.transform.z * 0.5;
+                    s.transform.x -= s.transform.z * 0.05;
+                    new_s.transform.x += s.transform.z * 0.05;
                 } else {
                     // Clone: Keep same scale, slightly perturb position to avoid perfect overlap
                     let seed = f32(i) * 3.14159 + adam.t;
-                    new_s.transform.x += (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.005;
-                    new_s.transform.y += (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.005;
+                    new_s.transform.x += (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.002;
+                    new_s.transform.y += (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.002;
                 }
                 
                 // Write back
