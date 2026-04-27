@@ -25,7 +25,8 @@ struct AdamState {
     m: array<f32, NUM_BEZIER_PARAMS>,
     v: array<f32, NUM_BEZIER_PARAMS>,
     t: f32,
-    pad: vec3f,
+    pixel_count: f32,
+    pad: vec2f,
 }
 
 struct ADCArray {
@@ -57,7 +58,7 @@ fn main() {
     // GpuBezierOptimizerManager.ts. It is used here only as the divisor that
     // normalizes accumulated gradient into a per-step average; the actual
     // dispatch cadence is set in JS.
-    let ADC_PERIOD = 200.0;
+    let ADC_PERIOD = 100.0;
     let TAU_POS = 0.005;
     let SPLIT_LEN_THRESHOLD = 0.25;
     // Always preserve at least this fraction of dead slots. A productive
@@ -80,7 +81,16 @@ fn main() {
         let grad_norm = adc.grad_accum[i] / ADC_PERIOD;
         adc.grad_accum[i] = 0.0;
 
-        if (grad_norm <= TAU_POS) { continue; }
+        if (grad_norm <= TAU_POS) {
+            // Plateau check: if the curve has settled into a low-gradient state 
+            // but the opacity optimizer is still trying to kill it (positive 
+            // momentum in the alpha channel), it's a stray that only adds 
+            // to loss. Kill it immediately to free the slot.
+            if (adam.m[i * 14u + 11u] > 1e-5) {
+                beziers.items[i].color.a = 0.0;
+            }
+            continue;
+        }
         // Both checks are on the live dead_count: stop spawning as soon as
         // the headroom drops to MIN_DEAD_SLOTS so the next ADC tick still
         // has slack for whichever new high-grad curve emerges.
@@ -117,8 +127,8 @@ fn main() {
             // Clone with a small jitter on every control point so the copies
             // don't perfectly overlap and can diverge under future gradients.
             let seed = f32(i) * 3.14159 + adam.t;
-            let jx = (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.01;
-            let jy = (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.01;
+            let jx = (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.003;
+            let jy = (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.003;
             new_b.p0_p1 = b.p0_p1 + vec4f(jx, jy, jx, jy);
             new_b.p2_p3 = b.p2_p3 + vec4f(jx, jy, jx, jy);
         }

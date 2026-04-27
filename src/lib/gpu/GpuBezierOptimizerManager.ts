@@ -49,8 +49,8 @@ export class GpuBezierOptimizerManager {
         const data = new Float32Array(numBeziers * FLOATS_PER_BEZIER);
         for (let i = 0; i < numBeziers; i++) {
             const o = i * FLOATS_PER_BEZIER;
-            const cx = (Math.random() * 2 - 1) * 0.5;
-            const cy = (Math.random() * 2 - 1) * 0.5;
+            const cx = (Math.random() * 2 - 1);
+            const cy = (Math.random() * 2 - 1);
             const len = 0.2 + Math.random() * 0.2;
             const angle = Math.random() * Math.PI * 2;
             const dx = Math.cos(angle) * len;
@@ -68,20 +68,29 @@ export class GpuBezierOptimizerManager {
             // P3
             data[o + 6] = cx + dx * 0.5;
             data[o + 7] = cy + dy * 0.5;
-            // color rgba
+            // color rgba. Initial opacity is at the upper clamp because
+            // the kill threshold (width * opacity <= 0.0008) effectively
+            // makes any curve with opacity < 0.8 die on the first step
+            // its width hits the 0.001 floor. Starting at 0.99 instead of
+            // a "neutral" 0.6 gives every curve a generous opacity-decay
+            // grace window (~200 steps with the slowed opacity max_update)
+            // before it can possibly die, which is enough time for the
+            // optimizer to either find a silhouette edge or be replaced
+            // by ADC cloning at the next 200-step tick.
             data[o + 8] = 0.7 + Math.random() * 0.3;
             data[o + 9] = 0.7 + Math.random() * 0.3;
             data[o + 10] = 0.7 + Math.random() * 0.3;
-            data[o + 11] = 0.6;
-            // width, softness, pad, pad. Bezier coordinates are normalized
-            // [-1, 1] so 1 norm unit ~= dims.y/2 pixels at any resolution.
-            // We optimize at 128 px (~64 px per norm unit) but visualize at
-            // ~500 px panels (~250 px per norm unit). The width therefore
-            // appears ~4x larger on screen than during training. Picking
-            // values ~half what they look "right" at training resolution
-            // keeps the display panel from rendering fat strokes.
-            data[o + 12] = 0.008;
-            data[o + 13] = 0.003;
+            data[o + 11] = 0.99;
+            // width, softness, pad, pad. Sized for *display* resolution
+            // (~250 px per norm unit), so 0.003 norm ~= 0.75 px stroke +
+            // 0.5 px halo from softness, matching the 1-2 px target edges.
+            // At 128 px optim resolution this is sub-pixel, which means
+            // the curves can't fully cover an optim-resolution edge pixel,
+            // but they hit display-resolution edge pixels cleanly. The
+            // upper clamps in bezier_step.wgsl prevent the optimizer
+            // from re-inflating to optim-natural widths.
+            data[o + 12] = 0.003;
+            data[o + 13] = 0.001;
             data[o + 14] = 0.0;
             data[o + 15] = 0.0;
         }
@@ -224,6 +233,15 @@ export class GpuBezierOptimizerManager {
     dispatch(commandEncoder: GPUCommandEncoder) {
         if (!this.backwardBindGroup) return;
 
+        // Update pixel count for normalization in the step shader.
+        // AdamState layout: m [N], v [N], t [1], pixel_count [1], pad [2]
+        const pixelCount = this.dims.width * this.dims.height;
+        this.device.queue.writeBuffer(
+            this.adamBuffer,
+            this.numParams * 8 + 4,
+            new Float32Array([pixelCount])
+        );
+
         const pass = commandEncoder.beginComputePass();
 
         pass.setPipeline(this.backwardPipeline);
@@ -239,7 +257,7 @@ export class GpuBezierOptimizerManager {
         // averaging divisor). Less frequent ADC reduces churn so transient
         // strays from clone+parent edge competition don't accumulate.
         this.stepCount++;
-        if (this.stepCount % 200 === 0) {
+        if (this.stepCount % 100 === 0) {
             pass.setPipeline(this.adcPipeline);
             pass.setBindGroup(0, this.adcBindGroup);
             pass.dispatchWorkgroups(1);

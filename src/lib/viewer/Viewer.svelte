@@ -4,7 +4,7 @@ import { onMount } from "svelte";
 import Canvas from "./Canvas.svelte";
 import { ViewerState } from "./ViewerState.svelte.ts";
 
-let { numSplats = 4096 }: { numSplats?: number } = $props();
+let { numSplats = 8192 }: { numSplats?: number } = $props();
 
 let canvas = $state<HTMLCanvasElement | null>(null);
 let canvasPromise = Promise.withResolvers<HTMLCanvasElement>();

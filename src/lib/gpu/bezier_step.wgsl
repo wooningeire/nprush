@@ -28,7 +28,8 @@ struct AdamState {
     m: array<f32, NUM_BEZIER_PARAMS>,
     v: array<f32, NUM_BEZIER_PARAMS>,
     t: f32,
-    pad: vec3f,
+    pixel_count: f32,
+    pad: vec2f,
 }
 
 struct ADCArray {
@@ -82,26 +83,22 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         if (lp < 8u || lp == 12u || lp == 13u) {
             fp_scale = 10000.0;
         }
-        let grad = f32(raw_grad) / fp_scale / 16384.0;
+        let grad = f32(raw_grad) / fp_scale / max(adam.pixel_count, 1.0);
 
-        let beta1 = 0.9;
+        // Control-point params use lower beta1 (0.7) to reduce momentum-
+        // driven oscillation from the hard polyline argmin discontinuity.
+        // Non-positional params keep the standard 0.9.
+        var beta1 = 0.9;
+        if (lp < 8u) { beta1 = 0.7; }
         let beta2 = 0.999;
         let epsilon = 1e-8;
 
-        // Per-parameter learning rates. Control points are intentionally
-        // slow: the polyline closest-segment argmin in bezier_backward gives
-        // discontinuous gradients (the closest segment for a pixel switches
-        // as the curve moves), and Adam momentum amplifies those jumps into
-        // visible oscillation. Halving lr from the previous 0.02 setting
-        // damps the oscillation without preventing convergence — strong,
-        // sustained gradient still moves a curve at lr per step under Adam,
-        // and the canvas is only 2 norm units wide.
         var lr = 0.01;
-        if (lp < 8u) { lr = 0.01; }                  // control points
+        if (lp < 8u) { lr = 0.02; }                  // control points
         else if (lp <= 10u) { lr = 0.02; }           // color rgb
         else if (lp == 11u) { lr = 0.01; }           // opacity
         else if (lp == 12u) { lr = 0.005; }          // width
-        else if (lp == 13u) { lr = 0.005; }          // softness
+        else if (lp == 13u) { lr = 0.01; }           // softness
 
         var m = adam.m[pidx];
         var v = adam.v[pidx];
@@ -116,18 +113,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
         // Per-parameter update clip (mirrors splat_step strategy: keeps the
         // optimizer from blowing through tight clamps in a single step).
-        // Control points get a hard 0.003/step cap (down from 0.008): the
-        // dominant failure mode at higher caps was visible oscillation as
-        // a curve toggled which polyline segment was closest to each pixel.
-        // 0.003/step still traverses the 2-unit canvas in ~700 steps under
-        // sustained gradient. Opacity gets a relatively generous cap so a
-        // curve pushed into empty space hits the kill threshold in roughly
-        // one ADC period.
+        //
+        // Control points get a hard 0.003/step cap to damp the polyline
+        // argmin oscillation amplified by Adam momentum.
+        //
+        // Opacity at 0.001/step is sized so a stray (which always has
+        // positive d(loss)/d(opacity) because every covered pixel reads
+        // target = 0) takes ~190 steps to drop from the 0.99 initial value
+        // down to 0.8 (where it first fails the kill check at width-floor).
+        // 190 steps is just under the 200-step ADC period, so a stray dies
+        // shortly before ADC ticks and refills the slot — no wasted dead
+        // headroom and no premature kill.
+        //
+        // Width at 0.0005/step similarly takes ~4 steps to collapse from
+        // 0.003 init to 0.001 floor, ensuring opacity (not width) is the
+        // gating decay variable for the kill timeline.
         var max_update = 0.01;
-        if (lp < 8u) { max_update = 0.003; }
-        else if (lp <= 10u) { max_update = 0.001; }
-        else if (lp == 11u) { max_update = 0.005; }
-        else if (lp == 12u) { max_update = 0.002; }
+        if (lp < 8u) { max_update = 0.01; }          // control points
+        else if (lp <= 10u) { max_update = 0.002; }
+        else if (lp == 11u) { max_update = 0.002; }
+        else if (lp == 12u) { max_update = 0.001; }
         else if (lp == 13u) { max_update = 0.001; }
         let update = clamp(raw_update, -max_update, max_update);
 
@@ -155,16 +160,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         // instead of waiting ~90 steps for opacity to crawl from 0.6 down
         // past a relatively high old floor of 0.05.
         else if (lp == 11u) { b.color.a = clamp(b.color.a - update, 0.01, 0.99); }
-        // Width/softness upper bounds are sized for the display resolution
-        // (not the 128-px optim resolution). 1 norm unit is ~250 px on a
-        // typical panel, so 0.02 norm = 5 px on display, which is already
-        // visually thicker than a 1-2 px target edge. Lower bound of 0.001
-        // (~0.25 px on display) lets productive curves go as thin as the
-        // target's 1-2 px edges and lets strays collapse below the kill
-        // threshold (0.001 * 0.6 = 0.0006 < 0.0008) immediately upon
-        // hitting the width floor, instead of waiting on slow opacity decay.
-        else if (lp == 12u) { b.width_soft_pad.x = clamp(b.width_soft_pad.x - update, 0.001, 0.02); }
-        else if (lp == 13u) { b.width_soft_pad.y = clamp(b.width_soft_pad.y - update, 0.0002, 0.008); }
+        // Width/softness upper bounds are sized for the display resolution,
+        // NOT the 128 px optim resolution. 1 norm unit is ~250 px on the
+        // display panel, so:
+        //   width   max 0.004 norm =  1.0 px display (target edges are 1-2 px).
+        //   soft    max 0.0015 norm = 0.4 px display (anti-alias halo).
+        //   visible (= 2*(width+soft))  max ~2.7 px display.
+        // The optimizer naturally settles on wider widths because at 128 px
+        // the same target edge is 1-2 px = ~0.015-0.03 norm units. We
+        // intentionally clamp tighter than the optim equilibrium so display
+        // strokes match the visual thickness of target edges, accepting
+        // some residual on-edge loss as a worthwhile trade.
+        else if (lp == 12u) { b.width_soft_pad.x = clamp(b.width_soft_pad.x - update, 0.001, 0.03); }
+        else if (lp == 13u) { b.width_soft_pad.y = clamp(b.width_soft_pad.y - update, 0.001, 0.03); }
     }
 
     adc.grad_accum[bid] += sqrt(pos_grad_norm2);

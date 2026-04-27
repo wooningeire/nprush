@@ -119,15 +119,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     // Backward pass: chain rule from L = ||C_pred - tgt||^2 down to each
     // control point / color channel / width / softness.
     // ------------------------------------------------------------------
-    let dC_raw = 2.0 * (C_pred - tgt_color);
-    // 2x boost on edge pixels (vs 5x previously). The boost gives curves a
-    // strong "lock onto edge" gradient when they're far from one, but if it's
-    // too high the equilibrium width grows: matching all of an edge pixel
-    // (weight w) outvalues the off-edge penalty for being a bit too wide
-    // (weight 1), so the optimizer happily makes strokes fat. 2x is enough
-    // to find edges quickly without sliding the equilibrium fat.
-    let edge_weight = 1.0 + tgt_edge * 1.0;
-    let dC = dC_raw * edge_weight;
+    // Plain MSE against the (already-thresholded) target edge image. Earlier
+    // revisions multiplied dC by an `edge_weight = 1 + tgt_edge * k` boost
+    // to "lock onto edges faster," but every nonzero k biases the
+    // equilibrium toward fat strokes — matching an edge pixel (weight 1+k)
+    // outvalues the off-edge penalty (weight 1) for being a bit too wide,
+    // so curves prefer "definitely covers the edge" over "just covers the
+    // edge." With k=0 the on-edge gain and off-edge cost balance, so the
+    // optimum width is *exactly* the target edge thickness rather than
+    // wider. The thresholded target image already has zero-loss outside
+    // edges, so we don't lose much in finding rate.
+    let dC = 2.0 * (C_pred - tgt_color);
 
     var dT = dot(dC, background);
 
@@ -174,7 +176,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let smoothstep_deriv = 6.0 * x * (1.0 - x) / denom;
         let in_softband = (d > inner) && (d < outer);
 
-        let d_opacity = da * (1.0 - smoothstep(inner, outer, d));
+        // Stray kill: MSE gradients flow through front-to-back compositing
+        // (C_pred += T_prev * a * color, d/da uses T_prev). A curve buried
+        // under many slightly-opaque layers can have T_prev ≈ 0 on most
+        // pixels, so its da from the photometric loss vanishes even when
+        // the stroke is still visible (earlier layers already put white in
+        // the pixel). Those curves then never get a signal to reduce
+        // opacity and sit around as a "grid" of unkillable garbage.
+        //
+        // Add an auxiliary loss (not composite-weighted):
+        //   L_off = w * (1 - tgt_edge) * a
+        // with a = a_geom * opacity, same as the forward pass.  dL/d(opacity)
+        // = w * (1 - tgt_edge) * a_geom; on edge pixels tgt_edge ≈ 1, off;
+        // in black, every visible stroke gets a direct opacity/geometry
+        // gradient.  dL through a_geom to width, softness, and position uses
+        // the same chain as the photometric d(width) terms with
+        // (da + w*(1 - tgt_edge)) in place of da — but we must NOT add this
+        // to the transmittance adjoint dT, which is only for the MSE.
+        let a_geom = a / max(opacity, 1e-4);
+        let OFF_EDGE_ALPHA = 0.35;
+        let off_w = OFF_EDGE_ALPHA * (1.0 - tgt_edge);
+
+        var d_opacity = da * (1.0 - smoothstep(inner, outer, d)) + off_w * a_geom;
 
         // Distance gradient flows only inside the soft band (outside it the
         // alpha is constant 0 or opacity, so the curve is locally insensitive).
@@ -182,11 +205,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         var dWidth = 0.0;
         var dSoft = 0.0;
         if (in_softband) {
-            dD = -da * opacity * smoothstep_deriv;
+            dD = -(da + off_w) * opacity * smoothstep_deriv;
             // d(alpha)/d(width)    =  opacity * ss' / (2*softness)
             // d(alpha)/d(softness) = -opacity * ss' * (width - d) / (2*softness^2)
-            dWidth = da * opacity * smoothstep_deriv / denom;
-            dSoft = -da * opacity * smoothstep_deriv * (width - d)
+            dWidth = (da + off_w) * opacity * smoothstep_deriv / denom;
+            dSoft = -(da + off_w) * opacity * smoothstep_deriv * (width - d)
                 / max(2.0 * softness * softness, 1e-6);
         }
 
