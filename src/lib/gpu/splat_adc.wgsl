@@ -27,7 +27,7 @@ struct ADCArray {
 fn main() {
     var next_dead_search = 0u;
     
-    let ADC_PERIOD = 50.0;
+    let ADC_PERIOD = 25.0;
     let TAU_POS = 0.00005;
     let SPLIT_SCALE_THRESHOLD = 0.01;
     

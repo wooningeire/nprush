@@ -303,7 +303,7 @@ export class GpuSplatOptimizerManager {
         pass.dispatchWorkgroups(Math.ceil(this.numSplats / 64));
         
         this.stepCount++;
-        if (this.stepCount % 50 === 0) {
+        if (this.stepCount % 25 === 0) {
             pass.setPipeline(this.adcPipeline);
             pass.setBindGroup(0, this.adcBindGroup);
             pass.dispatchWorkgroups(1);

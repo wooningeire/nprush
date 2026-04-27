@@ -118,10 +118,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     // Accumulate gradient norm
     adc.grad_accum[splat_id] += sqrt(pos_grad_norm2);
     
-    // Kill splats that have become too thin (needles) to free up slots for ADC
-    let max_scale = max(s.transform.z, s.transform.w);
-    let min_scale = min(s.transform.z, s.transform.w);
-    if (max_scale / min_scale > 10.0 || s.color.a < 0.05) {
+    // Kill splats that are too transparent or have effectively zero area
+    let area = s.transform.z * s.transform.w;
+    if (s.color.a < 0.05 || area < 0.0001) {
         s.color.a = 0.0;
     }
     
