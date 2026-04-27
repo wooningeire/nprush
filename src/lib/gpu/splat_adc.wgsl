@@ -23,19 +23,9 @@ struct ADCArray {
 @group(0) @binding(1) var<storage, read_write> adam: AdamState;
 @group(0) @binding(2) var<storage, read_write> adc: ADCArray;
 
-var<workgroup> dead_indices: array<u32, NUM_SPLATS>;
-
 @compute @workgroup_size(1, 1, 1)
 fn main() {
-    var dead_count = 0u;
-    
-    // Pass 1: Collect dead splats (free list)
-    for (var i = 0u; i < NUM_SPLATS; i++) {
-        if (splats.splats[i].color.a < 0.05) {
-            dead_indices[dead_count] = i;
-            dead_count++;
-        }
-    }
+    var next_dead_search = 0u;
     
     let ADC_PERIOD = 50.0;
     let TAU_POS = 0.00005;
@@ -52,10 +42,22 @@ fn main() {
         if (grad_accum > TAU_POS) {
             let scale_norm = length(s.transform.zw);
             
-            // Only split/clone if we have free slots
-            if (dead_count > 0u) {
-                dead_count--;
-                let new_idx = dead_indices[dead_count];
+            // Find next free slot by scanning forward
+            var found_dead = false;
+            var new_idx = 0u;
+            for (var d = next_dead_search; d < NUM_SPLATS; d++) {
+                if (splats.splats[d].color.a < 0.05) {
+                    new_idx = d;
+                    found_dead = true;
+                    next_dead_search = d + 1u;
+                    break;
+                }
+            }
+            if (!found_dead) {
+                next_dead_search = NUM_SPLATS;
+            }
+            
+            if (found_dead) {
                 
                 var new_s = s;
                 
