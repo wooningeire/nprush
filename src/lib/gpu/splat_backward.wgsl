@@ -53,6 +53,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let opacity = s.color.a;
         
         let d = p - pos;
+        
+        // --- AABB CULLING ---
+        let safe_shape_b_cull = max(s.rot_pad.z, 0.0001);
+        let R = pow(15.0 / safe_shape_b_cull, 1.0 / s.rot_pad.y);
+        let max_r = R * max(scale.x, scale.y);
+        if (abs(d.x) > max_r || abs(d.y) > max_r) {
+            alphas[i] = -1.0;
+            Ts[i+1] = Ts[i];
+            continue;
+        }
+        // --------------------
+        
         let co = cos(rot);
         let si = sin(rot);
         let local_p = vec2f(co * d.x + si * d.y, -si * d.x + co * d.y);
@@ -92,6 +104,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     for (var j = 0u; j < NUM_SPLATS; j++) {
         let i = NUM_SPLATS_MINUS_ONE - j;
+        let stored_a = alphas[i];
+        if (stored_a < -0.5) { continue; }
+        
         let s = splats.splats[i];
         let pos = s.transform.xy;
         let scale = s.transform.zw;
@@ -99,7 +114,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let color = s.color.rgb;
         let opacity = s.color.a;
 
-        let a = alphas[i];
+        let a = stored_a;
         let T_prev = Ts[i];
         
         let dColor = dC_weighted * (T_prev * a);

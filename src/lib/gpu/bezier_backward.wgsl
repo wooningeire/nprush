@@ -82,6 +82,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let softness = max(b.width_soft_pad.y, 0.001);
         let opacity = b.color.a;
 
+        // --- AABB CULLING ---
+        let outer_cull = width + softness;
+        let min_p = min(min(p0, p1), min(p2, p3)) - vec2f(outer_cull);
+        let max_p = max(max(p0, p1), max(p2, p3)) + vec2f(outer_cull);
+        if (p.x < min_p.x || p.x > max_p.x || p.y < min_p.y || p.y > max_p.y) {
+            alphas[i] = -1.0;
+            min_seg[i] = 0u;
+            Ts[i + 1u] = Ts[i];
+            continue;
+        }
+        // --------------------
+
         var min_d = 1e9;
         var min_k = 1u;
         var prev = p0;
@@ -138,6 +150,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     for (var j = 0u; j < NUM_BEZIERS; j = j + 1u) {
         let i = NUM_BEZIERS_MINUS_ONE - j;
+        let stored_a = alphas[i];
+        if (stored_a < -0.5) { continue; }
+        
         let b = beziers.items[i];
         let p0 = b.p0_p1.xy;
         let p1 = b.p0_p1.zw;
@@ -148,7 +163,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let opacity = b.color.a;
         let color = b.color.rgb;
 
-        let a = alphas[i];
+        let a = stored_a;
         let T_prev = Ts[i];
 
         let dColor = dC * (T_prev * a);
