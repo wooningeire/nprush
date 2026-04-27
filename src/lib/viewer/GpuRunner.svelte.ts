@@ -3,6 +3,8 @@ import { GpuUniformsBufferManager } from "$/gpu/GpuUniformsBufferManager";
 import { GpuMeshRenderPipelineManager, MESH_DEPTH_FORMAT } from "$/gpu/GpuMeshRenderPipelineManager";
 import { GpuSplatOptimizerManager } from "$/gpu/GpuSplatOptimizerManager";
 import { GpuBezierOptimizerManager } from "$/gpu/GpuBezierOptimizerManager";
+import { GpuSplatForwardPipelineManager } from "$/gpu/GpuSplatForwardPipelineManager";
+import { GpuBezierForwardPipelineManager } from "$/gpu/GpuBezierForwardPipelineManager";
 import type { MeshData } from "$/gpu/loadGlb";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 
@@ -26,6 +28,8 @@ export class GpuRunner {
     // against the depth-edge texture. Curves natively represent 1D contours,
     // which is a much better fit for the silhouette target than gaussians.
     readonly edgeLayerBezierManager: GpuBezierOptimizerManager;
+    readonly splatForwardManager: GpuSplatForwardPipelineManager;
+    readonly bezierForwardManager: GpuBezierForwardPipelineManager;
     private readonly matcapTexture: GPUTexture;
     private readonly matcapTextureView: GPUTextureView;
 
@@ -45,6 +49,10 @@ export class GpuRunner {
     private targetZTextureView: GPUTextureView | null = null;
     private fullEdgeTexture: GPUTexture | null = null;
     private fullEdgeTextureView: GPUTextureView | null = null;
+    private fullSplatTexture: GPUTexture | null = null;
+    private fullSplatTextureView: GPUTextureView | null = null;
+    private fullBezierTexture: GPUTexture | null = null;
+    private fullBezierTextureView: GPUTextureView | null = null;
     private fullWidth = 0;
     private fullHeight = 0;
 
@@ -111,6 +119,18 @@ export class GpuRunner {
         this.edgeLayerBezierManager = new GpuBezierOptimizerManager({
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
+        });
+
+        this.splatForwardManager = new GpuSplatForwardPipelineManager({
+            device,
+            numSplats,
+            splatBuffer: this.splatOptimizerManager.splatBuffer,
+        });
+
+        this.bezierForwardManager = new GpuBezierForwardPipelineManager({
+            device,
+            numBeziers: NUM_EDGE_LAYER_BEZIERS,
+            bezierBuffer: this.edgeLayerBezierManager.bezierBuffer,
         });
 
         this.destroy = $effect.root(() => {
@@ -208,6 +228,8 @@ export class GpuRunner {
                 if (this.targetDepthTexture) this.targetDepthTexture.destroy();
                 if (this.targetZTexture) this.targetZTexture.destroy();
                 if (this.fullEdgeTexture) this.fullEdgeTexture.destroy();
+                if (this.fullSplatTexture) this.fullSplatTexture.destroy();
+                if (this.fullBezierTexture) this.fullBezierTexture.destroy();
 
                 this.fullWidth = fullW;
                 this.fullHeight = fullH;
@@ -241,11 +263,31 @@ export class GpuRunner {
                 });
                 this.fullEdgeTextureView = this.fullEdgeTexture.createView();
 
+                this.fullSplatTexture = this.device.createTexture({
+                    label: "full splat view",
+                    size: [fullW, fullH],
+                    format: "rgba8unorm",
+                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                });
+                this.fullSplatTextureView = this.fullSplatTexture.createView();
+
+                this.fullBezierTexture = this.device.createTexture({
+                    label: "full bezier view",
+                    size: [fullW, fullH],
+                    format: "rgba8unorm",
+                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                });
+                this.fullBezierTextureView = this.fullBezierTexture.createView();
+
+                this.splatForwardManager.setTarget(this.fullSplatTextureView, fullW, fullH);
+                this.bezierForwardManager.setTarget(this.fullBezierTextureView, fullW, fullH);
+
                 this.splatOptimizerManager.setRenderTarget(
                     this.targetTextureView,
+                    this.fullSplatTextureView,
                     this.targetDepthTextureView,
                     this.fullEdgeTextureView,
-                    this.edgeLayerBezierManager.bezierBuffer,
+                    this.fullBezierTextureView,
                 );
             }
 
@@ -329,6 +371,12 @@ export class GpuRunner {
             this.splatOptimizerManager.dispatchEdge(commandEncoder, fullW, fullH);
             // Restore optim-res edge bind group for next frame
             this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!);
+
+            // 4.5. Compute views into textures
+            this.splatForwardManager.dispatch(commandEncoder);
+            if (this.viewerState.beziersEnabled) {
+                this.bezierForwardManager.dispatch(commandEncoder);
+            }
 
             // 5. Render Splat Visualization to Screen View (uses full-res textures)
             const screenView = currentTexture.createView();

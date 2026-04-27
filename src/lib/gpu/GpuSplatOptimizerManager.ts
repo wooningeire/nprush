@@ -57,10 +57,9 @@ export class GpuSplatOptimizerManager {
         this.device = device;
         this.numSplats = numSplats;
         this.numParams = numSplats * 11;
-        // WGSL array<T, N> requires N >= 1, so use 1 as a sentinel when no
-        // edge layer is configured — the bezier loop just runs once over a
-        // dummy curve whose buffer the caller is still required to bind.
-        const numBeziersRender = numBeziers ?? 1;
+        // Wait, we don't need numBeziersRender for the render pipeline loop
+        // anymore since the bezier loop is gone from splat_render.wgsl!
+        // We will keep numBeziers here so the constructor signature stays the same.
         
         // Init Buffers
         const splatData = new Float32Array(this.numSplats * 12);
@@ -122,9 +121,8 @@ export class GpuSplatOptimizerManager {
 
         // Order matters: NUM_SPLATS_PLUS_ONE / NUM_SPLATS_MINUS_ONE must be
         // replaced BEFORE NUM_SPLATS, because the latter is a substring of
-        // each and the regexes are unanchored. NUM_BEZIERS is independent.
+        // each and the regexes are unanchored.
         const injectConstants = (src: string) => src
-            .replace(/NUM_BEZIERS/g, `${numBeziersRender}u`)
             .replace(/NUM_SPLATS_PLUS_ONE/g, `${this.numSplats + 1}u`)
             .replace(/NUM_SPLATS_MINUS_ONE/g, `${this.numSplats - 1}u`)
             .replace(/NUM_SPLATS/g, `${this.numSplats}u`)
@@ -259,18 +257,19 @@ export class GpuSplatOptimizerManager {
 
     setRenderTarget(
         targetTextureView: GPUTextureView,
+        splatViewTextureView: GPUTextureView,
         depthTextureView: GPUTextureView,
         edgeTextureView: GPUTextureView,
-        bezierBuffer: GPUBuffer,
+        bezierViewTextureView: GPUTextureView,
     ) {
         this.renderBindGroup = this.device.createBindGroup({
             layout: this.renderBindGroupLayout,
             entries: [
                 { binding: 0, resource: targetTextureView },
-                { binding: 1, resource: { buffer: this.splatBuffer } },
+                { binding: 1, resource: splatViewTextureView },
                 { binding: 2, resource: depthTextureView },
                 { binding: 3, resource: edgeTextureView },
-                { binding: 4, resource: { buffer: bezierBuffer } },
+                { binding: 4, resource: bezierViewTextureView },
                 { binding: 5, resource: { buffer: this.renderUniformsBuffer } },
             ],
         });
