@@ -17,6 +17,7 @@ export class GpuRunner {
     private readonly context: GPUCanvasContext;
     private readonly format: GPUTextureFormat;
     private readonly camera: Camera;
+    private readonly viewerState: any; // Using any to avoid circular dependency if needed, but ViewerState should be fine
 
     readonly uniformsManager: GpuUniformsBufferManager;
     readonly meshRenderPipelineManager: GpuMeshRenderPipelineManager;
@@ -64,6 +65,7 @@ export class GpuRunner {
         context,
         format,
         camera,
+        viewerState,
         mesh,
         numSplats = 512,
     }: {
@@ -71,6 +73,7 @@ export class GpuRunner {
         context: GPUCanvasContext,
         format: GPUTextureFormat,
         camera: Camera,
+        viewerState: any,
         mesh: MeshData,
         numSplats?: number,
     }) {
@@ -78,6 +81,7 @@ export class GpuRunner {
         this.context = context;
         this.format = format;
         this.camera = camera;
+        this.viewerState = viewerState;
 
         this.uniformsManager = new GpuUniformsBufferManager({ device });
 
@@ -105,6 +109,7 @@ export class GpuRunner {
 
         this.destroy = $effect.root(() => {
             $effect(() => this.uniformsManager.writeViewProjMat(this.camera.viewProjMat));
+            $effect(() => this.splatOptimizerManager.writeRenderUniforms(this.viewerState.beziersEnabled));
         });
     }
 
@@ -307,7 +312,9 @@ export class GpuRunner {
 
             // 3b. Train the bezier edge layer: its target is the freshly-computed
             // edge texture, so the curves learn to trace the depth silhouette.
-            this.edgeLayerBezierManager.dispatch(commandEncoder);
+            if (this.viewerState.beziersEnabled) {
+                this.edgeLayerBezierManager.dispatch(commandEncoder);
+            }
 
             // 4. Run edge detection on full-res depth (for display)
             this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);

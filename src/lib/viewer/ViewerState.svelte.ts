@@ -9,6 +9,7 @@ import artelorianUrl from "$/assets/artelorian.glb?url";
 export class ViewerState {
     width = $state(300);
     height = $state(150);
+    beziersEnabled = $state(false);
 
     runner = $state<GpuRunner | null>(null);
     
@@ -41,6 +42,7 @@ export class ViewerState {
                 context: gpu.context,
                 format: gpu.format,
                 camera: state.camera,
+                viewerState: state,
                 mesh,
                 numSplats,
             });

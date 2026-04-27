@@ -26,6 +26,12 @@ struct BezierArray {
 @group(0) @binding(3) var targetEdgeTex: texture_2d<f32>;
 @group(0) @binding(4) var<storage, read> beziers: BezierArray;
 
+struct RenderUniforms {
+    beziers_enabled: f32,
+    _pad: vec3f,
+}
+@group(0) @binding(5) var<uniform> uniforms: RenderUniforms;
+
 struct VsOut {
     @builtin(position) pos: vec4f,
     @location(0) uv: vec2f,
@@ -93,6 +99,7 @@ fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
 // to match bezier_backward.wgsl. This is used both for the dedicated debug
 // panel and as the alpha when compositing the edge layer over the color layer.
 fn eval_beziers(p: vec2f) -> f32 {
+    if (uniforms.beziers_enabled < 0.5) { return 0.0; }
     var Ts = 1.0;
     var c = 0.0;
     for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
@@ -284,7 +291,10 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     // accumulated coverage.
     let base = eval_splats(p);
     let edge_a = clamp(eval_beziers(p), 0.0, 1.0);
-    let composite = mix(base, vec3f(1.0), edge_a);
+    var composite = base;
+    if (uniforms.beziers_enabled > 0.5) {
+        composite = mix(base, vec3f(1.0), edge_a);
+    }
     return vec4f(composite, 1.0);
 }
 

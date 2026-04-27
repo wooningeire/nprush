@@ -14,6 +14,7 @@ export class GpuSplatOptimizerManager {
     readonly gradBuffer: GPUBuffer;
     readonly adamBuffer: GPUBuffer;
     readonly adcBuffer: GPUBuffer;
+    readonly renderUniformsBuffer: GPUBuffer;
 
     private readonly backwardPipeline: GPUComputePipeline;
     private readonly stepPipeline: GPUComputePipeline;
@@ -111,6 +112,12 @@ export class GpuSplatOptimizerManager {
             label: "splat adc buffer",
             size: this.numSplats * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
+        this.renderUniformsBuffer = device.createBuffer({
+            label: "splat render uniforms buffer",
+            size: 32,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
         // Order matters: NUM_SPLATS_PLUS_ONE / NUM_SPLATS_MINUS_ONE must be
@@ -264,8 +271,17 @@ export class GpuSplatOptimizerManager {
                 { binding: 2, resource: depthTextureView },
                 { binding: 3, resource: edgeTextureView },
                 { binding: 4, resource: { buffer: bezierBuffer } },
+                { binding: 5, resource: { buffer: this.renderUniformsBuffer } },
             ],
         });
+    }
+
+    writeRenderUniforms(beziersEnabled: boolean) {
+        this.device.queue.writeBuffer(
+            this.renderUniformsBuffer,
+            0,
+            new Float32Array([beziersEnabled ? 1 : 0])
+        );
     }
 
     dispatch(commandEncoder: GPUCommandEncoder) {
