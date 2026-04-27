@@ -5,7 +5,8 @@ import { mod, PI, PI_2, REV } from "$/util";
 type Point = { x: number; y: number };
 
 
-const ORBIT_CONTROL_SCALE = 0.01;
+const TURN_SCALE = 0.01;
+const PAN_SCALE = 0.003;
 
 export class CameraOrbit implements CameraControlScheme {
     radius = $state(1);
@@ -40,19 +41,19 @@ export class CameraOrbit implements CameraControlScheme {
         this.offset = vec3.add(
             this.offset,
             vec3.transformMat3(
-                vec3.fromValues(-movement.x * ORBIT_CONTROL_SCALE, movement.y * ORBIT_CONTROL_SCALE, 0),
+                vec3.fromValues(-movement.x * PAN_SCALE, movement.y * PAN_SCALE, 0),
                 mat3.fromMat4(this.orientation),
             ),
         );
     }
 
     turn(movement: Point) {
-        this.lat = mod(this.lat + movement.y * ORBIT_CONTROL_SCALE, REV);
+        this.lat = mod(this.lat + movement.y * TURN_SCALE, REV);
 
         if (PI_2 < this.lat && this.lat < 3 * PI_2) {
-            this.long = mod(this.long - movement.x * ORBIT_CONTROL_SCALE, REV);
+            this.long = mod(this.long - movement.x * TURN_SCALE, REV);
         } else {
-            this.long = mod(this.long + movement.x * ORBIT_CONTROL_SCALE, REV);
+            this.long = mod(this.long + movement.x * TURN_SCALE, REV);
         }
     }
 }
