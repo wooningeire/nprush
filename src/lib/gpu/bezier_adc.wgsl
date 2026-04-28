@@ -39,7 +39,7 @@ fn main() {
         }
     }
 
-    let ADC_PERIOD = 50.0;
+    let ADC_PERIOD = 25.0;
     let TAU_POS = 0.005;
     let SPLIT_LEN_THRESHOLD = 0.25;
     let MIN_DEAD_FRACTION = 0.3;
