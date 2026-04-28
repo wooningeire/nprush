@@ -519,8 +519,8 @@ export class GpuRunner {
                     this.optimTempTextureView!,
                     this.optimWidth,
                     this.optimHeight,
-                    32, // radius
-                    16, // sigma
+                    this.viewerState.blurRadius,
+                    this.viewerState.blurRadius / 2,
                     true // isSrgb
                 );
                 this.blurManager.blur(
@@ -530,15 +530,15 @@ export class GpuRunner {
                     this.optimTempTextureView!,
                     this.optimWidth,
                     this.optimHeight,
-                    32, // radius
-                    16, // sigma
+                    this.viewerState.blurRadius,
+                    this.viewerState.blurRadius / 2,
                     false // isSrgb
                 );
             }
 
-            // 2. Run edge detection on optim-res depth (use blurred if enabled)
+            // 2. Run edge detection on optim-res depth (always use sharp for beziers)
             this.splatOptimizerManager.setEdgeTarget(
-                this.viewerState.compareBlurred ? this.optimBlurredDepthTextureView! : this.optimDepthTextureView!, 
+                this.optimDepthTextureView!, 
                 this.optimEdgeTextureView!
             );
             this.splatOptimizerManager.dispatchEdge(commandEncoder, this.optimWidth, this.optimHeight);
@@ -571,8 +571,8 @@ export class GpuRunner {
             }
             if (this.viewerState.colorBeziersEnabled) {
                 this.colorLayerBezierManager.setBackwardTarget(
-                    this.viewerState.compareBlurred ? this.optimBlurredTextureView! : this.optimTextureView!,
-                    this.viewerState.compareBlurred ? this.optimBlurredDepthTextureView! : this.optimDepthTextureView!,
+                    this.optimTextureView!,
+                    this.optimDepthTextureView!,
                     this.optimSplatTextureView!,
                     this.optimSplatDepthTextureView!,
                     this.optimWidth,

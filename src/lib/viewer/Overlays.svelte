@@ -21,6 +21,14 @@ const {
         <input type="checkbox" bind:checked={viewerState.compareBlurred} />
         Compare Blurred
     </label>
+    {#if viewerState.compareBlurred}
+        <div class="slider-group" style="margin-left: 1rem; margin-bottom: 0.5rem;">
+            <label style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.7);">
+                Radius: {viewerState.blurRadius}
+                <input type="range" min="1" max="64" step="1" bind:value={viewerState.blurRadius} />
+            </label>
+        </div>
+    {/if}
     <div class="shading-toggle">
         <button 
             class:active={viewerState.shadingMode === 'normals'} 

@@ -74,6 +74,35 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
             } else if (lp == 17u) {
                 grad += 20.0 * (b.p1.w - uniforms.reg_softness);
             }
+
+            // Aspect ratio punishment: penalize Length / Width
+            let d01 = b.p1.xyz - b.p0.xyz;
+            let d12 = b.p2.xyz - b.p1.xyz;
+            let d23 = b.p3.xyz - b.p2.xyz;
+            let l01 = max(length(d01), 1e-4);
+            let l12 = max(length(d12), 1e-4);
+            let l23 = max(length(d23), 1e-4);
+            let total_len = l01 + l12 + l23;
+            let width = max(b.p0.w, 0.001);
+            let inv_w = 1.0 / width;
+            let ar_lambda = 0.01;
+
+            if (lp < 3u) {
+                let gL = -d01 / l01;
+                grad += ar_lambda * inv_w * (select(gL.x, select(gL.y, gL.z, lp == 2u), lp >= 1u));
+            } else if (lp >= 3u && lp < 6u) {
+                let gL = (d01 / l01) - (d12 / l12);
+                grad += ar_lambda * inv_w * (select(gL.x, select(gL.y, gL.z, lp == 5u), lp >= 4u));
+            } else if (lp >= 6u && lp < 9u) {
+                let gL = (d12 / l12) - (d23 / l23);
+                grad += ar_lambda * inv_w * (select(gL.x, select(gL.y, gL.z, lp == 8u), lp >= 7u));
+            } else if (lp >= 9u && lp < 12u) {
+                let gL = d23 / l23;
+                grad += ar_lambda * inv_w * (select(gL.x, select(gL.y, gL.z, lp == 11u), lp >= 10u));
+            } else if (lp == 16u) {
+                // dR/dWidth = -lambda * L / W^2
+                grad -= ar_lambda * total_len * inv_w * inv_w;
+            }
         }
 
         var lr = 0.005; // Base LR for positions
@@ -123,8 +152,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         else if (lp == 13u) { b.color.g = clamp(b.color.g - update, 0.05, 1.0); }
         else if (lp == 14u) { b.color.b = clamp(b.color.b - update, 0.05, 1.0); }
         else if (lp == 15u) { b.color.a = clamp(b.color.a - update, 0.00, 0.99); }
-        else if (lp == 16u) { b.p0.w = clamp(b.p0.w - update, 0.001, 0.01); }
-        else if (lp == 17u) { b.p1.w = clamp(b.p1.w - update, 0.001, 0.01); }
+        else if (lp == 16u) { b.p0.w = clamp(b.p0.w - update, 0.001, 0.005); }
+        else if (lp == 17u) { b.p1.w = clamp(b.p1.w - update, 0.001, 0.005); }
     }
 
     adc.grad_accum[bezier_id] += sqrt(pos_grad_norm2);
