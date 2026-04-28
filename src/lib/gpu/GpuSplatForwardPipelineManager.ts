@@ -10,7 +10,8 @@ export class GpuSplatForwardPipelineManager {
     private readonly splatBuffer: GPUBuffer;
     private readonly uniformsBuffer: GPUBuffer;
     private readonly numSplats: number;
-    private targetView: GPUTextureView | null = null;
+    private targetColorView: GPUTextureView | null = null;
+    private targetDepthView: GPUTextureView | null = null;
 
     constructor({
         device,
@@ -59,6 +60,13 @@ export class GpuSplatForwardPipelineManager {
                             alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
                         },
                     },
+                    {
+                        format: "rgba8unorm",
+                        blend: {
+                            color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+                            alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+                        },
+                    },
                 ],
             },
             primitive: { topology: "triangle-list" },
@@ -83,8 +91,9 @@ export class GpuSplatForwardPipelineManager {
         );
     }
 
-    setTarget(targetView: GPUTextureView, width: number, height: number) {
-        this.targetView = targetView;
+    setTarget(targetColorView: GPUTextureView, targetDepthView: GPUTextureView, width: number, height: number) {
+        this.targetColorView = targetColorView;
+        this.targetDepthView = targetDepthView;
         if (this.dims.width !== width || this.dims.height !== height) {
             this.dims = { width, height };
             // Write dims at offset 64 (after the mat4x4)
@@ -92,15 +101,21 @@ export class GpuSplatForwardPipelineManager {
         }
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder) {
-        if (!this.targetView || !this.bindGroup) return;
+    dispatch(commandEncoder: GPUCommandEncoder, clear: boolean = false) {
+        if (!this.targetColorView || !this.targetDepthView || !this.bindGroup) return;
         const pass = commandEncoder.beginRenderPass({
             label: "splat forward render pass",
             colorAttachments: [
                 {
-                    view: this.targetView,
-                    clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
-                    loadOp: "clear",
+                    view: this.targetColorView,
+                    clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
+                    loadOp: clear ? "clear" : "load",
+                    storeOp: "store",
+                },
+                {
+                    view: this.targetDepthView,
+                    clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+                    loadOp: clear ? "clear" : "load",
                     storeOp: "store",
                 },
             ],

@@ -19,13 +19,19 @@ struct GradArray {
 
 struct BezierUniforms {
     vp: mat4x4f,
+    reg_enabled: f32,
+    reg_width: f32,
+    reg_softness: f32,
+    mode: f32, // 0: Edge, 1: Color+Depth
 }
 
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
 @group(0) @binding(1) var<storage, read_write> grads: GradArray;
 @group(0) @binding(2) var targetTex: texture_2d<f32>;
-@group(0) @binding(3) var targetEdgeTex: texture_2d<f32>;
+@group(0) @binding(3) var targetDepthTex: texture_2d<f32>;
 @group(0) @binding(4) var<uniform> uniforms: BezierUniforms;
+@group(0) @binding(5) var bgTex: texture_2d<f32>;
+@group(0) @binding(6) var bgDepthTex: texture_2d<f32>;
 
 const N_SEG: u32 = 16u;
 
@@ -157,13 +163,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
     let p = pixel_to_p(global_id.xy, dims, aspect);
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
-    let tgt_edge = textureLoad(targetEdgeTex, global_id.xy, 0).r;
+    let tgt_depth = textureLoad(targetDepthTex, global_id.xy, 0).r;
 
     var alphas = array<f32, MAX_TILE_BEZIERS>();
     var min_seg = array<u32, MAX_TILE_BEZIERS>();
+    var depths = array<f32, MAX_TILE_BEZIERS>();
     var Ts = array<f32, MAX_TILE_BEZIERS + 1u>();
     Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
+    var D_pred = 0.0;
 
     for (var idx = 0u; idx < bezier_count; idx++) {
         let i = tile_beziers[idx];
@@ -173,13 +181,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let softness = max(b.p1.w, 0.001);
         let opacity = b.color.a;
         
-        let p0 = project_center(uniforms.vp, b.p0.xyz, aspect).xy;
-        let p1 = project_center(uniforms.vp, b.p1.xyz, aspect).xy;
-        let p2 = project_center(uniforms.vp, b.p2.xyz, aspect).xy;
-        let p3 = project_center(uniforms.vp, b.p3.xyz, aspect).xy;
+        let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
+        let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
+        let proj2 = project_center(uniforms.vp, b.p2.xyz, aspect);
+        let proj3 = project_center(uniforms.vp, b.p3.xyz, aspect);
+        let p0 = proj0.xy;
+        let p1 = proj1.xy;
+        let p2 = proj2.xy;
+        let p3 = proj3.xy;
 
         var min_d = 1e9;
         var min_k = 1u;
+        var min_u = 0.0;
         var prev = p0;
         for (var k = 1u; k <= N_SEG; k = k + 1u) {
             let curr = bezier_at(p0, p1, p2, p3, f32(k) / f32(N_SEG));
@@ -191,6 +204,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             if (d < min_d) {
                 min_d = d;
                 min_k = k;
+                min_u = u;
             }
             prev = curr;
         }
@@ -200,17 +214,35 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let a_geom = 1.0 - smoothstep(inner, outer, min_d);
         var a = clamp(a_geom * opacity, 0.0, 0.999);
 
+        // Interpolate depth (w-component of projected points)
+        let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
+        let B = bernstein(t);
+        let d_val = dot(B, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
+
         alphas[idx] = a;
         min_seg[idx] = min_k;
+        depths[idx] = d_val;
         C_pred += Ts[idx] * a * b.color.rgb;
+        D_pred += Ts[idx] * a * d_val;
         Ts[idx + 1u] = Ts[idx] * (1.0 - a);
     }
 
-    let background = vec3f(0.0);
+    let background_sample = textureLoad(bgTex, global_id.xy, 0).rgb;
+    let bg_depth_sample = textureLoad(bgDepthTex, global_id.xy, 0).r;
+    
+    var background = vec3f(0.0);
+    var bg_depth = 1.0;
+    if (uniforms.mode > 0.5) {
+        background = background_sample;
+        bg_depth = bg_depth_sample;
+    }
+
     C_pred += Ts[bezier_count] * background;
+    D_pred += Ts[bezier_count] * bg_depth;
 
     let dC = 2.0 * (C_pred - tgt_color);
-    var dT = dot(dC, background);
+    let dD_total = 2.0 * (D_pred - tgt_depth);
+    var dT = dot(dC, background) + dD_total * bg_depth;
 
     let FP_SCALE_POS = 10000.0;
     let FP_SCALE_COL = 100000.0;
@@ -233,10 +265,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let p3 = project_center(uniforms.vp, b.p3.xyz, aspect).xy;
 
         let T_prev = Ts[idx];
+        let d_val = depths[idx];
 
         let dColor = dC * (T_prev * a);
-        let da = dT * (-T_prev) + dot(dC, T_prev * color);
-        dT = dT * (1.0 - a) + dot(dC, a * color);
+        let da = dT * (-T_prev) + dot(dC, T_prev * color) + dD_total * (T_prev * d_val);
+        dT = dT * (1.0 - a) + dot(dC, a * color) + dD_total * (a * d_val);
 
         let k = min_seg[idx];
         let t_prev = f32(k - 1u) / f32(N_SEG);
@@ -258,8 +291,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let in_softband = (d > inner) && (d < outer);
 
         let a_geom = a / max(opacity, 1e-4);
-        let OFF_EDGE_ALPHA = 0.35;
-        let off_w = OFF_EDGE_ALPHA * (1.0 - tgt_edge);
+        
+        // Edge mode weighting: penalize opacity if not on an edge
+        var off_w = 0.0;
+        if (uniforms.mode < 0.5) {
+            let OFF_EDGE_ALPHA = 0.35;
+            off_w = OFF_EDGE_ALPHA * (1.0 - tgt_depth);
+        }
 
         var d_opacity = da * (1.0 - smoothstep(inner, outer, d)) + off_w * a_geom;
 
@@ -271,6 +309,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             dWidth = (da + off_w) * opacity * smoothstep_deriv / denom;
             dSoft = -(da + off_w) * opacity * smoothstep_deriv * (width - d)
                 / max(2.0 * softness * softness, 1e-6);
+        }
+
+        // Depth gradient with respect to control points (z/w component)
+        let t_pixel = (f32(k - 1u) + u_clamped) / f32(N_SEG);
+        let B_pixel = bernstein(t_pixel);
+        let dDepth_dZs = dD_total * (T_prev * a) * B_pixel;
+
+        // Regularization loss
+        if (uniforms.reg_enabled > 0.5) {
+            dWidth += 2.0 * (width - uniforms.reg_width) * 0.01;
+            dSoft += 2.0 * (softness - uniforms.reg_softness) * 0.01;
         }
 
         let dProj = -dD * d_vec / d;
@@ -293,19 +342,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let base = i * 18u;
         atomicAdd(&grads.data[base + 0u], i32(dP0_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 1u], i32(dP0_3d.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 2u], i32(dP0_3d.z * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 2u], i32((dP0_3d.z + dDepth_dZs.x) * FP_SCALE_POS));
         
         atomicAdd(&grads.data[base + 3u], i32(dP1_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 4u], i32(dP1_3d.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 5u], i32(dP1_3d.z * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 5u], i32((dP1_3d.z + dDepth_dZs.y) * FP_SCALE_POS));
         
         atomicAdd(&grads.data[base + 6u], i32(dP2_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 7u], i32(dP2_3d.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 8u], i32(dP2_3d.z * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 8u], i32((dP2_3d.z + dDepth_dZs.z) * FP_SCALE_POS));
         
         atomicAdd(&grads.data[base + 9u], i32(dP3_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 10u], i32(dP3_3d.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 11u], i32(dP3_3d.z * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 11u], i32((dP3_3d.z + dDepth_dZs.w) * FP_SCALE_POS));
         
         atomicAdd(&grads.data[base + 12u], i32(dColor.r * FP_SCALE_COL));
         atomicAdd(&grads.data[base + 13u], i32(dColor.g * FP_SCALE_COL));

@@ -275,6 +275,7 @@ export class GpuSplatOptimizerManager {
         depthTextureView: GPUTextureView,
         edgeTextureView: GPUTextureView,
         bezierViewTextureView: GPUTextureView,
+        colorBezierViewTextureView: GPUTextureView,
     ) {
         this.renderBindGroup = this.device.createBindGroup({
             layout: this.renderBindGroupLayout,
@@ -284,16 +285,17 @@ export class GpuSplatOptimizerManager {
                 { binding: 2, resource: depthTextureView },
                 { binding: 3, resource: edgeTextureView },
                 { binding: 4, resource: bezierViewTextureView },
-                { binding: 5, resource: { buffer: this.renderUniformsBuffer } },
+                { binding: 5, resource: colorBezierViewTextureView },
+                { binding: 6, resource: { buffer: this.renderUniformsBuffer } },
             ],
         });
     }
 
-    writeRenderUniforms(beziersEnabled: boolean) {
+    writeRenderUniforms(edgeEnabled: boolean, colorEnabled: boolean) {
         this.device.queue.writeBuffer(
             this.renderUniformsBuffer,
             0,
-            new Float32Array([beziersEnabled ? 1 : 0])
+            new Float32Array([edgeEnabled ? 1 : 0, colorEnabled ? 1 : 0])
         );
     }
 

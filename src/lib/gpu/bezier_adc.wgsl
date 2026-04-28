@@ -40,7 +40,7 @@ fn main() {
     }
 
     let ADC_PERIOD = 25.0;
-    let TAU_POS = 0.005;
+    let TAU_POS = 0.0001;
     let SPLIT_LEN_THRESHOLD = 0.25;
     let MIN_DEAD_FRACTION = 0.3;
     let MIN_DEAD_SLOTS = u32(f32(NUM_BEZIERS) * MIN_DEAD_FRACTION);
@@ -53,13 +53,10 @@ fn main() {
         adc.grad_accum[i] = 0.0;
 
         if (grad_norm <= TAU_POS) {
-            if (adam.m[i * 18u + 15u] > 1e-5) {
-                beziers.items[i].color.a = 0.0;
-            }
             continue;
         }
 
-        if (dead_count <= MIN_DEAD_SLOTS) { continue; }
+        if (dead_count == 0u) { continue; }
 
         dead_count = dead_count - 1u;
         let new_idx = dead_indices[dead_count];
@@ -93,9 +90,9 @@ fn main() {
             new_b.p3 = vec4f(p3, 0.0);
         } else {
             let seed = f32(i) * 3.14159 + adam.t;
-            let jx = (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.003;
-            let jy = (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.003;
-            let jz = (fract(sin(seed * 43.123) * 43758.5453) - 0.5) * 0.003;
+            let jx = (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.01;
+            let jy = (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.01;
+            let jz = (fract(sin(seed * 43.123) * 43758.5453) - 0.5) * 0.01;
             let j = vec3f(jx, jy, jz);
             
             new_b.p0 = vec4f(b.p0.xyz + j, b.p0.w);

@@ -185,7 +185,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         Ts[idx+1] = Ts[idx] * (1.0 - a);
     }
 
-    let background = vec3f(0.1);
+    let background = vec3f(0.05);
     C_pred += Ts[splat_count] * background;
     D_pred += Ts[splat_count] * 1.0;
     

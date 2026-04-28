@@ -11,7 +11,8 @@ import { loadTexture } from "$/gpu/loadTexture";
 export class ViewerState {
     width = $state(300);
     height = $state(150);
-    beziersEnabled = $state(false);
+    edgeBeziersEnabled = $state(false);
+    colorBeziersEnabled = $state(false);
     shadingMode = $state<'normals' | 'shaded'>('normals');
     
     bezierRegEnabled = $state(false);

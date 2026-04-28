@@ -10,8 +10,12 @@ const {
 
 <div class="overlays">
     <label>
-        <input type="checkbox" bind:checked={viewerState.beziersEnabled} />
-        Beziers
+        <input type="checkbox" bind:checked={viewerState.edgeBeziersEnabled} />
+        Edge Beziers
+    </label>
+    <label>
+        <input type="checkbox" bind:checked={viewerState.colorBeziersEnabled} />
+        Color Beziers
     </label>
     <div class="shading-toggle">
         <button 

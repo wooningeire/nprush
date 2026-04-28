@@ -49,7 +49,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     p.x = p.x * aspect;
     
     var Ts = 1.0;
-    var c = 0.0;
+    var C_accum = vec3f(0.0);
     for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
         let b = beziers.items[i];
         let width = max(b.p0.w, 0.001);
@@ -86,8 +86,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let outer = width + softness;
         let a_geom = 1.0 - smoothstep(inner, outer, min_d);
         var a = clamp(a_geom * opacity, 0.0, 0.999);
-        c = c + Ts * a * dot(b.color.rgb, vec3f(0.333));
+        C_accum = C_accum + Ts * a * b.color.rgb;
         Ts = Ts * (1.0 - a);
     }
-    textureStore(viewTex, global_id.xy, vec4f(c, c, c, 1.0));
+    textureStore(viewTex, global_id.xy, vec4f(C_accum, 1.0 - Ts));
 }

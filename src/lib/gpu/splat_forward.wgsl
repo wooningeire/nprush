@@ -22,6 +22,7 @@ struct VsOut {
     @builtin(position) pos: vec4f,
     @location(0) local_p: vec2f,
     @location(1) @interpolate(flat) instance_idx: u32,
+    @location(2) depth: f32,
 }
 
 fn quat_rotate(q: vec4f, v: vec3f) -> vec3f {
@@ -68,11 +69,17 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
     // because the quad is planar in splat-local space
     o.local_p = vec2f(lx, ly);
     o.instance_idx = splat_idx;
+    o.depth = clip.w;
     return o;
 }
 
+struct FragOut {
+    @location(0) color: vec4f,
+    @location(1) depth: vec4f,
+}
+
 @fragment
-fn frag(v: VsOut) -> @location(0) vec4f {
+fn frag(v: VsOut) -> FragOut {
     let s = splats.splats[v.instance_idx];
     let shape_a = s.sy_shape.y;
     let shape_b = s.sy_shape.z;
@@ -91,5 +98,8 @@ fn frag(v: VsOut) -> @location(0) vec4f {
         discard;
     }
     
-    return vec4f(s.color.rgb, a);
+    var out: FragOut;
+    out.color = vec4f(s.color.rgb, a);
+    out.depth = vec4f(v.depth, v.depth, v.depth, a);
+    return out;
 }

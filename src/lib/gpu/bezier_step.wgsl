@@ -27,10 +27,10 @@ struct ADCArray {
 
 struct StepUniforms {
     vp: mat4x4f,
-    enable_reg: f32,
-    target_width: f32,
-    target_softness: f32,
-    pad: f32,
+    reg_enabled: f32,
+    reg_width: f32,
+    reg_softness: f32,
+    mode: f32,
 }
 
 @group(0) @binding(0) var<storage, read_write> beziers: BezierArray;
@@ -68,11 +68,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         }
         var grad = f32(raw_grad) / fp_scale / 16384.0;
         
-        if (uniforms.enable_reg > 0.5) {
+        if (uniforms.reg_enabled > 0.5) {
             if (lp == 16u) {
-                grad += 2 * (b.p0.w - uniforms.target_width);
+                grad += 20.0 * (b.p0.w - uniforms.reg_width);
             } else if (lp == 17u) {
-                grad += 2 * (b.p1.w - uniforms.target_softness);
+                grad += 20.0 * (b.p1.w - uniforms.reg_softness);
             }
         }
 
@@ -130,7 +130,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     adc.grad_accum[bezier_id] += sqrt(pos_grad_norm2);
 
     // Prune very thin or transparent beziers
-    if (b.color.a < 0.01 || b.p0.w <= 0.001) {
+    if (b.color.a < 0.001 || b.p0.w <= 0.001) {
         b.color.a = 0.0;
     }
 

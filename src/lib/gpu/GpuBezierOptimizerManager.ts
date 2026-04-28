@@ -78,10 +78,10 @@ export class GpuBezierOptimizerManager {
             data[o + 14] = (Math.random() * 2 - 1) * 0.3;
             data[o + 15] = 0.0;
             // color rgba
-            data[o + 16] = 0.7 + Math.random() * 0.3;
-            data[o + 17] = 0.7 + Math.random() * 0.3;
-            data[o + 18] = 0.7 + Math.random() * 0.3;
-            data[o + 19] = 0.99;
+            data[o + 16] = Math.random();
+            data[o + 17] = Math.random();
+            data[o + 18] = Math.random();
+            data[o + 19] = 0.5;
         }
 
         this.bezierBuffer = device.createBuffer({
@@ -134,6 +134,8 @@ export class GpuBezierOptimizerManager {
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
             ],
         });
         const backwardModule = device.createShaderModule({
@@ -220,17 +222,19 @@ export class GpuBezierOptimizerManager {
         );
     }
 
-    writeRegParams(enable: boolean, width: number, softness: number) {
+    writeRegParams(enable: boolean, width: number, softness: number, mode: number = 0) {
         this.device.queue.writeBuffer(
             this.bezierUniformsBuffer,
             64,
-            new Float32Array([enable ? 1 : 0, width, softness, 0])
+            new Float32Array([enable ? 1 : 0, width, softness, mode])
         );
     }
 
     setBackwardTarget(
         targetTextureView: GPUTextureView,
-        targetEdgeTextureView: GPUTextureView,
+        targetDepthTextureView: GPUTextureView,
+        bgColorTextureView: GPUTextureView,
+        bgDepthTextureView: GPUTextureView,
         width: number,
         height: number,
     ) {
@@ -242,8 +246,10 @@ export class GpuBezierOptimizerManager {
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
                 { binding: 1, resource: { buffer: this.gradBuffer } },
                 { binding: 2, resource: targetTextureView },
-                { binding: 3, resource: targetEdgeTextureView },
+                { binding: 3, resource: targetDepthTextureView },
                 { binding: 4, resource: { buffer: this.bezierUniformsBuffer } },
+                { binding: 5, resource: bgColorTextureView },
+                { binding: 6, resource: bgDepthTextureView },
             ],
         });
     }
