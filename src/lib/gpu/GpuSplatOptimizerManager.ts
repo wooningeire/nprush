@@ -244,7 +244,7 @@ export class GpuSplatOptimizerManager {
         );
     }
 
-    setBackwardTarget(targetTextureView: GPUTextureView, targetEdgeTextureView: GPUTextureView, width: number, height: number) {
+    setBackwardTarget(targetTextureView: GPUTextureView, targetDepthTextureView: GPUTextureView, width: number, height: number) {
         this.dims = { width, height };
         
         this.backwardBindGroup = this.device.createBindGroup({
@@ -253,7 +253,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 0, resource: { buffer: this.splatBuffer } },
                 { binding: 1, resource: { buffer: this.gradBuffer } },
                 { binding: 2, resource: targetTextureView },
-                { binding: 3, resource: targetEdgeTextureView },
+                { binding: 3, resource: targetDepthTextureView },
                 { binding: 4, resource: { buffer: this.splatUniformsBuffer } },
             ],
         });

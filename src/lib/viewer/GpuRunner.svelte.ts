@@ -198,7 +198,7 @@ export class GpuRunner {
 
         // Rebind
         this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView);
-        this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimEdgeTextureView, ow, oh);
+        this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimDepthTextureView, ow, oh);
 
         // Edge layer: target IS the edge texture itself. The bezier backward
         // shader takes (target, edgeWeight); we pass edge for both, so the
