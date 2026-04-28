@@ -5,8 +5,8 @@ import adcModuleSrc from "./bezier_adc.wgsl?raw";
 // Each cubic bezier is 14 optimizable parameters but stored with 16-float
 // stride (4 vec4f) so the WGSL struct lays out cleanly without per-field
 // padding. Mirrors the splat manager's 11-params/12-floats layout.
-const PARAMS_PER_BEZIER = 14;
-const FLOATS_PER_BEZIER = 16;
+const PARAMS_PER_BEZIER = 18;
+const FLOATS_PER_BEZIER = 20;
 
 export class GpuBezierOptimizerManager {
     private readonly device: GPUDevice;
@@ -18,6 +18,7 @@ export class GpuBezierOptimizerManager {
     readonly gradBuffer: GPUBuffer;
     readonly adamBuffer: GPUBuffer;
     readonly adcBuffer: GPUBuffer;
+    readonly bezierUniformsBuffer: GPUBuffer;
 
     private readonly backwardPipeline: GPUComputePipeline;
     private readonly stepPipeline: GPUComputePipeline;
@@ -56,43 +57,31 @@ export class GpuBezierOptimizerManager {
             const dx = Math.cos(angle) * len;
             const dy = Math.sin(angle) * len;
             const jitter = () => (Math.random() - 0.5) * 0.08;
-            // P0
+            // P0 (xyz, width)
             data[o + 0] = cx - dx * 0.5;
             data[o + 1] = cy - dy * 0.5;
-            // P1
-            data[o + 2] = cx - dx * 0.15 + jitter();
-            data[o + 3] = cy - dy * 0.15 + jitter();
-            // P2
-            data[o + 4] = cx + dx * 0.15 + jitter();
-            data[o + 5] = cy + dy * 0.15 + jitter();
-            // P3
-            data[o + 6] = cx + dx * 0.5;
-            data[o + 7] = cy + dy * 0.5;
-            // color rgba. Initial opacity is at the upper clamp because
-            // the kill threshold (width * opacity <= 0.0008) effectively
-            // makes any curve with opacity < 0.8 die on the first step
-            // its width hits the 0.001 floor. Starting at 0.99 instead of
-            // a "neutral" 0.6 gives every curve a generous opacity-decay
-            // grace window (~200 steps with the slowed opacity max_update)
-            // before it can possibly die, which is enough time for the
-            // optimizer to either find a silhouette edge or be replaced
-            // by ADC cloning at the next 200-step tick.
-            data[o + 8] = 0.7 + Math.random() * 0.3;
-            data[o + 9] = 0.7 + Math.random() * 0.3;
-            data[o + 10] = 0.7 + Math.random() * 0.3;
-            data[o + 11] = 0.99;
-            // width, softness, pad, pad. Sized for *display* resolution
-            // (~250 px per norm unit), so 0.003 norm ~= 0.75 px stroke +
-            // 0.5 px halo from softness, matching the 1-2 px target edges.
-            // At 128 px optim resolution this is sub-pixel, which means
-            // the curves can't fully cover an optim-resolution edge pixel,
-            // but they hit display-resolution edge pixels cleanly. The
-            // upper clamps in bezier_step.wgsl prevent the optimizer
-            // from re-inflating to optim-natural widths.
-            data[o + 12] = 0.003;
-            data[o + 13] = 0.001;
-            data[o + 14] = 0.0;
+            data[o + 2] = (Math.random() * 2 - 1) * 0.3;
+            data[o + 3] = 0.003;
+            // P1 (xyz, softness)
+            data[o + 4] = cx - dx * 0.15 + jitter();
+            data[o + 5] = cy - dy * 0.15 + jitter();
+            data[o + 6] = (Math.random() * 2 - 1) * 0.3;
+            data[o + 7] = 0.001;
+            // P2 (xyz, pad)
+            data[o + 8] = cx + dx * 0.15 + jitter();
+            data[o + 9] = cy + dy * 0.15 + jitter();
+            data[o + 10] = (Math.random() * 2 - 1) * 0.3;
+            data[o + 11] = 0.0;
+            // P3 (xyz, pad)
+            data[o + 12] = cx + dx * 0.5;
+            data[o + 13] = cy + dy * 0.5;
+            data[o + 14] = (Math.random() * 2 - 1) * 0.3;
             data[o + 15] = 0.0;
+            // color rgba
+            data[o + 16] = 0.7 + Math.random() * 0.3;
+            data[o + 17] = 0.7 + Math.random() * 0.3;
+            data[o + 18] = 0.7 + Math.random() * 0.3;
+            data[o + 19] = 0.99;
         }
 
         this.bezierBuffer = device.createBuffer({
@@ -123,6 +112,12 @@ export class GpuBezierOptimizerManager {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
+        this.bezierUniformsBuffer = device.createBuffer({
+            label: "bezier VP uniforms buffer",
+            size: 64,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
         // NUM_BEZIERS_PLUS_ONE / NUM_BEZIERS_MINUS_ONE must come before
         // NUM_BEZIERS for the same substring reason as the splat shaders.
         const inject = (src: string) => src
@@ -138,6 +133,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
             ],
         });
         const backwardModule = device.createShaderModule({
@@ -212,6 +208,16 @@ export class GpuBezierOptimizerManager {
         });
     }
 
+    writeVPMatrix(mat: Float32Array | number[]) {
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            0,
+            (mat as Float32Array).buffer,
+            (mat as Float32Array).byteOffset,
+            (mat as Float32Array).byteLength
+        );
+    }
+
     setBackwardTarget(
         targetTextureView: GPUTextureView,
         targetEdgeTextureView: GPUTextureView,
@@ -227,6 +233,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 1, resource: { buffer: this.gradBuffer } },
                 { binding: 2, resource: targetTextureView },
                 { binding: 3, resource: targetEdgeTextureView },
+                { binding: 4, resource: { buffer: this.bezierUniformsBuffer } },
             ],
         });
     }

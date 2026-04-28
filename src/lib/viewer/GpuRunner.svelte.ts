@@ -140,6 +140,8 @@ export class GpuRunner {
             $effect(() => this.splatOptimizerManager.writeRenderUniforms(this.viewerState.beziersEnabled));
             $effect(() => this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat));
             $effect(() => this.splatForwardManager.writeVPMatrix(this.camera.viewProjMat));
+            $effect(() => this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
+            $effect(() => this.bezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
         });
     }
 

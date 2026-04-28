@@ -1,18 +1,12 @@
 // Differentiable rasterization of cubic bezier curves.
-//
-// V1 simplifications:
-//   * Polyline approximation: each curve is sampled at N_SEG+1 points and
-//     treated as N_SEG line segments. Distance-to-segment has a clean
-//     analytical gradient.
-//   * Hard argmin over segments (subgradient at ridges; in practice fine).
-//   * Alpha = 1 - smoothstep(width-softness, width+softness, dist).
-//   * Standard front-to-back alpha-compositing identical to the splat backward.
+// Now in 3D: curves are defined by 3D control points projected to the screen.
 
 struct Bezier {
-    p0_p1: vec4f,           // p0.xy, p1.xy
-    p2_p3: vec4f,           // p2.xy, p3.xy
-    color: vec4f,           // rgba
-    width_soft_pad: vec4f,  // width, softness, _, _
+    p0: vec4f,    // x, y, z, width
+    p1: vec4f,    // x, y, z, softness
+    p2: vec4f,    // x, y, z, _pad
+    p3: vec4f,    // x, y, z, _pad
+    color: vec4f, // r, g, b, a
 }
 
 struct BezierArray {
@@ -23,10 +17,15 @@ struct GradArray {
     data: array<atomic<i32>, NUM_BEZIER_PARAMS>,
 }
 
+struct BezierUniforms {
+    vp: mat4x4f,
+}
+
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
 @group(0) @binding(1) var<storage, read_write> grads: GradArray;
 @group(0) @binding(2) var targetTex: texture_2d<f32>;
 @group(0) @binding(3) var targetEdgeTex: texture_2d<f32>;
+@group(0) @binding(4) var<uniform> uniforms: BezierUniforms;
 
 const N_SEG: u32 = 16u;
 
@@ -38,10 +37,30 @@ fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
          + t*t*t * p3;
 }
 
-// Bernstein basis weights (B0..B3) at parameter t.
 fn bernstein(t: f32) -> vec4f {
     let omt = 1.0 - t;
     return vec4f(omt*omt*omt, 3.0*omt*omt*t, 3.0*omt*t*t, t*t*t);
+}
+
+fn project_center(vp: mat4x4f, pos3: vec3f, aspect: f32) -> vec3f {
+    let clip = vp * vec4f(pos3, 1.0);
+    return vec3f(clip.x / clip.w * aspect, clip.y / clip.w, clip.w);
+}
+
+fn backproject_gradient(vp: mat4x4f, pos3: vec3f, aspect: f32, dp2d: vec2f) -> vec3f {
+    let clip = vp * vec4f(pos3, 1.0);
+    let w = clip.w;
+    let w2 = w * w;
+    var dp3d = vec3f(0.0);
+    for (var ax = 0u; ax < 3u; ax++) {
+        let vp_0j = vp[ax][0];
+        let vp_1j = vp[ax][1];
+        let vp_3j = vp[ax][3];
+        let ds_dx = aspect * (vp_0j * w - clip.x * vp_3j) / w2;
+        let ds_dy = (vp_1j * w - clip.y * vp_3j) / w2;
+        dp3d[ax] = dp2d.x * ds_dx + dp2d.y * ds_dy;
+    }
+    return dp3d;
 }
 
 const MAX_TILE_BEZIERS = 1024u;
@@ -84,12 +103,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let b = beziers.items[bezier_id];
         if (b.color.a < 0.005) { continue; }
         
-        let p0 = b.p0_p1.xy;
-        let p1 = b.p0_p1.zw;
-        let p2 = b.p2_p3.xy;
-        let p3 = b.p2_p3.zw;
-        let width = max(b.width_soft_pad.x, 0.001);
-        let softness = max(b.width_soft_pad.y, 0.001);
+        let width = max(b.p0.w, 0.001);
+        let softness = max(b.p1.w, 0.001);
+        
+        let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
+        let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
+        let proj2 = project_center(uniforms.vp, b.p2.xyz, aspect);
+        let proj3 = project_center(uniforms.vp, b.p3.xyz, aspect);
+        if (proj0.z < 0.0 || proj1.z < 0.0 || proj2.z < 0.0 || proj3.z < 0.0) { continue; }
+
+        let p0 = proj0.xy;
+        let p1 = proj1.xy;
+        let p2 = proj2.xy;
+        let p3 = proj3.xy;
         
         let outer_cull = width + softness;
         let min_p = min(min(p0, p1), min(p2, p3)) - vec2f(outer_cull);
@@ -142,13 +168,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     for (var idx = 0u; idx < bezier_count; idx++) {
         let i = tile_beziers[idx];
         let b = beziers.items[i];
-        let p0 = b.p0_p1.xy;
-        let p1 = b.p0_p1.zw;
-        let p2 = b.p2_p3.xy;
-        let p3 = b.p2_p3.zw;
-        let width = max(b.width_soft_pad.x, 0.001);
-        let softness = max(b.width_soft_pad.y, 0.001);
+        
+        let width = max(b.p0.w, 0.001);
+        let softness = max(b.p1.w, 0.001);
         let opacity = b.color.a;
+        
+        let p0 = project_center(uniforms.vp, b.p0.xyz, aspect).xy;
+        let p1 = project_center(uniforms.vp, b.p1.xyz, aspect).xy;
+        let p2 = project_center(uniforms.vp, b.p2.xyz, aspect).xy;
+        let p3 = project_center(uniforms.vp, b.p3.xyz, aspect).xy;
 
         var min_d = 1e9;
         var min_k = 1u;
@@ -194,14 +222,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         
         let i = tile_beziers[idx];
         let b = beziers.items[i];
-        let p0 = b.p0_p1.xy;
-        let p1 = b.p0_p1.zw;
-        let p2 = b.p2_p3.xy;
-        let p3 = b.p2_p3.zw;
-        let width = max(b.width_soft_pad.x, 0.001);
-        let softness = max(b.width_soft_pad.y, 0.001);
+        let width = max(b.p0.w, 0.001);
+        let softness = max(b.p1.w, 0.001);
         let opacity = b.color.a;
         let color = b.color.rgb;
+
+        let p0 = project_center(uniforms.vp, b.p0.xyz, aspect).xy;
+        let p1 = project_center(uniforms.vp, b.p1.xyz, aspect).xy;
+        let p2 = project_center(uniforms.vp, b.p2.xyz, aspect).xy;
+        let p3 = project_center(uniforms.vp, b.p3.xyz, aspect).xy;
 
         let T_prev = Ts[idx];
 
@@ -250,25 +279,40 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
         let B_prev = bernstein(t_prev);
         let B_curr = bernstein(t_curr);
-        let dP0 = B_prev.x * dPrevPt + B_curr.x * dCurrPt;
-        let dP1 = B_prev.y * dPrevPt + B_curr.y * dCurrPt;
-        let dP2 = B_prev.z * dPrevPt + B_curr.z * dCurrPt;
-        let dP3 = B_prev.w * dPrevPt + B_curr.w * dCurrPt;
+        let dP0_2d = B_prev.x * dPrevPt + B_curr.x * dCurrPt;
+        let dP1_2d = B_prev.y * dPrevPt + B_curr.y * dCurrPt;
+        let dP2_2d = B_prev.z * dPrevPt + B_curr.z * dCurrPt;
+        let dP3_2d = B_prev.w * dPrevPt + B_curr.w * dCurrPt;
 
-        let base = i * 14u;
-        atomicAdd(&grads.data[base + 0u], i32(dP0.x * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 1u], i32(dP0.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 2u], i32(dP1.x * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 3u], i32(dP1.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 4u], i32(dP2.x * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 5u], i32(dP2.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 6u], i32(dP3.x * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 7u], i32(dP3.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 8u], i32(dColor.r * FP_SCALE_COL));
-        atomicAdd(&grads.data[base + 9u], i32(dColor.g * FP_SCALE_COL));
-        atomicAdd(&grads.data[base + 10u], i32(dColor.b * FP_SCALE_COL));
-        atomicAdd(&grads.data[base + 11u], i32(d_opacity * FP_SCALE_COL));
-        atomicAdd(&grads.data[base + 12u], i32(dWidth * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 13u], i32(dSoft * FP_SCALE_POS));
+        // Backproject 2D gradients to 3D
+        let dP0_3d = backproject_gradient(uniforms.vp, b.p0.xyz, aspect, dP0_2d);
+        let dP1_3d = backproject_gradient(uniforms.vp, b.p1.xyz, aspect, dP1_2d);
+        let dP2_3d = backproject_gradient(uniforms.vp, b.p2.xyz, aspect, dP2_2d);
+        let dP3_3d = backproject_gradient(uniforms.vp, b.p3.xyz, aspect, dP3_2d);
+
+        let base = i * 18u;
+        atomicAdd(&grads.data[base + 0u], i32(dP0_3d.x * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 1u], i32(dP0_3d.y * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 2u], i32(dP0_3d.z * FP_SCALE_POS));
+        
+        atomicAdd(&grads.data[base + 3u], i32(dP1_3d.x * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 4u], i32(dP1_3d.y * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 5u], i32(dP1_3d.z * FP_SCALE_POS));
+        
+        atomicAdd(&grads.data[base + 6u], i32(dP2_3d.x * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 7u], i32(dP2_3d.y * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 8u], i32(dP2_3d.z * FP_SCALE_POS));
+        
+        atomicAdd(&grads.data[base + 9u], i32(dP3_3d.x * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 10u], i32(dP3_3d.y * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 11u], i32(dP3_3d.z * FP_SCALE_POS));
+        
+        atomicAdd(&grads.data[base + 12u], i32(dColor.r * FP_SCALE_COL));
+        atomicAdd(&grads.data[base + 13u], i32(dColor.g * FP_SCALE_COL));
+        atomicAdd(&grads.data[base + 14u], i32(dColor.b * FP_SCALE_COL));
+        atomicAdd(&grads.data[base + 15u], i32(d_opacity * FP_SCALE_COL));
+        
+        atomicAdd(&grads.data[base + 16u], i32(dWidth * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 17u], i32(dSoft * FP_SCALE_POS));
     }
 }

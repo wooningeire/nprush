@@ -1,16 +1,24 @@
 struct Bezier {
-    p0_p1: vec4f,
-    p2_p3: vec4f,
+    p0: vec4f, // x, y, z, width
+    p1: vec4f, // x, y, z, softness
+    p2: vec4f, // x, y, z, _pad
+    p3: vec4f, // x, y, z, _pad
     color: vec4f,
-    width_soft_pad: vec4f,
 }
 
 struct BezierArray {
     items: array<Bezier, NUM_BEZIERS>,
 }
 
+struct ForwardUniforms {
+    vp: mat4x4f,
+    dims: vec2f,
+    _pad: vec2f,
+}
+
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
 @group(0) @binding(1) var viewTex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var<uniform> uniforms: ForwardUniforms;
 
 const N_BEZIER_SEG: u32 = 16u;
 
@@ -20,6 +28,11 @@ fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
          + 3.0 * omt*omt * t * p1
          + 3.0 * omt * t*t * p2
          + t*t*t * p3;
+}
+
+fn project_center(vp: mat4x4f, pos3: vec3f, aspect: f32) -> vec3f {
+    let clip = vp * vec4f(pos3, 1.0);
+    return vec3f(clip.x / clip.w * aspect, clip.y / clip.w, clip.w);
 }
 
 @compute @workgroup_size(16, 16)
@@ -39,12 +52,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     var c = 0.0;
     for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
         let b = beziers.items[i];
-        let p0 = b.p0_p1.xy;
-        let p1 = b.p0_p1.zw;
-        let p2 = b.p2_p3.xy;
-        let p3 = b.p2_p3.zw;
-        let width = max(b.width_soft_pad.x, 0.001);
-        let softness = max(b.width_soft_pad.y, 0.001);
+        let width = max(b.p0.w, 0.001);
+        let softness = max(b.p1.w, 0.001);
+        let opacity = b.color.a;
+        if (opacity < 0.005) { continue; }
+
+        let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
+        let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
+        let proj2 = project_center(uniforms.vp, b.p2.xyz, aspect);
+        let proj3 = project_center(uniforms.vp, b.p3.xyz, aspect);
+
+        // Cull if any point is behind the camera (simplification for now)
+        if (proj0.z < 0.0 || proj1.z < 0.0 || proj2.z < 0.0 || proj3.z < 0.0) { continue; }
+
+        let p0 = proj0.xy;
+        let p1 = proj1.xy;
+        let p2 = proj2.xy;
+        let p3 = proj3.xy;
 
         var min_d = 1e9;
         var prev = p0;
@@ -61,7 +85,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let inner = width - softness;
         let outer = width + softness;
         let a_geom = 1.0 - smoothstep(inner, outer, min_d);
-        var a = clamp(a_geom * b.color.a, 0.0, 0.999);
+        var a = clamp(a_geom * opacity, 0.0, 0.999);
         c = c + Ts * a * dot(b.color.rgb, vec3f(0.333));
         Ts = Ts * (1.0 - a);
     }

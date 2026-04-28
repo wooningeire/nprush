@@ -7,6 +7,7 @@ export class GpuBezierForwardPipelineManager {
     private bindGroup: GPUBindGroup | null = null;
     private dims: { width: number, height: number } = { width: 0, height: 0 };
     private readonly bezierBuffer: GPUBuffer;
+    private readonly bezierUniformsBuffer: GPUBuffer;
 
     constructor({
         device,
@@ -20,10 +21,17 @@ export class GpuBezierForwardPipelineManager {
         this.device = device;
         this.bezierBuffer = bezierBuffer;
 
+        this.bezierUniformsBuffer = device.createBuffer({
+            label: "bezier forward uniforms buffer",
+            size: 64 + 16, // mat4x4f + dims (vec2f) + pad (vec2f)
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
         this.bindGroupLayout = device.createBindGroupLayout({
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
             ],
         });
 
@@ -39,13 +47,28 @@ export class GpuBezierForwardPipelineManager {
         });
     }
 
+    writeVPMatrix(mat: Float32Array | number[]) {
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            0,
+            (mat as Float32Array).buffer,
+            (mat as Float32Array).byteOffset,
+            (mat as Float32Array).byteLength
+        );
+    }
+
     setTarget(targetView: GPUTextureView, width: number, height: number) {
-        this.dims = { width, height };
+        if (this.dims.width !== width || this.dims.height !== height) {
+            this.dims = { width, height };
+            this.device.queue.writeBuffer(this.bezierUniformsBuffer, 64, new Float32Array([width, height]));
+        }
+
         this.bindGroup = this.device.createBindGroup({
             layout: this.bindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
                 { binding: 1, resource: targetView },
+                { binding: 2, resource: { buffer: this.bezierUniformsBuffer } },
             ],
         });
     }
