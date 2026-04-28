@@ -5,6 +5,7 @@ import { GpuSplatOptimizerManager } from "$/gpu/GpuSplatOptimizerManager";
 import { GpuBezierOptimizerManager } from "$/gpu/GpuBezierOptimizerManager";
 import { GpuSplatForwardPipelineManager } from "$/gpu/GpuSplatForwardPipelineManager";
 import { GpuBezierForwardPipelineManager } from "$/gpu/GpuBezierForwardPipelineManager";
+import { GpuBlurPipelineManager } from "$/gpu/GpuBlurPipelineManager";
 import type { MeshData } from "$/gpu/loadGlb";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 
@@ -32,6 +33,7 @@ export class GpuRunner {
     readonly splatForwardManager: GpuSplatForwardPipelineManager;
     readonly bezierForwardManager: GpuBezierForwardPipelineManager;
     readonly colorBezierForwardManager: GpuBezierForwardPipelineManager;
+    private readonly blurManager: GpuBlurPipelineManager;
     private readonly matcapTexture: GPUTexture;
     private readonly matcapTextureView: GPUTextureView;
 
@@ -59,6 +61,10 @@ export class GpuRunner {
     private fullBezierTextureView: GPUTextureView | null = null;
     private fullColorBezierTexture: GPUTexture | null = null;
     private fullColorBezierTextureView: GPUTextureView | null = null;
+    private targetBlurredTexture: GPUTexture | null = null;
+    private targetBlurredTextureView: GPUTextureView | null = null;
+    private targetTempTexture: GPUTexture | null = null;
+    private targetTempTextureView: GPUTextureView | null = null;
     private fullWidth = 0;
     private fullHeight = 0;
 
@@ -77,6 +83,10 @@ export class GpuRunner {
     private optimSplatDepthTextureView: GPUTextureView | null = null;
     private dummyTexture: GPUTexture | null = null;
     private dummyTextureView: GPUTextureView | null = null;
+    private optimBlurredTexture: GPUTexture | null = null;
+    private optimBlurredTextureView: GPUTextureView | null = null;
+    private optimTempTexture: GPUTexture | null = null;
+    private optimTempTextureView: GPUTextureView | null = null;
     private optimWidth = 0;
     private optimHeight = 0;
 
@@ -155,6 +165,8 @@ export class GpuRunner {
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.colorLayerBezierManager.bezierBuffer,
         });
+        
+        this.blurManager = new GpuBlurPipelineManager(device);
 
         this.destroy = $effect.root(() => {
             $effect(() => this.uniformsManager.writeViewProjMat(this.camera.viewProjMat));
@@ -162,9 +174,10 @@ export class GpuRunner {
             $effect(() => this.uniformsManager.writeShadingMode(this.viewerState.shadingMode));
             $effect(() => this.splatOptimizerManager.writeRenderUniforms(
                 this.viewerState.edgeBeziersEnabled,
-                this.viewerState.colorBeziersEnabled
+                this.viewerState.colorBeziersEnabled,
+                this.viewerState.compareBlurred
             ));
-            $effect(() => this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat));
+            $effect(() => this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat, this.viewerState.compareBlurred));
             $effect(() => this.splatForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.colorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
@@ -255,6 +268,22 @@ export class GpuRunner {
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.optimSplatDepthTextureView = this.optimSplatDepthTexture.createView();
+
+        this.optimBlurredTexture = this.device.createTexture({
+            label: "optimization blurred target",
+            size: [ow, oh],
+            format: "rgba8unorm",
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.optimBlurredTextureView = this.optimBlurredTexture.createView();
+
+        this.optimTempTexture = this.device.createTexture({
+            label: "optimization temp blur target",
+            size: [ow, oh],
+            format: "rgba8unorm",
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.optimTempTextureView = this.optimTempTexture.createView();
 
         if (!this.dummyTexture) {
             this.dummyTexture = this.device.createTexture({
@@ -378,6 +407,22 @@ export class GpuRunner {
                 });
                 this.fullColorBezierTextureView = this.fullColorBezierTexture.createView();
 
+                this.targetBlurredTexture = this.device.createTexture({
+                    label: "full blurred target",
+                    size: [fullW, fullH],
+                    format: "rgba8unorm",
+                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                });
+                this.targetBlurredTextureView = this.targetBlurredTexture.createView();
+
+                this.targetTempTexture = this.device.createTexture({
+                    label: "full temp blur target",
+                    size: [fullW, fullH],
+                    format: "rgba8unorm",
+                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                });
+                this.targetTempTextureView = this.targetTempTexture.createView();
+
                 this.splatForwardManager.setTarget(this.fullSplatTextureView, this.fullSplatDepthTextureView!, fullW, fullH);
                 this.bezierForwardManager.setTarget(this.fullBezierTextureView, fullW, fullH);
                 this.colorBezierForwardManager.setTarget(this.fullColorBezierTextureView, fullW, fullH);
@@ -455,10 +500,30 @@ export class GpuRunner {
             this.meshRenderPipelineManager.addDraw(optimPassEncoder, this.matcapTextureView);
             optimPassEncoder.end();
 
+            // 1c. Run separable blur on targets if enabled
+            if (this.viewerState.compareBlurred) {
+                this.blurManager.blur(
+                    commandEncoder,
+                    this.optimTextureView!,
+                    this.optimBlurredTextureView!,
+                    this.optimTempTextureView!,
+                    this.optimWidth,
+                    this.optimHeight,
+                    32, // radius
+                    16  // sigma
+                );
+            }
+
             // 2. Run edge detection on optim-res depth
             this.splatOptimizerManager.dispatchEdge(commandEncoder, this.optimWidth, this.optimHeight);
 
             // 3. Dispatch Splat Optimizer Compute Passes (uses optim-res texture + edge map)
+            this.splatOptimizerManager.setBackwardTarget(
+                this.viewerState.compareBlurred ? this.optimBlurredTextureView! : this.optimTextureView!,
+                this.optimDepthTextureView!,
+                this.optimWidth,
+                this.optimHeight
+            );
             this.splatOptimizerManager.dispatch(commandEncoder);
 
             // 3.1 Render current splats at optim-res to use as background for color beziers.
@@ -479,6 +544,14 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.dispatch(commandEncoder);
             }
             if (this.viewerState.colorBeziersEnabled) {
+                this.colorLayerBezierManager.setBackwardTarget(
+                    this.viewerState.compareBlurred ? this.optimBlurredTextureView! : this.optimTextureView!,
+                    this.optimDepthTextureView!,
+                    this.optimSplatTextureView!,
+                    this.optimSplatDepthTextureView!,
+                    this.optimWidth,
+                    this.optimHeight,
+                );
                 this.colorLayerBezierManager.dispatch(commandEncoder);
             }
 
@@ -498,6 +571,15 @@ export class GpuRunner {
             }
 
             // 5. Render Splat Visualization to Screen View (uses full-res textures)
+            this.splatOptimizerManager.setRenderTarget(
+                this.targetTextureView!,
+                this.fullSplatTextureView!,
+                this.targetDepthTextureView!,
+                this.fullEdgeTextureView!,
+                this.fullBezierTextureView!,
+                this.fullColorBezierTextureView!,
+            );
+
             const screenView = currentTexture.createView();
             const finalPassEncoder = commandEncoder.beginRenderPass({
                 label: "final render pass",

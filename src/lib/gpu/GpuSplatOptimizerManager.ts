@@ -116,10 +116,10 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
-        // VP matrix for backward and forward shaders (mat4x4f = 64 bytes)
+        // VP matrix for backward and forward shaders (mat4x4f = 64 bytes) + blur_enabled (4 bytes) + padding
         this.splatUniformsBuffer = device.createBuffer({
             label: "splat VP uniforms buffer",
-            size: 64,
+            size: 96,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -234,13 +234,18 @@ export class GpuSplatOptimizerManager {
         this.renderBindGroupLayout = this.renderPipeline.getBindGroupLayout(0);
     }
 
-    writeSplatVPMatrix(mat: Mat4) {
+    writeSplatVPMatrix(mat: Mat4, blurEnabled: boolean = false) {
         this.device.queue.writeBuffer(
             this.splatUniformsBuffer,
             0,
             (mat as Float32Array).buffer,
             (mat as Float32Array).byteOffset,
             (mat as Float32Array).byteLength
+        );
+        this.device.queue.writeBuffer(
+            this.splatUniformsBuffer,
+            64,
+            new Float32Array([blurEnabled ? 1 : 0])
         );
     }
 
@@ -291,11 +296,11 @@ export class GpuSplatOptimizerManager {
         });
     }
 
-    writeRenderUniforms(edgeEnabled: boolean, colorEnabled: boolean) {
+    writeRenderUniforms(edgeEnabled: boolean, colorEnabled: boolean, blurEnabled: boolean) {
         this.device.queue.writeBuffer(
             this.renderUniformsBuffer,
             0,
-            new Float32Array([edgeEnabled ? 1 : 0, colorEnabled ? 1 : 0])
+            new Float32Array([edgeEnabled ? 1 : 0, colorEnabled ? 1 : 0, blurEnabled ? 1 : 0])
         );
     }
 

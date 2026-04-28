@@ -17,6 +17,10 @@ const {
         <input type="checkbox" bind:checked={viewerState.colorBeziersEnabled} />
         Color Beziers
     </label>
+    <label>
+        <input type="checkbox" bind:checked={viewerState.compareBlurred} />
+        Compare Blurred
+    </label>
     <div class="shading-toggle">
         <button 
             class:active={viewerState.shadingMode === 'normals'} 

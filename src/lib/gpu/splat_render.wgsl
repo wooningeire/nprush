@@ -8,7 +8,8 @@
 struct RenderUniforms {
     edge_beziers_enabled: f32,
     color_beziers_enabled: f32,
-    _pad: vec2f,
+    blur_enabled: f32,
+    _pad: f32,
 }
 @group(0) @binding(6) var<uniform> uniforms: RenderUniforms;
 

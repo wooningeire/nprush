@@ -13,6 +13,7 @@ export class ViewerState {
     height = $state(150);
     edgeBeziersEnabled = $state(false);
     colorBeziersEnabled = $state(false);
+    compareBlurred = $state(false);
     shadingMode = $state<'normals' | 'shaded'>('normals');
     
     bezierRegEnabled = $state(false);

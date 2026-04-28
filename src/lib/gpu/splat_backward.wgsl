@@ -15,6 +15,8 @@ struct GradArray {
 
 struct SplatUniforms {
     vp: mat4x4f,
+    blur_enabled: f32,
+    _pad: vec3f,
 }
 
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
