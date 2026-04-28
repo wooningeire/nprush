@@ -27,6 +27,28 @@ const {
             Shaded
         </button>
     </div>
+
+    <div class="reg-controls">
+        <label>
+            <input type="checkbox" bind:checked={viewerState.bezierRegEnabled} />
+            Regularize Beziers
+        </label>
+        
+        {#if viewerState.bezierRegEnabled}
+            <div class="slider-group">
+                <label>
+                    Width: {viewerState.bezierRegWidth.toFixed(4)}
+                    <input type="range" min="0.0001" max="0.01" step="0.0001" bind:value={viewerState.bezierRegWidth} />
+                </label>
+            </div>
+            <div class="slider-group">
+                <label>
+                    Softness: {viewerState.bezierRegSoftness.toFixed(4)}
+                    <input type="range" min="0.0001" max="0.01" step="0.0001" bind:value={viewerState.bezierRegSoftness} />
+                </label>
+            </div>
+        {/if}
+    </div>
 </div>
 
 <style lang="scss">
@@ -81,6 +103,34 @@ const {
 
                 &:hover:not(.active) {
                     color: rgba(255, 255, 255, 0.8);
+                }
+            }
+        }
+
+        .reg-controls {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            
+            .slider-group {
+                display: flex;
+                flex-direction: column;
+                gap: 0.2rem;
+                
+                label {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: flex-start;
+                    font-size: 0.8rem;
+                    gap: 0.2rem;
+                    color: rgba(255, 255, 255, 0.8);
+                }
+
+                input[type="range"] {
+                    width: 100%;
                 }
             }
         }

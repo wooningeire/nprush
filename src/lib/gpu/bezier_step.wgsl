@@ -25,10 +25,19 @@ struct ADCArray {
     grad_accum: array<f32, NUM_BEZIERS>,
 }
 
+struct StepUniforms {
+    vp: mat4x4f,
+    enable_reg: f32,
+    target_width: f32,
+    target_softness: f32,
+    pad: f32,
+}
+
 @group(0) @binding(0) var<storage, read_write> beziers: BezierArray;
 @group(0) @binding(1) var<storage, read_write> grads: GradArray;
 @group(0) @binding(2) var<storage, read_write> adam: AdamState;
 @group(0) @binding(3) var<storage, read_write> adc: ADCArray;
+@group(0) @binding(4) var<uniform> uniforms: StepUniforms;
 
 @compute @workgroup_size(64, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3u) {
@@ -57,7 +66,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         if (lp < 12u || lp >= 16u) {
             fp_scale = 10000.0;
         }
-        let grad = f32(raw_grad) / fp_scale / 16384.0;
+        var grad = f32(raw_grad) / fp_scale / 16384.0;
+        
+        if (uniforms.enable_reg > 0.5) {
+            if (lp == 16u) {
+                grad += 2 * (b.p0.w - uniforms.target_width);
+            } else if (lp == 17u) {
+                grad += 2 * (b.p1.w - uniforms.target_softness);
+            }
+        }
 
         var lr = 0.005; // Base LR for positions
         if (lp >= 12u && lp <= 14u) { lr = 0.02; }  // Color rgb
@@ -113,7 +130,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     adc.grad_accum[bezier_id] += sqrt(pos_grad_norm2);
 
     // Prune very thin or transparent beziers
-    if (b.color.a < 0.05 || b.p0.w < 0.002) {
+    if (b.color.a < 0.01 || b.p0.w <= 0.001) {
         b.color.a = 0.0;
     }
 

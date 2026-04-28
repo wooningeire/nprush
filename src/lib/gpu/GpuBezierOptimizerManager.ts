@@ -114,7 +114,7 @@ export class GpuBezierOptimizerManager {
 
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier VP uniforms buffer",
-            size: 64,
+            size: 64 + 16, // mat4x4f + 4x float32
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -154,6 +154,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
             ],
         });
         const stepModule = device.createShaderModule({
@@ -175,6 +176,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 1, resource: { buffer: this.gradBuffer } },
                 { binding: 2, resource: { buffer: this.adamBuffer } },
                 { binding: 3, resource: { buffer: this.adcBuffer } },
+                { binding: 4, resource: { buffer: this.bezierUniformsBuffer } },
             ],
         });
 
@@ -215,6 +217,14 @@ export class GpuBezierOptimizerManager {
             (mat as Float32Array).buffer,
             (mat as Float32Array).byteOffset,
             (mat as Float32Array).byteLength
+        );
+    }
+
+    writeRegParams(enable: boolean, width: number, softness: number) {
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            64,
+            new Float32Array([enable ? 1 : 0, width, softness, 0])
         );
     }
 

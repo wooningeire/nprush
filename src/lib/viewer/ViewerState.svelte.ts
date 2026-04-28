@@ -13,6 +13,10 @@ export class ViewerState {
     height = $state(150);
     beziersEnabled = $state(false);
     shadingMode = $state<'normals' | 'shaded'>('normals');
+    
+    bezierRegEnabled = $state(false);
+    bezierRegWidth = $state(0.003);
+    bezierRegSoftness = $state(0.001);
 
     runner = $state<GpuRunner | null>(null);
     
