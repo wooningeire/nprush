@@ -129,14 +129,14 @@ export class GpuMeshRenderPipelineManager {
             size: mesh.vertices.byteLength,
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
         });
-        device.queue.writeBuffer(this.vertexBuffer, 0, mesh.vertices);
+        device.queue.writeBuffer(this.vertexBuffer, 0, mesh.vertices as any);
 
         this.indexBuffer = device.createBuffer({
             label: "mesh index buffer",
             size: mesh.indices.byteLength,
             usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
         });
-        device.queue.writeBuffer(this.indexBuffer, 0, mesh.indices);
+        device.queue.writeBuffer(this.indexBuffer, 0, mesh.indices as any);
         this.indexCount = mesh.indices.length;
     }
 

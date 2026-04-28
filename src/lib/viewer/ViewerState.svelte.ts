@@ -1,12 +1,12 @@
 import { onDestroy, onMount } from "svelte";
 import { Camera } from "./Camera.svelte.ts";
 import { CameraOrbit } from "./CameraOrbit.svelte.ts";
-import { requestGpu } from "$/gpu/requestGpu.ts";
+import { requestGpu } from "$/gpu/requestGpu";
 import { GpuRunner } from "./GpuRunner.svelte.ts";
-import { loadGlb } from "$/gpu/loadGlb.ts";
+import { loadGlb } from "$/gpu/loadGlb";
 import artelorianUrl from "$/assets/artelorian.glb?url";
 import matcapUrl from "$/assets/overcast_soil_puresky_2k.png?url";
-import { loadTexture } from "$/gpu/loadTexture.ts";
+import { loadTexture } from "$/gpu/loadTexture";
 
 export class ViewerState {
     width = $state(300);
@@ -35,6 +35,7 @@ export class ViewerState {
     }) {
         const state = new ViewerState();
         
+        let stopLoop: (() => void) | null = null;
         onMount(async () => {
             // Kick off mesh load and gpu request concurrently; both are awaited
             // before we build the runner since the mesh is a constructor input.
@@ -58,14 +59,11 @@ export class ViewerState {
             });
             state.runner = gpuRunner;
 
-            const stopLoop = gpuRunner.loop();
-
-            return () => {
-                stopLoop();
-            };
+            stopLoop = gpuRunner.loop();
         });
 
         onDestroy(() => {
+            stopLoop?.();
             state.runner?.destroy();
         });
 
