@@ -520,7 +520,8 @@ export class GpuRunner {
                     this.optimWidth,
                     this.optimHeight,
                     32, // radius
-                    16  // sigma
+                    16, // sigma
+                    true // isSrgb
                 );
                 this.blurManager.blur(
                     commandEncoder,
@@ -530,7 +531,8 @@ export class GpuRunner {
                     this.optimWidth,
                     this.optimHeight,
                     32, // radius
-                    16  // sigma
+                    16, // sigma
+                    false // isSrgb
                 );
             }
 

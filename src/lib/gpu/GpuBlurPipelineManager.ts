@@ -4,13 +4,18 @@ export class GpuBlurPipelineManager {
     private readonly device: GPUDevice;
     private readonly pipeline: GPUComputePipeline;
     private readonly bindGroupLayout: GPUBindGroupLayout;
-    private readonly paramsBuffer: GPUBuffer;
+    private readonly hParamsBuffer: GPUBuffer;
+    private readonly vParamsBuffer: GPUBuffer;
 
     constructor(device: GPUDevice) {
         this.device = device;
 
-        this.paramsBuffer = device.createBuffer({
-            size: 16,
+        this.hParamsBuffer = device.createBuffer({
+            size: 48,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        this.vParamsBuffer = device.createBuffer({
+            size: 48,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -39,38 +44,43 @@ export class GpuBlurPipelineManager {
         width: number,
         height: number,
         radius: number,
-        sigma: number
+        sigma: number,
+        isSrgb: boolean = false
     ) {
-        const pass = commandEncoder.beginComputePass();
-        pass.setPipeline(this.pipeline);
-
         // Horizontal pass
-        this.device.queue.writeBuffer(this.paramsBuffer, 0, new Int32Array([1, 0, radius]));
-        this.device.queue.writeBuffer(this.paramsBuffer, 12, new Float32Array([sigma]));
+        const hFlags = isSrgb ? 1 : 0; // In: sRGB, Out: Linear
+        this.device.queue.writeBuffer(this.hParamsBuffer, 0, new Int32Array([1, 0, radius, hFlags]));
+        this.device.queue.writeBuffer(this.hParamsBuffer, 16, new Float32Array([sigma]));
         
         const hBindGroup = this.device.createBindGroup({
             layout: this.bindGroupLayout,
             entries: [
                 { binding: 0, resource: srcView },
                 { binding: 1, resource: tempView },
-                { binding: 2, resource: { buffer: this.paramsBuffer } },
+                { binding: 2, resource: { buffer: this.hParamsBuffer } },
             ],
         });
-        pass.setBindGroup(0, hBindGroup);
-        pass.dispatchWorkgroups(Math.ceil(width / 16), Math.ceil(height / 16));
 
         // Vertical pass
-        this.device.queue.writeBuffer(this.paramsBuffer, 0, new Int32Array([0, 1, radius]));
-        // sigma is already at 12
+        const vFlags = isSrgb ? 2 : 0; // In: Linear, Out: sRGB
+        this.device.queue.writeBuffer(this.vParamsBuffer, 0, new Int32Array([0, 1, radius, vFlags]));
+        this.device.queue.writeBuffer(this.vParamsBuffer, 16, new Float32Array([sigma]));
         
         const vBindGroup = this.device.createBindGroup({
             layout: this.bindGroupLayout,
             entries: [
                 { binding: 0, resource: tempView },
                 { binding: 1, resource: dstView },
-                { binding: 2, resource: { buffer: this.paramsBuffer } },
+                { binding: 2, resource: { buffer: this.vParamsBuffer } },
             ],
         });
+
+        const pass = commandEncoder.beginComputePass();
+        pass.setPipeline(this.pipeline);
+        
+        pass.setBindGroup(0, hBindGroup);
+        pass.dispatchWorkgroups(Math.ceil(width / 16), Math.ceil(height / 16));
+
         pass.setBindGroup(0, vBindGroup);
         pass.dispatchWorkgroups(Math.ceil(width / 16), Math.ceil(height / 16));
 
