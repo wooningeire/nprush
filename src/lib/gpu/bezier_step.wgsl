@@ -123,8 +123,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         else if (lp == 13u) { b.color.g = clamp(b.color.g - update, 0.05, 1.0); }
         else if (lp == 14u) { b.color.b = clamp(b.color.b - update, 0.05, 1.0); }
         else if (lp == 15u) { b.color.a = clamp(b.color.a - update, 0.00, 0.99); }
-        else if (lp == 16u) { b.p0.w = clamp(b.p0.w - update, 0.001, 0.5); }
-        else if (lp == 17u) { b.p1.w = clamp(b.p1.w - update, 0.001, 0.5); }
+        else if (lp == 16u) { b.p0.w = clamp(b.p0.w - update, 0.001, 0.01); }
+        else if (lp == 17u) { b.p1.w = clamp(b.p1.w - update, 0.001, 0.01); }
     }
 
     adc.grad_accum[bezier_id] += sqrt(pos_grad_norm2);

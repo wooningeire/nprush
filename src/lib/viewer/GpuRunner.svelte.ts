@@ -85,6 +85,8 @@ export class GpuRunner {
     private dummyTextureView: GPUTextureView | null = null;
     private optimBlurredTexture: GPUTexture | null = null;
     private optimBlurredTextureView: GPUTextureView | null = null;
+    private optimBlurredDepthTexture: GPUTexture | null = null;
+    private optimBlurredDepthTextureView: GPUTextureView | null = null;
     private optimTempTexture: GPUTexture | null = null;
     private optimTempTextureView: GPUTextureView | null = null;
     private optimWidth = 0;
@@ -277,6 +279,14 @@ export class GpuRunner {
         });
         this.optimBlurredTextureView = this.optimBlurredTexture.createView();
 
+        this.optimBlurredDepthTexture = this.device.createTexture({
+            label: "optimization blurred depth",
+            size: [ow, oh],
+            format: "rgba8unorm",
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.optimBlurredDepthTextureView = this.optimBlurredDepthTexture.createView();
+
         this.optimTempTexture = this.device.createTexture({
             label: "optimization temp blur target",
             size: [ow, oh],
@@ -309,8 +319,8 @@ export class GpuRunner {
 
         // Color layer: target is color + depth, background is splat output
         this.colorLayerBezierManager.setBackwardTarget(
-            this.optimTextureView,
-            this.optimDepthTextureView,
+            this.viewerState.compareBlurred ? this.optimBlurredTextureView! : this.optimTextureView!,
+            this.viewerState.compareBlurred ? this.optimBlurredDepthTextureView! : this.optimDepthTextureView!,
             this.optimSplatTextureView!,
             this.optimSplatDepthTextureView!,
             ow, oh
@@ -395,7 +405,7 @@ export class GpuRunner {
                     label: "full bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
-                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
                 });
                 this.fullBezierTextureView = this.fullBezierTexture.createView();
 
@@ -403,7 +413,7 @@ export class GpuRunner {
                     label: "full color bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
-                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
                 });
                 this.fullColorBezierTextureView = this.fullColorBezierTexture.createView();
 
@@ -512,15 +522,29 @@ export class GpuRunner {
                     32, // radius
                     16  // sigma
                 );
+                this.blurManager.blur(
+                    commandEncoder,
+                    this.optimDepthTextureView!,
+                    this.optimBlurredDepthTextureView!,
+                    this.optimTempTextureView!,
+                    this.optimWidth,
+                    this.optimHeight,
+                    32, // radius
+                    16  // sigma
+                );
             }
 
-            // 2. Run edge detection on optim-res depth
+            // 2. Run edge detection on optim-res depth (use blurred if enabled)
+            this.splatOptimizerManager.setEdgeTarget(
+                this.viewerState.compareBlurred ? this.optimBlurredDepthTextureView! : this.optimDepthTextureView!, 
+                this.optimEdgeTextureView!
+            );
             this.splatOptimizerManager.dispatchEdge(commandEncoder, this.optimWidth, this.optimHeight);
 
             // 3. Dispatch Splat Optimizer Compute Passes (uses optim-res texture + edge map)
             this.splatOptimizerManager.setBackwardTarget(
                 this.viewerState.compareBlurred ? this.optimBlurredTextureView! : this.optimTextureView!,
-                this.optimDepthTextureView!,
+                this.viewerState.compareBlurred ? this.optimBlurredDepthTextureView! : this.optimDepthTextureView!,
                 this.optimWidth,
                 this.optimHeight
             );
@@ -546,7 +570,7 @@ export class GpuRunner {
             if (this.viewerState.colorBeziersEnabled) {
                 this.colorLayerBezierManager.setBackwardTarget(
                     this.viewerState.compareBlurred ? this.optimBlurredTextureView! : this.optimTextureView!,
-                    this.optimDepthTextureView!,
+                    this.viewerState.compareBlurred ? this.optimBlurredDepthTextureView! : this.optimDepthTextureView!,
                     this.optimSplatTextureView!,
                     this.optimSplatDepthTextureView!,
                     this.optimWidth,

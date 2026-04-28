@@ -17,12 +17,17 @@ struct ForwardUniforms {
 }
 
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
-@group(0) @binding(1) var viewTex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(2) var<uniform> uniforms: ForwardUniforms;
+@group(0) @binding(1) var<uniform> uniforms: ForwardUniforms;
 
-const N_BEZIER_SEG: u32 = 16u;
+struct VsOut {
+    @builtin(position) pos: vec4f,
+    @location(0) color: vec4f,
+    @location(1) dist: f32,
+    @location(2) width: f32,
+    @location(3) softness: f32,
+}
 
-fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
+fn bezier_at(p0: vec3f, p1: vec3f, p2: vec3f, p3: vec3f, t: f32) -> vec3f {
     let omt = 1.0 - t;
     return omt*omt*omt * p0
          + 3.0 * omt*omt * t * p1
@@ -30,64 +35,77 @@ fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
          + t*t*t * p3;
 }
 
-fn project_center(vp: mat4x4f, pos3: vec3f, aspect: f32) -> vec3f {
-    let clip = vp * vec4f(pos3, 1.0);
-    return vec3f(clip.x / clip.w * aspect, clip.y / clip.w, clip.w);
+fn bezier_derivative_at(p0: vec3f, p1: vec3f, p2: vec3f, p3: vec3f, t: f32) -> vec3f {
+    let omt = 1.0 - t;
+    return 3.0 * omt*omt * (p1 - p0)
+         + 6.0 * omt * t * (p2 - p1)
+         + 3.0 * t*t * (p3 - p2);
 }
 
-@compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) global_id: vec3u) {
-    let dims = textureDimensions(viewTex);
-    if (global_id.x >= dims.x || global_id.y >= dims.y) {
-        return;
+@vertex
+fn vs_main(
+    @builtin(instance_index) ii: u32,
+    @builtin(vertex_index) vi: u32
+) -> VsOut {
+    let b = beziers.items[ii];
+    let num_segments = 16u;
+    let seg_idx = vi / 2u;
+    let side = f32(vi % 2u) * 2.0 - 1.0; // -1 or 1
+    
+    let t = f32(seg_idx) / f32(num_segments);
+    let p3 = bezier_at(b.p0.xyz, b.p1.xyz, b.p2.xyz, b.p3.xyz, t);
+    let dp3 = bezier_derivative_at(b.p0.xyz, b.p1.xyz, b.p2.xyz, b.p3.xyz, t);
+    
+    let proj = uniforms.vp * vec4f(p3, 1.0);
+    
+    // Simple culling
+    if (proj.w <= 0.0) {
+        return VsOut(vec4f(0.0), vec4f(0.0), 0.0, 0.0, 0.0);
     }
     
-    let aspect = f32(dims.x) / f32(dims.y);
-    let uv = (vec2f(global_id.xy) + vec2f(0.5)) / vec2f(dims.xy);
-    var p = uv * 2.0 - 1.0;
-    p.y = -p.y;
-    p.x = p.x * aspect;
+    let proj_next = uniforms.vp * vec4f(p3 + dp3 * 0.001, 1.0);
     
-    var Ts = 1.0;
-    var C_accum = vec3f(0.0);
-    for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
-        let b = beziers.items[i];
-        let width = max(b.p0.w, 0.001);
-        let softness = max(b.p1.w, 0.001);
-        let opacity = b.color.a;
-        if (opacity < 0.005) { continue; }
-
-        let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
-        let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
-        let proj2 = project_center(uniforms.vp, b.p2.xyz, aspect);
-        let proj3 = project_center(uniforms.vp, b.p3.xyz, aspect);
-
-        // Cull if any point is behind the camera (simplification for now)
-        if (proj0.z < 0.0 || proj1.z < 0.0 || proj2.z < 0.0 || proj3.z < 0.0) { continue; }
-
-        let p0 = proj0.xy;
-        let p1 = proj1.xy;
-        let p2 = proj2.xy;
-        let p3 = proj3.xy;
-
-        var min_d = 1e9;
-        var prev = p0;
-        for (var k = 1u; k <= N_BEZIER_SEG; k = k + 1u) {
-            let curr = bezier_at(p0, p1, p2, p3, f32(k) / f32(N_BEZIER_SEG));
-            let seg = curr - prev;
-            let len2 = max(dot(seg, seg), 1e-8);
-            let u = clamp(dot(p - prev, seg) / len2, 0.0, 1.0);
-            let proj = prev + u * seg;
-            min_d = min(min_d, length(p - proj));
-            prev = curr;
-        }
-
-        let inner = width - softness;
-        let outer = width + softness;
-        let a_geom = 1.0 - smoothstep(inner, outer, min_d);
-        var a = clamp(a_geom * opacity, 0.0, 0.999);
-        C_accum = C_accum + Ts * a * b.color.rgb;
-        Ts = Ts * (1.0 - a);
+    // NDC positions
+    let screen_p = proj.xy / proj.w;
+    let screen_p_next = proj_next.xy / proj_next.w;
+    
+    let aspect = uniforms.dims.x / uniforms.dims.y;
+    
+    // Calculate tangent and normal in aspect-corrected space
+    var tangent = vec2f(screen_p_next.x - screen_p.x, (screen_p_next.y - screen_p.y) / aspect);
+    if (length(tangent) < 1e-6) {
+        tangent = vec2f(1.0, 0.0);
+    } else {
+        tangent = normalize(tangent);
     }
-    textureStore(viewTex, global_id.xy, vec4f(C_accum, 1.0 - Ts));
+    
+    // Normal in NDC space (undo aspect correction)
+    let normal_ndc = vec2f(-tangent.y * aspect, tangent.x);
+    
+    let width = max(b.p0.w, 0.0001);
+    let softness = max(b.p1.w, 0.0001);
+    let total_radius = width + softness;
+    
+    let offset_pos = screen_p + normal_ndc * side * total_radius;
+    
+    var out: VsOut;
+    out.pos = vec4f(offset_pos * proj.w, proj.z, proj.w);
+    out.color = b.color;
+    out.dist = side * total_radius;
+    out.width = width;
+    out.softness = softness;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4f {
+    let dist = abs(in.dist);
+    let inner = in.width - in.softness;
+    let outer = in.width + in.softness;
+    let a_geom = 1.0 - smoothstep(inner, outer, dist);
+    let a = clamp(a_geom * in.color.a, 0.0, 0.999);
+    
+    if (a < 0.001) { discard; }
+    
+    return vec4f(in.color.rgb * a, a);
 }

@@ -2,12 +2,14 @@ import forwardModuleSrc from "./bezier_forward.wgsl?raw";
 
 export class GpuBezierForwardPipelineManager {
     private readonly device: GPUDevice;
-    private readonly pipeline: GPUComputePipeline;
+    private readonly pipeline: GPURenderPipeline;
     private readonly bindGroupLayout: GPUBindGroupLayout;
     private bindGroup: GPUBindGroup | null = null;
+    private targetView: GPUTextureView | null = null;
     private dims: { width: number, height: number } = { width: 0, height: 0 };
     private readonly bezierBuffer: GPUBuffer;
     private readonly bezierUniformsBuffer: GPUBuffer;
+    private readonly numBeziers: number;
 
     constructor({
         device,
@@ -20,6 +22,7 @@ export class GpuBezierForwardPipelineManager {
     }) {
         this.device = device;
         this.bezierBuffer = bezierBuffer;
+        this.numBeziers = numBeziers;
 
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier forward uniforms buffer",
@@ -29,9 +32,8 @@ export class GpuBezierForwardPipelineManager {
 
         this.bindGroupLayout = device.createBindGroupLayout({
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm" } },
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+                { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
             ],
         });
 
@@ -41,9 +43,34 @@ export class GpuBezierForwardPipelineManager {
             for (const msg of info.messages) console.warn(`[bezier_forward] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
 
-        this.pipeline = device.createComputePipeline({
+        this.pipeline = device.createRenderPipeline({
             layout: device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] }),
-            compute: { module, entryPoint: "main" },
+            vertex: {
+                module,
+                entryPoint: "vs_main",
+            },
+            fragment: {
+                module,
+                entryPoint: "fs_main",
+                targets: [{
+                    format: "rgba8unorm",
+                    blend: {
+                        color: {
+                            operation: "add",
+                            srcFactor: "one",
+                            dstFactor: "one-minus-src-alpha",
+                        },
+                        alpha: {
+                            operation: "add",
+                            srcFactor: "one",
+                            dstFactor: "one-minus-src-alpha",
+                        },
+                    },
+                }],
+            },
+            primitive: {
+                topology: "triangle-strip",
+            },
         });
     }
 
@@ -58,6 +85,7 @@ export class GpuBezierForwardPipelineManager {
     }
 
     setTarget(targetView: GPUTextureView, width: number, height: number) {
+        this.targetView = targetView;
         if (this.dims.width !== width || this.dims.height !== height) {
             this.dims = { width, height };
             this.device.queue.writeBuffer(this.bezierUniformsBuffer, 64, new Float32Array([width, height]));
@@ -67,18 +95,27 @@ export class GpuBezierForwardPipelineManager {
             layout: this.bindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
-                { binding: 1, resource: targetView },
-                { binding: 2, resource: { buffer: this.bezierUniformsBuffer } },
+                { binding: 1, resource: { buffer: this.bezierUniformsBuffer } },
             ],
         });
     }
 
     dispatch(commandEncoder: GPUCommandEncoder) {
-        if (!this.bindGroup) return;
-        const pass = commandEncoder.beginComputePass();
+        if (!this.bindGroup || !this.targetView) return;
+        const pass = commandEncoder.beginRenderPass({
+            label: "bezier forward pass",
+            colorAttachments: [
+                {
+                    view: this.targetView,
+                    clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+                    loadOp: "clear",
+                    storeOp: "store",
+                },
+            ],
+        });
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(this.dims.width / 16), Math.ceil(this.dims.height / 16));
+        pass.draw(34, this.numBeziers);
         pass.end();
     }
 }
