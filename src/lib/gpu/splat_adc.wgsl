@@ -1,7 +1,8 @@
 struct Splat {
-    transform: vec4f,
+    pos_sx: vec4f,
     color: vec4f,
-    rot_pad: vec4f,
+    quat: vec4f,
+    sy_shape: vec4f,
 }
 
 struct SplatArray {
@@ -26,23 +27,20 @@ struct ADCArray {
 @compute @workgroup_size(1, 1, 1)
 fn main() {
     var next_dead_search = 0u;
-    
     let ADC_PERIOD = 25.0;
     let TAU_POS = 0.00005;
     let SPLIT_SCALE_THRESHOLD = 0.01;
-    
-    // Pass 2: Clone or Split
+
     for (var i = 0u; i < NUM_SPLATS; i++) {
         var s = splats.splats[i];
-        if (s.color.a < 0.05) { continue; } // ignore dead
-        
+        if (s.color.a < 0.05) { continue; }
+
         let grad_accum = adc.grad_accum[i] / ADC_PERIOD;
-        adc.grad_accum[i] = 0.0; // Reset for next period
-        
+        adc.grad_accum[i] = 0.0;
+
         if (grad_accum > TAU_POS) {
-            let scale_norm = length(s.transform.zw);
-            
-            // Find next free slot by scanning forward
+            let scale_norm = length(vec2f(s.pos_sx.w, s.sy_shape.x));
+
             var found_dead = false;
             var new_idx = 0u;
             for (var d = next_dead_search; d < NUM_SPLATS; d++) {
@@ -53,42 +51,33 @@ fn main() {
                     break;
                 }
             }
-            if (!found_dead) {
-                next_dead_search = NUM_SPLATS;
-            }
-            
+            if (!found_dead) { next_dead_search = NUM_SPLATS; }
+
             if (found_dead) {
-                
                 var new_s = s;
-                
+
                 if (scale_norm > SPLIT_SCALE_THRESHOLD) {
-                    // Split: Divide scale by 1.6, perturb positions
-                    let split_factor = 0.625; // 1.0 / 1.6
-                    s.transform.z *= split_factor;
-                    s.transform.w *= split_factor;
-                    new_s.transform.z *= split_factor;
-                    new_s.transform.w *= split_factor;
-                    
-                    // Simple perturbation: move them apart along X axis based on their scale
-                    s.transform.x -= s.transform.z * 0.05;
-                    new_s.transform.x += s.transform.z * 0.05;
+                    let split_factor = 0.625;
+                    s.pos_sx.w *= split_factor;
+                    s.sy_shape.x *= split_factor;
+                    new_s.pos_sx.w *= split_factor;
+                    new_s.sy_shape.x *= split_factor;
+                    s.pos_sx.x -= s.pos_sx.w * 0.05;
+                    new_s.pos_sx.x += s.pos_sx.w * 0.05;
                 } else {
-                    // Clone: Keep same scale, slightly perturb position to avoid perfect overlap
                     let seed = f32(i) * 3.14159 + adam.t;
-                    new_s.transform.x += (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.002;
-                    new_s.transform.y += (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.002;
+                    new_s.pos_sx.x += (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.002;
+                    new_s.pos_sx.y += (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.002;
                 }
-                
-                // Write back
+
                 splats.splats[i] = s;
                 splats.splats[new_idx] = new_s;
-                
-                // Reset momentum (Adam state) for both original and new splat
-                for (var p = 0u; p < 11u; p++) {
-                    adam.m[i * 11u + p] = 0.0;
-                    adam.v[i * 11u + p] = 0.0;
-                    adam.m[new_idx * 11u + p] = 0.0;
-                    adam.v[new_idx * 11u + p] = 0.0;
+
+                for (var p = 0u; p < 15u; p++) {
+                    adam.m[i * 15u + p] = 0.0;
+                    adam.v[i * 15u + p] = 0.0;
+                    adam.m[new_idx * 15u + p] = 0.0;
+                    adam.v[new_idx * 15u + p] = 0.0;
                 }
             }
         }

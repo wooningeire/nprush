@@ -1,4 +1,5 @@
 import forwardModuleSrc from "./splat_forward.wgsl?raw";
+import type { Mat4 } from "wgpu-matrix";
 
 export class GpuSplatForwardPipelineManager {
     private readonly device: GPUDevice;
@@ -24,15 +25,16 @@ export class GpuSplatForwardPipelineManager {
         this.splatBuffer = splatBuffer;
         this.numSplats = numSplats;
 
+        // VP matrix (64 bytes) + dims (8 bytes) + pad (8 bytes) = 80 bytes
         this.uniformsBuffer = device.createBuffer({
-            size: 8, // vec2f
+            size: 80,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
         this.bindGroupLayout = device.createBindGroupLayout({
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
-                { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+                { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
             ],
         });
 
@@ -71,11 +73,22 @@ export class GpuSplatForwardPipelineManager {
         });
     }
 
+    writeVPMatrix(mat: Mat4) {
+        this.device.queue.writeBuffer(
+            this.uniformsBuffer,
+            0,
+            (mat as Float32Array).buffer,
+            (mat as Float32Array).byteOffset,
+            (mat as Float32Array).byteLength
+        );
+    }
+
     setTarget(targetView: GPUTextureView, width: number, height: number) {
         this.targetView = targetView;
         if (this.dims.width !== width || this.dims.height !== height) {
             this.dims = { width, height };
-            this.device.queue.writeBuffer(this.uniformsBuffer, 0, new Float32Array([width, height]));
+            // Write dims at offset 64 (after the mat4x4)
+            this.device.queue.writeBuffer(this.uniformsBuffer, 64, new Float32Array([width, height]));
         }
     }
 

@@ -3,6 +3,7 @@ import stepModuleSrc from "./splat_step.wgsl?raw";
 import renderModuleSrc from "./splat_render.wgsl?raw";
 import adcModuleSrc from "./splat_adc.wgsl?raw";
 import edgeModuleSrc from "./splat_edge.wgsl?raw";
+import type { Mat4 } from "wgpu-matrix";
 
 export class GpuSplatOptimizerManager {
     private readonly device: GPUDevice;
@@ -15,6 +16,7 @@ export class GpuSplatOptimizerManager {
     readonly adamBuffer: GPUBuffer;
     readonly adcBuffer: GPUBuffer;
     readonly renderUniformsBuffer: GPUBuffer;
+    readonly splatUniformsBuffer: GPUBuffer;
 
     private readonly backwardPipeline: GPUComputePipeline;
     private readonly stepPipeline: GPUComputePipeline;
@@ -46,49 +48,40 @@ export class GpuSplatOptimizerManager {
         device: GPUDevice,
         format: GPUTextureFormat,
         numSplats?: number,
-        // Bezier-curve count of the edge layer rendered by this instance's
-        // render shader. The render pipeline composites both the splat color
-        // layer and the bezier edge layer and needs a separate compile-time
-        // constant for the bezier loop bound. Only meaningful for the instance
-        // that owns the visualization; if omitted the bezier loop compiles to
-        // zero iterations (the edge layer is simply not rendered).
         numBeziers?: number,
     }) {
         this.device = device;
         this.numSplats = numSplats;
-        this.numParams = numSplats * 11;
-        // Wait, we don't need numBeziersRender for the render pipeline loop
-        // anymore since the bezier loop is gone from splat_render.wgsl!
-        // We will keep numBeziers here so the constructor signature stays the same.
+        this.numParams = numSplats * 15;
         
-        // Init Buffers
-        const splatData = new Float32Array(this.numSplats * 12);
+        // Init Buffers — 4 × vec4f = 16 floats per splat
+        const splatData = new Float32Array(this.numSplats * 16);
         for (let i = 0; i < this.numSplats; i++) {
-            const o = i * 12;
-            // position: cluster near center
-            splatData[o + 0] = (Math.random() * 2 - 1) * 0.5;
-            splatData[o + 1] = (Math.random() * 2 - 1) * 0.5;
-            // scale: start small
-            splatData[o + 2] = 0.1 + Math.random() * 0.15;
-            splatData[o + 3] = 0.1 + Math.random() * 0.15;
-            
-            // color
+            const o = i * 16;
+            // pos_sx: x, y, z, sx
+            splatData[o + 0] = (Math.random() * 2 - 1) * 0.3;
+            splatData[o + 1] = (Math.random() * 2 - 1) * 0.3;
+            splatData[o + 2] = (Math.random() * 2 - 1) * 0.3;
+            splatData[o + 3] = 0.1 + Math.random() * 0.15;  // sx
+            // color: r, g, b, opacity
             splatData[o + 4] = Math.random();
             splatData[o + 5] = Math.random();
             splatData[o + 6] = Math.random();
-            // opacity: moderate for first 512, dead for the rest
             if (i < 512) {
                 splatData[o + 7] = 0.3 + Math.random() * 0.4;
             } else {
                 splatData[o + 7] = 0.0;
             }
-            
-            // rotation
-            splatData[o + 8] = Math.random() * Math.PI * 2;
-            // shape_a (power)
-            splatData[o + 9] = 2.0;
-            // shape_b (multiplier)
-            splatData[o + 10] = 0.5;
+            // quat: qw, qx, qy, qz — identity
+            splatData[o + 8] = 1.0;
+            splatData[o + 9] = 0.0;
+            splatData[o + 10] = 0.0;
+            splatData[o + 11] = 0.0;
+            // sy_shape: sy, shape_a, shape_b, pad
+            splatData[o + 12] = 0.1 + Math.random() * 0.15; // sy
+            splatData[o + 13] = 2.0;  // shape_a
+            splatData[o + 14] = 0.5;  // shape_b
+            splatData[o + 15] = 0.0;  // pad
         }
 
         this.splatBuffer = device.createBuffer({
@@ -123,9 +116,13 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
-        // Order matters: NUM_SPLATS_PLUS_ONE / NUM_SPLATS_MINUS_ONE must be
-        // replaced BEFORE NUM_SPLATS, because the latter is a substring of
-        // each and the regexes are unanchored.
+        // VP matrix for backward and forward shaders (mat4x4f = 64 bytes)
+        this.splatUniformsBuffer = device.createBuffer({
+            label: "splat VP uniforms buffer",
+            size: 64,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
         const injectConstants = (src: string) => src
             .replace(/NUM_SPLATS_PLUS_ONE/g, `${this.numSplats + 1}u`)
             .replace(/NUM_SPLATS_MINUS_ONE/g, `${this.numSplats - 1}u`)
@@ -133,13 +130,14 @@ export class GpuSplatOptimizerManager {
             .replace(/NUM_SPLATS/g, `${this.numSplats}u`)
             .replace(/NUM_PARAMS/g, `${this.numParams}u`);
 
-        // Backward Pipeline
+        // Backward Pipeline — now has 5 bindings (splats, grads, target, edge, VP uniform)
         this.backwardBindGroupLayout = device.createBindGroupLayout({
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
             ],
         });
         const backwardModule = device.createShaderModule({ label: "splat backward", code: injectConstants(backwardModuleSrc) });
@@ -236,6 +234,16 @@ export class GpuSplatOptimizerManager {
         this.renderBindGroupLayout = this.renderPipeline.getBindGroupLayout(0);
     }
 
+    writeSplatVPMatrix(mat: Mat4) {
+        this.device.queue.writeBuffer(
+            this.splatUniformsBuffer,
+            0,
+            (mat as Float32Array).buffer,
+            (mat as Float32Array).byteOffset,
+            (mat as Float32Array).byteLength
+        );
+    }
+
     setBackwardTarget(targetTextureView: GPUTextureView, targetEdgeTextureView: GPUTextureView, width: number, height: number) {
         this.dims = { width, height };
         
@@ -246,6 +254,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 1, resource: { buffer: this.gradBuffer } },
                 { binding: 2, resource: targetTextureView },
                 { binding: 3, resource: targetEdgeTextureView },
+                { binding: 4, resource: { buffer: this.splatUniformsBuffer } },
             ],
         });
     }
@@ -293,7 +302,6 @@ export class GpuSplatOptimizerManager {
 
         const pass = commandEncoder.beginComputePass();
         
-        // Run optimization step
         pass.setPipeline(this.backwardPipeline);
         pass.setBindGroup(0, this.backwardBindGroup);
         pass.dispatchWorkgroups(Math.ceil(this.dims.width / 16), Math.ceil(this.dims.height / 16));

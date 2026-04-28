@@ -1,7 +1,8 @@
 struct Splat {
-    transform: vec4f,
-    color: vec4f,
-    rot_pad: vec4f,
+    pos_sx: vec4f,    // x, y, z, sx
+    color: vec4f,     // r, g, b, opacity
+    quat: vec4f,      // qw, qx, qy, qz
+    sy_shape: vec4f,  // sy, shape_a, shape_b, _pad
 }
 
 struct SplatArray {
@@ -11,35 +12,39 @@ struct SplatArray {
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
 
 struct ForwardUniforms {
+    vp: mat4x4f,
     dims: vec2f,
+    _pad: vec2f,
 }
 @group(0) @binding(1) var<uniform> uniforms: ForwardUniforms;
 
 struct VsOut {
     @builtin(position) pos: vec4f,
-    @location(0) splat_p: vec2f,
+    @location(0) local_p: vec2f,
     @location(1) @interpolate(flat) instance_idx: u32,
+}
+
+fn quat_rotate(q: vec4f, v: vec3f) -> vec3f {
+    let t = 2.0 * cross(q.yzw, v);
+    return v + q.x * t + cross(q.yzw, t);
 }
 
 @vertex
 fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut {
-    // Render back-to-front by reversing the instance index
     let splat_idx = NUM_SPLATS - 1u - ii;
     let s = splats.splats[splat_idx];
     
-    // Opacity drops to 0 when power = -shape_b * pow(R, shape_a) <= -15.0.
-    // -15.0 is the cutoff used in the backward pass.
-    let shape_a = s.rot_pad.y;
-    let shape_b = s.rot_pad.z;
-    // Solve: shape_b * pow(R, shape_a) = 15.0
+    let pos3 = s.pos_sx.xyz;
+    let sx = max(s.pos_sx.w, 0.0001);
+    let sy = max(s.sy_shape.x, 0.0001);
+    let shape_a = s.sy_shape.y;
+    let shape_b = s.sy_shape.z;
+    let q = s.quat;
+    
     let safe_shape_b = max(shape_b, 0.0001);
     let R = pow(15.0 / safe_shape_b, 1.0 / shape_a);
     
-    let scale = max(vec2f(0.0001), s.transform.zw);
-    let rot = s.rot_pad.x;
-    let pos = s.transform.xy;
-    
-    // Local quad vertices (unscaled, unrotated)
+    // Local quad vertices — these ARE the scaled_p coordinates
     var lx: f32; var ly: f32;
     switch vi {
         case 0u: { lx = -R; ly = -R; }
@@ -50,25 +55,18 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
         default: { lx =  R; ly =  R; }
     }
     
-    let local_p = vec2f(lx, ly) * scale;
+    // Scale then rotate into world space
+    let local_offset = vec3f(lx * sx, ly * sy, 0.0);
+    let world_offset = quat_rotate(q, local_offset);
+    let world_pos = pos3 + world_offset;
     
-    // Rotate
-    let co = cos(rot);
-    let si = sin(rot);
-    let world_offset = vec2f(
-        co * local_p.x - si * local_p.y,
-        si * local_p.x + co * local_p.y
-    );
-    
-    let p = pos + world_offset;
-    
-    let aspect = uniforms.dims.x / uniforms.dims.y;
-    let ndc_x = p.x / aspect;
-    let ndc_y = p.y;
+    let clip = uniforms.vp * vec4f(world_pos, 1.0);
     
     var o: VsOut;
-    o.pos = vec4f(ndc_x, ndc_y, 0.0, 1.0);
-    o.splat_p = p;
+    o.pos = clip;
+    // Pass the unscaled local coords — they interpolate correctly
+    // because the quad is planar in splat-local space
+    o.local_p = vec2f(lx, ly);
     o.instance_idx = splat_idx;
     return o;
 }
@@ -76,15 +74,12 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
 @fragment
 fn frag(v: VsOut) -> @location(0) vec4f {
     let s = splats.splats[v.instance_idx];
-    let d = v.splat_p - s.transform.xy;
-    let rot = s.rot_pad.x;
-    let co = cos(rot);
-    let si = sin(rot);
-    let lp = vec2f(co * d.x + si * d.y, -si * d.x + co * d.y);
-    let ss = max(vec2f(0.0001), s.transform.zw);
-    let sp = lp / ss;
-    let r = max(length(sp), 0.0001);
-    let pw = -s.rot_pad.z * pow(r, s.rot_pad.y);
+    let shape_a = s.sy_shape.y;
+    let shape_b = s.sy_shape.z;
+    
+    // v.local_p is already scaled_p (local coordinates / scale)
+    let r = max(length(v.local_p), 0.0001);
+    let pw = -shape_b * pow(r, shape_a);
 
     var a = 0.0;
     if (pw > -15.0) {

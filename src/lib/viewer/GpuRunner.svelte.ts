@@ -138,6 +138,8 @@ export class GpuRunner {
             $effect(() => this.uniformsManager.writeViewMat(this.camera.viewMat));
             $effect(() => this.uniformsManager.writeShadingMode(this.viewerState.shadingMode));
             $effect(() => this.splatOptimizerManager.writeRenderUniforms(this.viewerState.beziersEnabled));
+            $effect(() => this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat));
+            $effect(() => this.splatForwardManager.writeVPMatrix(this.camera.viewProjMat));
         });
     }
 
