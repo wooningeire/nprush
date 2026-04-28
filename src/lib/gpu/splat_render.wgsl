@@ -39,7 +39,7 @@ fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
 }
 
 const STRIP_HEIGHT: f32 = 0.18;
-const NUM_PANELS: f32 = 7.0;
+const NUM_PANELS: f32 = 8.0;
 
 // Fit a source with given aspect into a panel with given aspect
 fn fitInPanel(panel_uv: vec2f, panel_aspect: f32, src_aspect: f32) -> vec2f {
@@ -153,12 +153,50 @@ fn frag(v: VsOut) -> @location(0) vec4f {
             let px = vec2i(fitted * vec2f(textureDimensions(bezierViewTex)));
             let e = textureLoad(bezierViewTex, px, 0).r;
             return vec4f(e, e, e, 1.0);
-        } else {
+        } else if (panel_idx < 6.5) {
             // Panel 6: Color Bezier layer
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * vec2f(textureDimensions(colorBezierViewTex)));
             return textureLoad(colorBezierViewTex, px, 0);
+        } else {
+            // Panel 7: Edge-preserving blurred target
+            let fitted = fitInPanel(panel_uv, panel_aspect, target_aspect);
+            if (fitted.x < 0.0) { return bg; }
+            let px_f = fitted * dims;
+            let px = vec2i(px_f);
+            
+            let center_col = textureLoad(targetTex, px, 0).rgb;
+            let center_depth = textureLoad(targetDepthTex, px, 0).r;
+            
+            var sum_col = vec3f(0.0);
+            var sum_w = 0.0;
+            
+            let sigma_s = 10.0; // Spatial sigma
+            let sigma_c = 0.5; // Color sigma
+            let sigma_d = 0.5; // Depth sigma
+            
+            for (var dy = -15; dy <= 15; dy++) {
+                for (var dx = -15; dx <= 15; dx++) {
+                    let n_px = px + vec2i(dx, dy);
+                    if (n_px.x < 0 || n_px.x >= i32(dims.x) || n_px.y < 0 || n_px.y >= i32(dims.y)) { continue; }
+                    
+                    let n_col = textureLoad(targetTex, n_px, 0).rgb;
+                    let n_depth = textureLoad(targetDepthTex, n_px, 0).r;
+                    
+                    let d2 = f32(dx*dx + dy*dy);
+                    let dc2 = dot(n_col - center_col, n_col - center_col);
+                    let dd2 = (n_depth - center_depth) * (n_depth - center_depth);
+                    
+                    let w = exp(-d2 / (2.0 * sigma_s * sigma_s)) * 
+                            exp(-dc2 / (2.0 * sigma_c * sigma_c)) *
+                            exp(-dd2 / (2.0 * sigma_d * sigma_d));
+                             
+                    sum_col += n_col * w;
+                    sum_w += w;
+                }
+            }
+            return vec4f(sum_col / max(sum_w, 1e-5), 1.0);
         }
     }
     

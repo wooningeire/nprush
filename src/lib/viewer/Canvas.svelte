@@ -21,6 +21,8 @@ const STRIP_LABELS = [
     "Target Edges",
     "Splat Edges",
     "Bezier Edges",
+    "Color Beziers",
+    "Blurred Target",
 ];
 </script>
 
