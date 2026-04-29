@@ -41,7 +41,7 @@ fn main() {
         }
     }
 
-    let ADC_PERIOD = 100.0;
+    let ADC_PERIOD = 50.0;
     let TAU_POS = 0.0002;       // must be moving to clone
     let TAU_LOSS = 0.001;       // kill if stuck AND contributing to loss
     let SPLIT_LEN_THRESHOLD = 0.25;

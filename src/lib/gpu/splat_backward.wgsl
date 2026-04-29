@@ -190,7 +190,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     D_pred += Ts[splat_count] * 1.0;
     
     let dC = 2.0 * (C_pred - tgt_color);
-    let dD = 2.0 * (D_pred - tgt_depth);
+    // Only apply depth loss on foreground pixels — background depth (≈1.0) would
+    // fight the color loss and prevent splats from covering the background.
+    let is_foreground = tgt_depth < 0.99;
+    let dD = select(0.0, 2.0 * (D_pred - tgt_depth), is_foreground);
     var dT_C = dot(dC, background);
     var dT_D = dD * 1.0;
 
