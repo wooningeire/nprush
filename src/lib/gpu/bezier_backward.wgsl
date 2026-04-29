@@ -268,7 +268,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     dT += -d_coverage_edge;
 
     // Color mode: penalize opacity directly on background pixels (tgt_depth ≈ 1 = no geometry).
-    // Computed per-bezier in the backward loop below; is_background is used there.
+    // With reciprocal depth encoding, mesh surface pixels are well below 1.0 and
+    // background (clear value) is exactly 1.0. Use a threshold that only catches
+    // the true background clear value.
     let is_background = step(0.995, tgt_depth);
 
     let FP_SCALE_POS = 10000.0;

@@ -170,6 +170,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var C_pred = vec3f(0.0);
     var D_pred = 0.0;
 
+    // Reciprocal depth encoding matching mesh.wgsl: 1 - DEPTH_NEAR / depth
+    // This gives high precision for nearby objects stored in the 8-bit depth texture.
+    const DEPTH_NEAR = 0.1;
+
     for (var idx = 0u; idx < splat_count; idx++) {
         let i = tile_splats[idx];
         let s = splats.splats[i];
@@ -180,7 +184,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let a = clamp(select(0.0, exp(power) * s.color.a, power > -15.0), 0.0, 0.999);
         alphas[idx] = a;
         C_pred += Ts[idx] * a * s.color.rgb;
-        let depth = clamp(ps.w / 10.0, 0.0, 1.0);
+        let linear_depth = max(ps.w, DEPTH_NEAR);
+        let depth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
         D_pred += Ts[idx] * a * depth;
         Ts[idx+1] = Ts[idx] * (1.0 - a);
     }
@@ -190,8 +195,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     D_pred += Ts[splat_count] * 1.0;
     
     let dC = 2.0 * (C_pred - tgt_color);
-    // Only apply depth loss on foreground pixels — background depth (≈1.0) would
-    // fight the color loss and prevent splats from covering the background.
+    // Only apply depth loss on foreground pixels — background depth (1.0) would
+    // fight the color loss and prevent splats from covering the model.
+    // With reciprocal encoding, mesh surface pixels are well below 1.0.
     let is_foreground = tgt_depth < 0.99;
     let dD = select(0.0, 2.0 * (D_pred - tgt_depth), is_foreground);
     var dT_C = dot(dC, background);
@@ -207,9 +213,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let opacity = s.color.a;
         let T_prev = Ts[idx];
         let ps = eval_splat(s, p, aspect);
-        let depth = clamp(ps.w / 10.0, 0.0, 1.0);
 
         let dColor = dC * (T_prev * a);
+        let linear_depth_bwd = max(ps.w, DEPTH_NEAR);
+        let depth = clamp(1.0 - DEPTH_NEAR / linear_depth_bwd, 0.0, 1.0);
         let da_C = dT_C * (-T_prev) + dot(dC, T_prev * color);
         let da_D = dT_D * (-T_prev) + dD * T_prev * depth;
         let da = da_C + da_D;
@@ -304,7 +311,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             let ds_dx = aspect * (vp_0j * w - ps.clip_xy.x * vp_3j) / w2;
             let ds_dy = (vp_1j * w - ps.clip_xy.y * vp_3j) / w2;
             d_pos[ax] = d_screen.x * ds_dx + d_screen.y * ds_dy;
-            d_pos[ax] += select(0.0, vp_3j / 10.0 * d_depth, ps.w > 0.0 && ps.w < 10.0);
+            // d(depth)/d(w) for reciprocal encoding: depth = 1 - DEPTH_NEAR/w => d/dw = DEPTH_NEAR/w²
+            // d(w)/d(pos[ax]) = VP[3][ax] (homogeneous row)
+            let d_depth_d_w = DEPTH_NEAR / (w * w);
+            d_pos[ax] += select(0.0, vp_3j * d_depth_d_w * d_depth, ps.w > DEPTH_NEAR);
         }
 
         // d_ax_screen -> d_quat (approximate: ignore Jacobian's dependence on quat)

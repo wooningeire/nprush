@@ -90,8 +90,13 @@ fn frag(v: VsOut) -> FragOut {
         discard;
     }
     
+    // Reciprocal depth encoding matching mesh.wgsl: 1 - DEPTH_NEAR / w
+    const DEPTH_NEAR = 0.1;
+    let linear_depth = max(v.depth, DEPTH_NEAR);
+    let enc_depth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
+
     var out: FragOut;
     out.color = vec4f(s.color.rgb, a);
-    out.depth = vec4f(v.depth, v.depth, v.depth, a);
+    out.depth = vec4f(enc_depth, enc_depth, enc_depth, a);
     return out;
 }
