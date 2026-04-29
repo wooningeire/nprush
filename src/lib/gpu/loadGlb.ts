@@ -101,16 +101,24 @@ interface GlbJson {
     materials?: GlbMaterial[];
 }
 
-export async function loadGlb(url: string, normalize = true): Promise<MeshData> {
+export async function loadGlb(
+    url: string,
+    normalize = true,
+    materialOverride?: [number, number, number, number],
+): Promise<MeshData> {
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`Failed to fetch ${url}: ${response.status}`);
     }
     const buffer = await response.arrayBuffer();
-    return parseGlb(buffer, normalize);
+    return parseGlb(buffer, normalize, materialOverride);
 }
 
-function parseGlb(buffer: ArrayBuffer, normalize = true): MeshData {
+function parseGlb(
+    buffer: ArrayBuffer,
+    normalize = true,
+    materialOverride?: [number, number, number, number],
+): MeshData {
     const dv = new DataView(buffer);
     if (dv.getUint32(0, true) !== GLB_MAGIC) {
         throw new Error("Not a GLB: bad magic");
@@ -147,7 +155,7 @@ function parseGlb(buffer: ArrayBuffer, normalize = true): MeshData {
 
     const identity = mat4.identity();
     for (const nodeIdx of rootNodes) {
-        walkNode(json, bin, nodeIdx, identity, positions, normals, colors, indices);
+        walkNode(json, bin, nodeIdx, identity, positions, normals, colors, indices, materialOverride);
     }
 
     if (positions.length === 0) {
@@ -190,6 +198,7 @@ function walkNode(
     outNormals: number[],
     outColors: number[],
     outIndices: number[],
+    materialOverride?: [number, number, number, number],
 ) {
     const node = json.nodes![nodeIdx];
     const local = nodeMatrix(node);
@@ -209,9 +218,12 @@ function walkNode(
                 normals = readAccessor(json, bin, prim.attributes.NORMAL) as Float32Array;
             }
 
-            // Read material base color factor (default white)
+            // Read material base color factor (default white).
+            // materialOverride takes precedence over the GLB material.
             let matColor: [number, number, number, number] = [1, 1, 1, 1];
-            if (prim.material !== undefined && json.materials) {
+            if (materialOverride) {
+                matColor = materialOverride;
+            } else if (prim.material !== undefined && json.materials) {
                 const mat = json.materials[prim.material];
                 const bc = mat?.pbrMetallicRoughness?.baseColorFactor;
                 if (bc) matColor = bc;
@@ -260,7 +272,7 @@ function walkNode(
 
     if (node.children) {
         for (const childIdx of node.children) {
-            walkNode(json, bin, childIdx, xform, outPositions, outNormals, outColors, outIndices);
+            walkNode(json, bin, childIdx, xform, outPositions, outNormals, outColors, outIndices, materialOverride);
         }
     }
 }

@@ -44,18 +44,19 @@ fn rand2(seed: ptr<function, u32>) -> vec2f {
 }
 
 // ── Geometry ──────────────────────────────────────────────────────────────────
-struct Vertex { pos: vec3f, norm: vec3f, color: vec3f }
+// color.a encodes material type: 1.0 = diffuse, 0.0 = perfect specular mirror
+struct Vertex { pos: vec3f, norm: vec3f, color: vec4f }
 
 fn load_vert(idx: u32) -> Vertex {
     let b = idx * VSTRIDE;
     return Vertex(
         vec3f(vertices[b],   vertices[b+1u], vertices[b+2u]),
         vec3f(vertices[b+3u],vertices[b+4u], vertices[b+5u]),
-        vec3f(vertices[b+6u],vertices[b+7u], vertices[b+8u]),
+        vec4f(vertices[b+6u],vertices[b+7u], vertices[b+8u], vertices[b+9u]),
     );
 }
 
-struct Hit { hit: bool, t: f32, norm: vec3f, color: vec3f }
+struct Hit { hit: bool, t: f32, norm: vec3f, color: vec4f }
 
 fn intersect_tri(ro: vec3f, rd: vec3f, i0: u32, i1: u32, i2: u32, t_max: f32) -> Hit {
     var res: Hit; res.hit = false;
@@ -199,9 +200,16 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             break;
         }
         let n = select(hit.norm, -hit.norm, dot(hit.norm, ray_d) > 0.0);
-        throughput *= hit.color; // diffuse: albedo (cos/pi and pdf cancel)
-        ray_o = ray_o + ray_d * hit.t + n * 5e-4;
-        ray_d = cosine_hemisphere(n, &seed);
+        let is_specular = hit.color.a < 0.5;
+        if (is_specular) {
+            // Perfect mirror: reflect ray, throughput unchanged (no albedo tint)
+            ray_o = ray_o + ray_d * hit.t + n * 5e-4;
+            ray_d = reflect(ray_d, n);
+        } else {
+            throughput *= hit.color.rgb; // diffuse: albedo (cos/pi and pdf cancel)
+            ray_o = ray_o + ray_d * hit.t + n * 5e-4;
+            ray_d = cosine_hemisphere(n, &seed);
+        }
     }
 
     let base = pixel_idx * 4u;

@@ -48,7 +48,7 @@ export class ViewerState {
             const [gpu, mesh, groundMesh] = await Promise.all([
                 requestGpu({ canvas: await canvasPromise }),
                 loadGlb(artelorianUrl),
-                loadGlb(groundUrl, false).catch(() => null), // keep world-space translation
+                loadGlb(groundUrl, false, [1, 1, 1, 0]).catch(() => null), // keep world-space; a=0 flags as specular mirror
             ]);
             if (!gpu) return;
 
