@@ -232,6 +232,15 @@ export class GpuBezierOptimizerManager {
         );
     }
 
+    writeMaxWidth(maxWidth: number = 0) {
+        // Writes into StepUniforms.max_width (offset 68). 0 = use default cap.
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            68,
+            new Float32Array([maxWidth])
+        );
+    }
+
     setBackwardTarget(
         targetTextureView: GPUTextureView,
         targetDepthTextureView: GPUTextureView,

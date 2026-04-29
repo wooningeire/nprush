@@ -28,7 +28,8 @@ struct ADCArray {
 struct StepUniforms {
     vp: mat4x4f,
     mode: f32,
-    _pad: vec3f,
+    max_width: f32, // 0 = use default cap (0.05)
+    _pad: vec2f,
 }
 
 @group(0) @binding(0) var<storage, read_write> beziers: BezierArray;
@@ -58,7 +59,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     // lr per param: 0-11=positions (0.005), 12-14=color (0.02), 15=opacity (0.01), 16-17=width/softness (0.002)
     const lr_table = array<f32, 18>(
-        0.0001, 0.0001, 0.0001, 0.005, 0.005, 0.005,
+        0.00001, 0.00001, 0.00001, 0.005, 0.005, 0.005,
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.02,  0.02,  0.02,  0.01,  0.002, 0.002
     );
@@ -118,10 +119,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
             -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
             0.05, 0.05, 0.05, 0.00, 0.001, 0.001
         );
+        let width_hi = select(0.05, uniforms.max_width, uniforms.max_width > 0.0);
         let hi = array<f32, 18>(
             1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
             1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
-            1.0, 1.0, 1.0, 0.99, 0.05, 0.03
+            1.0, 1.0, 1.0, 0.99, width_hi, 0.03
         );
         params_arr[lp] = clamp(params_arr[lp] - update, lo[lp], hi[lp]);
         b.p0    = vec4f(params_arr[0],  params_arr[1],  params_arr[2],  params_arr[16]);

@@ -212,6 +212,7 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.writeMode(0); // Edge mode
                 this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
+                this.colorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on second color layer
             });
         });
     }
