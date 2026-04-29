@@ -270,8 +270,14 @@ export class GpuRunner {
                 this.colorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.colorLayerBezierManager.writeNoKill(true);
                 this.colorLayerBezierManager.writeBgPenalty(3.0);
-                // Base color layer: no background penalty (blurred target bleeds into bg)
+                // Base color layer: no background penalty (blurred target bleeds into bg).
+                // Enable no_kill so broad strokes aren't pruned before they settle —
+                // the ADC stuck+loss kill was the main source of base-layer jitter.
+                // Longer ADC period reduces clone/kill churn on broad strokes.
                 this.baseColorLayerBezierManager.writeBgPenalty(0.0);
+                this.baseColorLayerBezierManager.writeNoKill(true);
+                this.baseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
+                this.baseColorLayerBezierManager.setAdcPeriod(150);
             });
         });
     }

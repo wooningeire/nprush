@@ -38,6 +38,7 @@ export class GpuBezierOptimizerManager {
 
     private backwardBindGroup: GPUBindGroup | null = null;
     private stepCount: number = 0;
+    private adcPeriod: number = 50;
 
     private dims: { width: number, height: number } = { width: 0, height: 0 };
 
@@ -302,6 +303,10 @@ export class GpuBezierOptimizerManager {
         );
     }
 
+    setAdcPeriod(period: number) {
+        this.adcPeriod = period;
+    }
+
     writeNoKill(noKill: boolean) {
         // Writes adam.no_kill flag at offset numParams*8 + 8 (after t and pixel_count).
         this.device.queue.writeBuffer(
@@ -366,7 +371,7 @@ export class GpuBezierOptimizerManager {
         // averaging divisor). Less frequent ADC reduces churn so transient
         // strays from clone+parent edge competition don't accumulate.
         this.stepCount++;
-        if (this.stepCount % 50 === 0) {
+        if (this.stepCount % this.adcPeriod === 0) {
             pass.setPipeline(this.adcPipeline);
             pass.setBindGroup(0, this.adcBindGroup);
             pass.dispatchWorkgroups(1);

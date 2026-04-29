@@ -61,8 +61,11 @@ fn vs_main(
     let proj2 = project_to_screen(uniforms.vp, b.p2.xyz, aspect);
     let proj3 = project_to_screen(uniforms.vp, b.p3.xyz, aspect);
 
-    // Cull if any control point is behind camera
-    if (proj0.z < 0.0 || proj1.z < 0.0 || proj2.z < 0.0 || proj3.z < 0.0) {
+    // Cull only if ALL control points are behind camera (w < 0).
+    // Culling on any single point is too aggressive — a curve can still be
+    // partially visible even when one control point is behind the near plane,
+    // and the flicker from toggling this cull is a major source of jitter.
+    if (proj0.z < 0.0 && proj1.z < 0.0 && proj2.z < 0.0 && proj3.z < 0.0) {
         var out: VsOut;
         out.pos = vec4f(0.0, 0.0, 0.0, -1.0); // degenerate
         out.bezier_idx = bezier_idx;

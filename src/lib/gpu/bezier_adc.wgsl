@@ -87,7 +87,10 @@ fn main() {
     let TAU_LOSS = 0.001;       // kill if stuck AND contributing to loss
     let SPLIT_LEN_THRESHOLD = 0.25;
 
-    adam.t = 0.0;
+    // Do NOT reset adam.t here — resetting it spikes the Adam bias correction
+    // back to its initial high value, which causes a learning-rate surge every
+    // ADC cycle and is the primary source of post-ADC jitter.
+    // adam.t = 0.0;
 
     // --- Pass 1: Kill offscreen or stuck/high-loss curves ---
     for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
