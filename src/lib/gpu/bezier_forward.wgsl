@@ -53,6 +53,8 @@ fn vs_main(
     let side = f32(vi % 2u) * 2.0 - 1.0; // -1 or 1
     
     let t = f32(seg_idx) / f32(num_segments);
+    let pressure = smoothstep(0.0, 0.5, t) * smoothstep(1.0, 0.5, t);
+    
     let p3 = bezier_at(b.p0.xyz, b.p1.xyz, b.p2.xyz, b.p3.xyz, t);
     let dp3 = bezier_derivative_at(b.p0.xyz, b.p1.xyz, b.p2.xyz, b.p3.xyz, t);
     
@@ -82,15 +84,15 @@ fn vs_main(
     // Normal in NDC space (undo aspect correction)
     let normal_ndc = vec2f(-tangent.y * aspect, tangent.x);
     
-    let width = max(b.p0.w, 0.0001);
-    let softness = max(b.p1.w, 0.0001);
+    let width = max(b.p0.w, 0.0001) * pressure;
+    let softness = max(b.p1.w, 0.0001) * pressure;
     let total_radius = width + softness;
     
     let offset_pos = screen_p + normal_ndc * side * total_radius;
     
     var out: VsOut;
     out.pos = vec4f(offset_pos * proj.w, proj.z, proj.w);
-    out.color = b.color;
+    out.color = vec4f(b.color.rgb, b.color.a * pressure);
     out.dist = side * total_radius;
     out.width = width;
     out.softness = softness;

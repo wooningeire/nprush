@@ -206,14 +206,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             }
             prev = curr;
         }
+        let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
+        let pressure = smoothstep(0.0, 0.5, t) * smoothstep(1.0, 0.5, t);
+        let local_width = width * pressure;
+        let local_softness = softness * pressure;
+        let local_opacity = opacity * pressure;
 
-        let inner = width - softness;
-        let outer = width + softness;
+        let inner = local_width - local_softness;
+        let outer = local_width + local_softness;
         let a_geom = 1.0 - smoothstep(inner, outer, min_d);
-        var a = clamp(a_geom * opacity, 0.0, 0.999);
+        var a = clamp(a_geom * local_opacity, 0.0, 0.999);
 
         // Interpolate depth (w-component of projected points)
-        let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
         let B = bernstein(t);
         let d_val = dot(B, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
 
@@ -281,14 +285,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let d_vec = p - proj;
         let d = max(length(d_vec), 1e-6);
 
-        let inner = width - softness;
-        let outer = width + softness;
+        let t_pixel = (f32(k - 1u) + u_clamped) / f32(N_SEG);
+        let pressure = smoothstep(0.0, 0.5, t_pixel) * smoothstep(1.0, 0.5, t_pixel);
+        let local_width = width * pressure;
+        let local_softness = softness * pressure;
+        let local_opacity = opacity * pressure;
+
+        let inner = local_width - local_softness;
+        let outer = local_width + local_softness;
         let denom = max(outer - inner, 1e-6);
         let x_inner = clamp((d - inner) / denom, 0.0, 1.0);
         let smoothstep_deriv = 6.0 * x_inner * (1.0 - x_inner) / denom;
         let in_softband = (d > inner) && (d < outer);
 
-        let a_geom = a / max(opacity, 1e-4);
+        let a_geom = a / max(local_opacity, 1e-4);
         
         // Edge mode weighting: penalize opacity if not on an edge
         var off_w = 0.0;
@@ -297,20 +307,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             off_w = OFF_EDGE_ALPHA * (1.0 - tgt_depth);
         }
 
-        var d_opacity = da * (1.0 - smoothstep(inner, outer, d)) + off_w * a_geom;
+        var d_opacity = (da * (1.0 - smoothstep(inner, outer, d)) + off_w * a_geom) * pressure;
 
         var dD = 0.0;
         var dWidth = 0.0;
         var dSoft = 0.0;
         if (in_softband) {
-            dD = -(da + off_w) * opacity * smoothstep_deriv;
-            dWidth = (da + off_w) * opacity * smoothstep_deriv / denom;
-            dSoft = -(da + off_w) * opacity * smoothstep_deriv * (width - d)
-                / max(2.0 * softness * softness, 1e-6);
+            dD = -(da + off_w) * local_opacity * smoothstep_deriv;
+            dWidth = ((da + off_w) * local_opacity * smoothstep_deriv / denom) * pressure;
+            dSoft = (-(da + off_w) * local_opacity * smoothstep_deriv * (local_width - d)
+                / max(2.0 * local_softness * local_softness, 1e-6)) * pressure;
         }
 
         // Depth gradient with respect to control points (z/w component)
-        let t_pixel = (f32(k - 1u) + u_clamped) / f32(N_SEG);
         let B_pixel = bernstein(t_pixel);
         let dDepth_dZs = dD_total * (T_prev * a) * B_pixel;
 
