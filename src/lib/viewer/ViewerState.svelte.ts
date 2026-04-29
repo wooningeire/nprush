@@ -5,7 +5,8 @@ import { requestGpu } from "$/gpu/requestGpu";
 import { GpuRunner } from "./GpuRunner.svelte.ts";
 import { loadGlb } from "$/gpu/loadGlb";
 import artelorianUrl from "$/assets/artelorian.glb?url";
-import matcapUrl from "$/assets/overcast_soil_puresky_2k.png?url";
+import groundUrl from "$/assets/ground.glb?url";
+import matcapUrl from "$/assets/qwantani_moon_noon_puresky_2k.png?url";
 import { loadTexture } from "$/gpu/loadTexture";
 
 export class ViewerState {
@@ -43,9 +44,10 @@ export class ViewerState {
         onMount(async () => {
             // Kick off mesh load and gpu request concurrently; both are awaited
             // before we build the runner since the mesh is a constructor input.
-            const [gpu, mesh] = await Promise.all([
+            const [gpu, mesh, groundMesh] = await Promise.all([
                 requestGpu({ canvas: await canvasPromise }),
                 loadGlb(artelorianUrl),
+                loadGlb(groundUrl).catch(() => null), // optional — don't fail if missing
             ]);
             if (!gpu) return;
 
@@ -58,6 +60,7 @@ export class ViewerState {
                 camera: state.camera,
                 viewerState: state,
                 mesh,
+                groundMesh,
                 matcapTexture,
                 numSplats,
             });

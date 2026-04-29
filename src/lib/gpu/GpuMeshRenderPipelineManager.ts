@@ -19,6 +19,10 @@ export class GpuMeshRenderPipelineManager {
     readonly indexBuffer: GPUBuffer;
     readonly indexCount: number;
 
+    private groundVertexBuffer: GPUBuffer | null = null;
+    private groundIndexBuffer: GPUBuffer | null = null;
+    private groundIndexCount: number = 0;
+
     private static readonly STRIDE = 24; // 6 floats * 4 bytes (pos + normal)
     private readonly device: GPUDevice;
 
@@ -140,6 +144,26 @@ export class GpuMeshRenderPipelineManager {
         this.indexCount = mesh.indices.length;
     }
 
+    setGroundMesh(mesh: MeshData) {
+        if (this.groundVertexBuffer) this.groundVertexBuffer.destroy();
+        if (this.groundIndexBuffer) this.groundIndexBuffer.destroy();
+
+        this.groundVertexBuffer = this.device.createBuffer({
+            label: "ground vertex buffer",
+            size: mesh.vertices.byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.groundVertexBuffer, 0, mesh.vertices as any);
+
+        this.groundIndexBuffer = this.device.createBuffer({
+            label: "ground index buffer",
+            size: mesh.indices.byteLength,
+            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.groundIndexBuffer, 0, mesh.indices as any);
+        this.groundIndexCount = mesh.indices.length;
+    }
+
     addDraw(renderPassEncoder: GPURenderPassEncoder, matcapTextureView: GPUTextureView) {
         // We create a transient bind group because the texture might change or just for simplicity.
         // Or we could store it if it's static. Let's create it once if possible.
@@ -169,5 +193,12 @@ export class GpuMeshRenderPipelineManager {
         renderPassEncoder.setVertexBuffer(0, this.vertexBuffer);
         renderPassEncoder.setIndexBuffer(this.indexBuffer, "uint32");
         renderPassEncoder.drawIndexed(this.indexCount);
+
+        // Draw ground mesh if loaded
+        if (this.groundVertexBuffer && this.groundIndexBuffer && this.groundIndexCount > 0) {
+            renderPassEncoder.setVertexBuffer(0, this.groundVertexBuffer);
+            renderPassEncoder.setIndexBuffer(this.groundIndexBuffer, "uint32");
+            renderPassEncoder.drawIndexed(this.groundIndexCount);
+        }
     }
 }

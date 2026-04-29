@@ -7,6 +7,7 @@ import { GpuSplatForwardPipelineManager } from "$/gpu/GpuSplatForwardPipelineMan
 import { GpuBezierForwardPipelineManager } from "$/gpu/GpuBezierForwardPipelineManager";
 import { GpuBlurPipelineManager } from "$/gpu/GpuBlurPipelineManager";
 import { GpuDepthAwareBlurPipelineManager } from "$/gpu/GpuDepthAwareBlurPipelineManager";
+import { GpuEnvmapPipelineManager } from "$/gpu/GpuEnvmapPipelineManager";
 import type { MeshData } from "$/gpu/loadGlb";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 
@@ -40,6 +41,7 @@ export class GpuRunner {
     private readonly depthAwareBlurManager: GpuDepthAwareBlurPipelineManager;
     private readonly matcapTexture: GPUTexture;
     private readonly matcapTextureView: GPUTextureView;
+    private readonly envmapPipelineManager: GpuEnvmapPipelineManager;
 
     // Full-res textures (sized to the visible main panel area: half-width x height-minus-strip).
     // These match the camera projection aspect so the rendered model has the same pixel
@@ -109,6 +111,7 @@ export class GpuRunner {
         camera,
         viewerState,
         mesh,
+        groundMesh,
         matcapTexture,
         numSplats = 512,
     }: {
@@ -118,6 +121,7 @@ export class GpuRunner {
         camera: Camera,
         viewerState: any,
         mesh: MeshData,
+        groundMesh: MeshData | null,
         matcapTexture: GPUTexture,
         numSplats?: number,
     }) {
@@ -136,6 +140,17 @@ export class GpuRunner {
             format,
             uniformsManager: this.uniformsManager,
             mesh,
+        });
+
+        if (groundMesh) {
+            this.meshRenderPipelineManager.setGroundMesh(groundMesh);
+        }
+
+        this.envmapPipelineManager = new GpuEnvmapPipelineManager({
+            device,
+            format,
+            uniformsManager: this.uniformsManager,
+            envTexture: matcapTexture,
         });
 
         // The color-layer instance owns the visualization render pipeline, which
@@ -193,6 +208,7 @@ export class GpuRunner {
         this.destroy = $effect.root(() => {
             $effect(() => this.uniformsManager.writeViewProjMat(this.camera.viewProjMat));
             $effect(() => this.uniformsManager.writeViewMat(this.camera.viewMat));
+            $effect(() => this.uniformsManager.writeInvViewProjMat(this.camera.viewProjInvMat));
             $effect(() => this.uniformsManager.writeShadingMode(this.viewerState.shadingMode));
             $effect(() => this.splatOptimizerManager.writeRenderUniforms(
                 this.viewerState.edgeBeziersEnabled,
@@ -531,6 +547,7 @@ export class GpuRunner {
                     depthStoreOp: "store",
                 },
             });
+            this.envmapPipelineManager.addDraw(spherePassEncoder);
             this.meshRenderPipelineManager.addDraw(spherePassEncoder, this.matcapTextureView);
             spherePassEncoder.end();
 
@@ -558,6 +575,7 @@ export class GpuRunner {
                     depthStoreOp: "store",
                 },
             });
+            this.envmapPipelineManager.addDraw(optimPassEncoder);
             this.meshRenderPipelineManager.addDraw(optimPassEncoder, this.matcapTextureView);
             optimPassEncoder.end();
 
