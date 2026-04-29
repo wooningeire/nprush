@@ -293,7 +293,7 @@ export class GpuBezierOptimizerManager {
         // averaging divisor). Less frequent ADC reduces churn so transient
         // strays from clone+parent edge competition don't accumulate.
         this.stepCount++;
-        if (this.stepCount % 25 === 0) {
+        if (this.stepCount % 100 === 0) {
             pass.setPipeline(this.adcPipeline);
             pass.setBindGroup(0, this.adcBindGroup);
             pass.dispatchWorkgroups(1);

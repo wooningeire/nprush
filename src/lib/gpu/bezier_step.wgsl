@@ -57,17 +57,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let t = current_t + 1.0;
     var pos_grad_norm2 = 0.0;
 
-    // lr per param: 0-11=positions (0.005), 12-14=color (0.02), 15=opacity (0.01), 16-17=width/softness (0.002)
+    // lr per param: 0-11=positions, 12-14=color, 15=opacity, 16-17=width/softness
+    // Gradients are summed over all pixels (not averaged), so lrs are small.
     const lr_table = array<f32, 18>(
-        0.0000001, 0.0000001, 0.0000001, 0.005, 0.005, 0.005,
-        0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
-        0.02,  0.02,  0.02,  0.01,  0.002, 0.002
+        0.001, 0.001, 0.001, 0.001, 0.001, 0.001,
+        0.001, 0.001, 0.001, 0.001, 0.001, 0.001,
+        0.001,  0.001,  0.001,  0.0005, 0.0001, 0.0001
     );
     // max_update per param
     const mu_table = array<f32, 18>(
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
-        0.001, 0.001, 0.001, 0.0005, 0.005, 0.005
+        0.005, 0.005, 0.005, 0.002, 0.002, 0.002
     );
     // fp_scale: 10000 for positions/width/softness, 100000 for color
     const fps_table = array<f32, 18>(
@@ -81,7 +82,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let raw_grad = atomicExchange(&grads.data[param_idx], 0);
         
         let fp_scale = fps_table[lp];
-        let grad = f32(raw_grad) / fp_scale / 16384.0;
+        let grad = f32(raw_grad) / fp_scale;
 
         let lr = lr_table[lp];
 

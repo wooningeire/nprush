@@ -40,12 +40,11 @@ fn main() {
         }
     }
 
-    let ADC_PERIOD = 25.0;
-    let TAU_POS = 0.0001;
-    let TAU_LOSS = 0.0005; // kill if not moving but contributing to loss
+    let ADC_PERIOD = 100.0;
+    let TAU_POS = 0.0002;       // must be moving to clone
+    let TAU_LOSS = 0.001;       // kill if stuck AND contributing to loss
     let SPLIT_LEN_THRESHOLD = 0.25;
-    let MIN_DEAD_FRACTION = 0.3;
-    let MIN_DEAD_SLOTS = u32(f32(NUM_BEZIERS) * MIN_DEAD_FRACTION);
+    let MIN_DEAD_FRACTION = 0.15; // only clone when >=15% slots are free
 
     for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
         var b = beziers.items[i];

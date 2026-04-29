@@ -306,21 +306,39 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let smoothstep_deriv = 6.0 * x_inner * (1.0 - x_inner) / denom;
         let in_softband = (d > inner) && (d < outer);
 
-        let a_geom = a / max(local_opacity, 1e-4);
-        
-        // Edge mode weighting: penalize opacity if not on an edge
+        // Edge mode weighting: penalize opacity if not on an edge (edge mode only)
         let OFF_EDGE_ALPHA = 0.35;
         let off_w = select(0.0, OFF_EDGE_ALPHA * (1.0 - tgt_depth), uniforms.mode < 0.5);
 
-        var d_opacity = (da * (1.0 - smoothstep(inner, outer, d)) + off_w * a_geom) * pressure;
+        // da/d(opacity): chain through a = a_geom * local_opacity * pressure
+        let a_geom = 1.0 - smoothstep(inner, outer, d);
+        var d_opacity = (da * a_geom + off_w * a_geom) * pressure;
 
+        // da/d(d): chain through smoothstep
+        // da/d(width) and da/d(softness): chain through inner/outer
+        // inner = (width - softness)*pressure, outer = (width + softness)*pressure
+        // d(inner)/d(width) = pressure, d(outer)/d(width) = pressure
+        // d(inner)/d(softness) = -pressure, d(outer)/d(softness) = pressure
         var dD = 0.0;
         var dWidth = 0.0;
         var dSoft = 0.0;
-        dD     = select(0.0, -(da + off_w) * local_opacity * smoothstep_deriv, in_softband);
-        dWidth = select(0.0, ((da + off_w) * local_opacity * smoothstep_deriv / denom) * pressure, in_softband);
-        dSoft  = select(0.0, (-(da + off_w) * local_opacity * smoothstep_deriv * (local_width - d)
-                / max(2.0 * local_softness * local_softness, 1e-6)) * pressure, in_softband);
+        let da_eff = (da + off_w) * local_opacity;
+        dD     = select(0.0, -da_eff * smoothstep_deriv, in_softband);
+        // d(smoothstep)/d(width) = smoothstep_deriv * d(x_inner)/d(width)
+        // x_inner = (d - inner)/denom, denom = outer - inner = 2*softness*pressure
+        // d(x_inner)/d(width) = (-d(inner)/d(width)*denom - (d-inner)*d(denom)/d(width)) / denom^2
+        // d(inner)/d(width)=pressure, d(denom)/d(width)=0 => d(x_inner)/d(width) = -pressure/denom
+        // => d(smoothstep)/d(width) = smoothstep_deriv * (-pressure/denom)
+        // => da/d(width) = -da_eff * smoothstep_deriv * pressure / denom
+        dWidth = select(0.0, da_eff * smoothstep_deriv * pressure / denom, in_softband);
+        // d(x_inner)/d(softness): inner=-softness*pressure, outer=+softness*pressure
+        // denom=2*softness*pressure, d(inner)/d(s)=-pressure, d(denom)/d(s)=2*pressure
+        // d(x_inner)/d(s) = (pressure*denom - (d-inner)*2*pressure) / denom^2
+        //                 = pressure*(denom - 2*(d-inner)) / denom^2
+        //                 = pressure*(2*softness*pressure - 2*(d-inner)) / denom^2
+        let d_minus_inner = clamp(d - inner, 0.0, denom);
+        let dx_ds = pressure * (denom - 2.0 * d_minus_inner) / max(denom * denom, 1e-12);
+        dSoft  = select(0.0, -da_eff * smoothstep_deriv * dx_ds, in_softband);
 
         // Depth gradient with respect to control points (z/w component)
         let B_pixel = bernstein(t_pixel);
