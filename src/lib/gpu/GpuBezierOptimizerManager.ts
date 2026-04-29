@@ -61,12 +61,12 @@ export class GpuBezierOptimizerManager {
             data[o + 0] = cx - dx * 0.5;
             data[o + 1] = cy - dy * 0.5;
             data[o + 2] = (Math.random() * 2 - 1) * 0.3;
-            data[o + 3] = 0.003;
+            data[o + 3] = 0.02;
             // P1 (xyz, softness)
             data[o + 4] = cx - dx * 0.15 + jitter();
             data[o + 5] = cy - dy * 0.15 + jitter();
             data[o + 6] = (Math.random() * 2 - 1) * 0.3;
-            data[o + 7] = 0.001;
+            data[o + 7] = 0.005;
             // P2 (xyz, pad)
             data[o + 8] = cx + dx * 0.15 + jitter();
             data[o + 9] = cy + dy * 0.15 + jitter();

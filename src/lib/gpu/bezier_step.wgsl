@@ -58,17 +58,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     var pos_grad_norm2 = 0.0;
 
     // lr per param: 0-11=positions, 12-14=color, 15=opacity, 16-17=width/softness
-    // Gradients are summed over all pixels (not averaged), so lrs are small.
+    // Gradients are summed over all pixels; divide by optim pixel count (~128*128=16384).
     const lr_table = array<f32, 18>(
-        0.001, 0.001, 0.001, 0.001, 0.001, 0.001,
-        0.001, 0.001, 0.001, 0.001, 0.001, 0.001,
-        0.001,  0.001,  0.001,  0.0005, 0.0001, 0.0001
+        0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
+        0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
+        0.01,  0.01,  0.01,  0.005, 0.002, 0.002
     );
     // max_update per param
     const mu_table = array<f32, 18>(
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
-        0.005, 0.005, 0.005, 0.002, 0.002, 0.002
+        0.01,  0.01,  0.01,  0.005, 0.003, 0.003
     );
     // fp_scale: 10000 for positions/width/softness, 100000 for color
     const fps_table = array<f32, 18>(
@@ -82,7 +82,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let raw_grad = atomicExchange(&grads.data[param_idx], 0);
         
         let fp_scale = fps_table[lp];
-        let grad = f32(raw_grad) / fp_scale;
+        // Normalize by optim resolution so lr is resolution-independent.
+        // The backward pass sums gradients over all pixels; we divide here
+        // so the effective gradient is per-pixel averaged.
+        let pixel_norm = 1.0 / 16384.0; // 128*128 optim resolution
+        let grad = f32(raw_grad) / fp_scale * pixel_norm;
 
         let lr = lr_table[lp];
 
@@ -118,9 +122,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let lo = array<f32, 18>(
             -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
             -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
-            0.05, 0.05, 0.05, 0.00, 0.001, 0.001
+            0.0, 0.0, 0.0, 0.00, 0.001, 0.001
         );
-        let width_hi = select(0.05, uniforms.max_width, uniforms.max_width > 0.0);
+        let width_hi = select(0.1, uniforms.max_width, uniforms.max_width > 0.0);
         let hi = array<f32, 18>(
             1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
             1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
