@@ -612,7 +612,7 @@ export class GpuRunner {
             if (this.viewerState.compareBlurred) {
                 this.blurManager.blur(
                     commandEncoder,
-                    this.optimTextureView!,
+                    optimTargetView,
                     this.optimBlurredTextureView!,
                     this.optimTempTextureView!,
                     this.optimWidth,
@@ -637,7 +637,7 @@ export class GpuRunner {
             if (this.viewerState.baseColorBeziersEnabled) {
                 this.depthAwareBlurManager.blur(
                     commandEncoder,
-                    this.optimTextureView!,
+                    optimTargetView,
                     this.optimDepthTextureView!,
                     this.optimDepthAwareBlurredTextureView!,
                     this.optimWidth,
