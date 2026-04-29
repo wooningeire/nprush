@@ -102,9 +102,9 @@ fn main() {
             new_b.p3 = vec4f(p3, 0.0);
         } else {
             let seed = f32(i) * 3.14159 + adam.t;
-            let jx = (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.01;
-            let jy = (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.01;
-            let jz = (fract(sin(seed * 43.123) * 43758.5453) - 0.5) * 0.01;
+            let jx = (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.001;
+            let jy = (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.001;
+            let jz = (fract(sin(seed * 43.123) * 43758.5453) - 0.5) * 0.001;
             let j = vec3f(jx, jy, jz);
             
             new_b.p0 = vec4f(b.p0.xyz + j, b.p0.w);

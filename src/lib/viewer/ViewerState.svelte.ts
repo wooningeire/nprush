@@ -20,7 +20,7 @@ export class ViewerState {
     baseColorBezierTrainingPaused = $state(false);
     colorBezierTrainingPaused = $state(false);
     compareBlurred = $state(false);
-    blurRadius = $state(32);
+    blurRadius = $state(8);
     shadingMode = $state<'normals' | 'shaded'>('normals');
     
     runner = $state<GpuRunner | null>(null);
