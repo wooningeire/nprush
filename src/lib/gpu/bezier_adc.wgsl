@@ -47,6 +47,13 @@ fn main() {
     let SPLIT_LEN_THRESHOLD = 0.25;
     let MIN_DEAD_FRACTION = 0.15; // only clone when >=15% slots are free
 
+    // Reset the global Adam step counter so bias-correction stays healthy
+    // after each ADC cycle. Moments (m, v) for cloned/split curves are
+    // already zeroed below; resetting t here means all curves get a fresh
+    // warm-up period rather than having their effective lr collapse to zero
+    // as t → ∞.
+    adam.t = 0.0;
+
     for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
         var b = beziers.items[i];
         if (b.color.a < 0.005) { continue; }

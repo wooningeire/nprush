@@ -18,7 +18,9 @@ struct AdamState {
     m: array<f32, NUM_BEZIER_PARAMS>,
     v: array<f32, NUM_BEZIER_PARAMS>,
     t: f32,
-    pad: vec3f,
+    pixel_count: f32,
+    no_kill: f32, // 1.0 = disable loss-based killing in ADC
+    pad: f32,
 }
 
 struct ADCArray {
@@ -88,10 +90,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let raw_grad = atomicExchange(&grads.data[param_idx], 0);
         
         let fp_scale = fps_table[lp];
-        // Normalize by optim resolution so lr is resolution-independent.
-        // The backward pass sums gradients over all pixels; we divide here
-        // so the effective gradient is per-pixel averaged.
-        let pixel_norm = 1.0 / 16384.0; // 128*128 optim resolution
+        // Normalize by actual optim resolution so lr is resolution-independent.
+        // pixel_count is written each frame by the TS dispatch call.
+        let pixel_norm = 1.0 / max(adam.pixel_count, 1.0);
         let grad = f32(raw_grad) / fp_scale * pixel_norm;
 
         let lr = lr_table[lp];
