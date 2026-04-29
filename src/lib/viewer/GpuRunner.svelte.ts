@@ -115,6 +115,7 @@ export class GpuRunner {
         mesh,
         groundMesh,
         matcapTexture,
+        brushTexture,
         numSplats = 512,
     }: {
         device: GPUDevice,
@@ -125,6 +126,7 @@ export class GpuRunner {
         mesh: MeshData,
         groundMesh: MeshData | null,
         matcapTexture: GPUTexture,
+        brushTexture: GPUTexture,
         numSplats?: number,
     }) {
         this.device = device;
@@ -199,18 +201,21 @@ export class GpuRunner {
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.edgeLayerBezierManager.bezierBuffer,
+            brushTexture,
         });
 
         this.baseColorBezierForwardManager = new GpuBezierForwardPipelineManager({
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.baseColorLayerBezierManager.bezierBuffer,
+            brushTexture,
         });
 
         this.colorBezierForwardManager = new GpuBezierForwardPipelineManager({
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.colorLayerBezierManager.bezierBuffer,
+            brushTexture,
         });
         
         this.blurManager = new GpuBlurPipelineManager(device);

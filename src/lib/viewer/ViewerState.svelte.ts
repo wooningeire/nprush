@@ -7,7 +7,9 @@ import { loadGlb } from "$/gpu/loadGlb";
 import artelorianUrl from "$/assets/artelorian.glb?url";
 import groundUrl from "$/assets/ground.glb?url";
 import hdrUrl from "$/assets/quarry_cloudy_2k.hdr?url";
+import brushUrl from "$/assets/brush.png?url";
 import { loadHdrTexture } from "$/gpu/loadHdrTexture";
+import { loadTexture } from "$/gpu/loadTexture";
 
 export class ViewerState {
     width = $state(300);
@@ -52,7 +54,10 @@ export class ViewerState {
             ]);
             if (!gpu) return;
 
-            const envTexture = await loadHdrTexture(gpu.device, hdrUrl);
+            const [envTexture, brushTexture] = await Promise.all([
+                loadHdrTexture(gpu.device, hdrUrl),
+                loadTexture(gpu.device, brushUrl),
+            ]);
 
             const gpuRunner = new GpuRunner({
                 device: gpu.device,
@@ -63,6 +68,7 @@ export class ViewerState {
                 mesh,
                 groundMesh,
                 matcapTexture: envTexture,
+                brushTexture,
                 numSplats,
             });
             state.runner = gpuRunner;

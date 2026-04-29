@@ -18,6 +18,8 @@ struct ForwardUniforms {
 
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
 @group(0) @binding(1) var<uniform> uniforms: ForwardUniforms;
+@group(0) @binding(2) var brush_sampler: sampler;
+@group(0) @binding(3) var brush_texture: texture_2d<f32>;
 
 const N_SEG: u32 = 16u;
 
@@ -119,6 +121,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     var min_d = 1e9;
     var min_k = 1u;
     var min_u = 0.0;
+    var min_signed_cross = 0.0;
     var prev = p0;
     for (var k = 1u; k <= N_SEG; k++) {
         let curr = bezier_at(p0, p1, p2, p3, f32(k) / f32(N_SEG));
@@ -126,11 +129,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
         let len2 = max(dot(seg, seg), 1e-8);
         let u = clamp(dot(p - prev, seg) / len2, 0.0, 1.0);
         let proj_pt = prev + u * seg;
-        let d = length(p - proj_pt);
+        let diff = p - proj_pt;
+        let d = length(diff);
         if (d < min_d) {
             min_d = d;
             min_k = k;
             min_u = u;
+            // Signed cross distance: positive = left of stroke direction, negative = right
+            let seg_len = sqrt(len2);
+            let seg_dir = seg / seg_len;
+            min_signed_cross = (diff.x * (-seg_dir.y) + diff.y * seg_dir.x);
         }
         prev = curr;
     }
@@ -148,7 +156,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     let inner = local_width - local_softness;
     let outer = local_width + local_softness;
     let a_geom = 1.0 - smoothstep(inner, outer, min_d);
-    let a = clamp(a_geom * local_opacity, 0.0, 0.999);
+
+    // Sample brush texture: u = t (along stroke), v = signed cross distance normalized to [0,1]
+    // Cross distance is normalized by local_width so the brush fills the stroke width.
+    let brush_u = t;
+    let brush_v = clamp(min_signed_cross / max(local_width + local_softness, 1e-6) * 0.5 + 0.5, 0.0, 1.0);
+    let brush_alpha = textureSample(brush_texture, brush_sampler, vec2f(brush_u, brush_v)).r;
+
+    let a = clamp(a_geom * brush_alpha * local_opacity, 0.0, 0.999);
 
     if (a < 0.001) { discard; }
 

@@ -10,19 +10,33 @@ export class GpuBezierForwardPipelineManager {
     private readonly bezierBuffer: GPUBuffer;
     private readonly bezierUniformsBuffer: GPUBuffer;
     private readonly numBeziers: number;
+    private readonly brushSampler: GPUSampler;
+    private readonly brushTextureView: GPUTextureView;
 
     constructor({
         device,
         numBeziers,
         bezierBuffer,
+        brushTexture,
     }: {
         device: GPUDevice,
         numBeziers: number,
         bezierBuffer: GPUBuffer,
+        brushTexture: GPUTexture,
     }) {
         this.device = device;
         this.bezierBuffer = bezierBuffer;
         this.numBeziers = numBeziers;
+        this.brushTextureView = brushTexture.createView();
+
+        this.brushSampler = device.createSampler({
+            label: "brush sampler",
+            addressModeU: "repeat",
+            addressModeV: "clamp-to-edge",
+            magFilter: "linear",
+            minFilter: "linear",
+            mipmapFilter: "linear",
+        });
 
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier forward uniforms buffer",
@@ -34,6 +48,8 @@ export class GpuBezierForwardPipelineManager {
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
                 { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+                { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
             ],
         });
 
@@ -96,6 +112,8 @@ export class GpuBezierForwardPipelineManager {
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
                 { binding: 1, resource: { buffer: this.bezierUniformsBuffer } },
+                { binding: 2, resource: this.brushSampler },
+                { binding: 3, resource: this.brushTextureView },
             ],
         });
     }
