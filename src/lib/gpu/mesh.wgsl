@@ -27,7 +27,11 @@ struct FragOutput {
     @location(1) depth: vec4f,
 }
 
-const DEPTH_VIZ_FAR: f32 = 10.0;
+// Near/far for depth remapping. Objects closer than DEPTH_NEAR get full
+// precision; the reciprocal mapping 1 - DEPTH_NEAR/depth compresses the
+// far range and expands the near range, giving much better 8-bit precision
+// for nearby geometry.
+const DEPTH_NEAR: f32 = 0.1;
 
 @vertex
 fn vert(in: VertexInput) -> VertexOutput {
@@ -35,7 +39,10 @@ fn vert(in: VertexInput) -> VertexOutput {
     out.position = uniforms.viewProjMat * vec4f(in.position, 1);
     out.normal = in.normal;
     out.viewNormal = (uniforms.viewMat * vec4f(in.normal, 0)).xyz;
-    out.viewDepth = clamp(out.position.w / DEPTH_VIZ_FAR, 0.0, 1.0);
+    // Reciprocal depth: maps [DEPTH_NEAR, inf) -> [0, 1), giving high
+    // precision for nearby objects and gracefully compressing far ones.
+    let linear_depth = max(out.position.w, DEPTH_NEAR);
+    out.viewDepth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
     out.color = in.color;
     return out;
 }

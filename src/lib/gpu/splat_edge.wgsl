@@ -33,11 +33,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     
     let edge = sqrt(gx * gx + gy * gy);
 
-    // Threshold filter: suppress low-magnitude depth noise to 0 and saturate
-    // strong silhouette transitions to 1. Smoothstep keeps a thin soft edge
-    // (~one pixel wide) so anything optimizing an MSE against this image
-    // still has a usable gradient at the boundary instead of a hard step.
-    let thresholded = smoothstep(0.01, 0.06, edge);
+    // Threshold filter: suppress gradual surface-curvature gradients and only
+    // fire on sharp silhouette discontinuities. With reciprocal depth encoding
+    // the background (depth=1.0) is far from any mesh value, so true silhouette
+    // edges produce large Sobel responses while smooth surface gradients stay
+    // small. The raised lower bound eliminates contour-line artifacts.
+    let thresholded = smoothstep(0.02, 0.06, edge);
 
     textureStore(edgeTex, p, vec4f(thresholded, thresholded, thresholded, 1.0));
 }
