@@ -3,15 +3,16 @@
 @group(0) @binding(2) var targetDepthTex: texture_2d<f32>;
 @group(0) @binding(3) var targetEdgeTex: texture_2d<f32>;
 @group(0) @binding(4) var bezierViewTex: texture_2d<f32>;
-@group(0) @binding(5) var colorBezierViewTex: texture_2d<f32>;
+@group(0) @binding(5) var baseColorBezierViewTex: texture_2d<f32>;
+@group(0) @binding(6) var colorBezierViewTex: texture_2d<f32>;
 
 struct RenderUniforms {
     edge_beziers_enabled: f32,
+    base_color_beziers_enabled: f32,
     color_beziers_enabled: f32,
     blur_enabled: f32,
-    _pad: f32,
 }
-@group(0) @binding(6) var<uniform> uniforms: RenderUniforms;
+@group(0) @binding(7) var<uniform> uniforms: RenderUniforms;
 
 struct VsOut {
     @builtin(position) pos: vec4f,
@@ -40,7 +41,7 @@ fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
 }
 
 const STRIP_HEIGHT: f32 = 0.18;
-const NUM_PANELS: f32 = 8.0;
+const NUM_PANELS: f32 = 9.0;
 
 // Fit a source with given aspect into a panel with given aspect
 fn fitInPanel(panel_uv: vec2f, panel_aspect: f32, src_aspect: f32) -> vec2f {
@@ -155,13 +156,19 @@ fn frag(v: VsOut) -> @location(0) vec4f {
             let e = textureLoad(bezierViewTex, px, 0).r;
             return vec4f(e, e, e, 1.0);
         } else if (panel_idx < 6.5) {
-            // Panel 6: Color Bezier layer
+            // Panel 6: Base Color Bezier layer
+            let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
+            if (fitted.x < 0.0) { return bg; }
+            let px = vec2i(fitted * vec2f(textureDimensions(baseColorBezierViewTex)));
+            return textureLoad(baseColorBezierViewTex, px, 0);
+        } else if (panel_idx < 7.5) {
+            // Panel 7: Color Bezier layer
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * vec2f(textureDimensions(colorBezierViewTex)));
             return textureLoad(colorBezierViewTex, px, 0);
         } else {
-            // Panel 7: Edge-preserving blurred target
+            // Panel 8: Edge-preserving blurred target
             let fitted = fitInPanel(panel_uv, panel_aspect, target_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px_f = fitted * dims;
@@ -223,15 +230,21 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     let bezier_px = vec2i(right_half_uv * vec2f(textureDimensions(bezierViewTex)));
     let edge_a = clamp(textureLoad(bezierViewTex, bezier_px, 0).r, 0.0, 1.0);
     
+    let base_color_bezier_px = vec2i(right_half_uv * vec2f(textureDimensions(baseColorBezierViewTex)));
+    let base_color_bezier = textureLoad(baseColorBezierViewTex, base_color_bezier_px, 0);
+    
     let color_bezier_px = vec2i(right_half_uv * vec2f(textureDimensions(colorBezierViewTex)));
     let color_bezier = textureLoad(colorBezierViewTex, color_bezier_px, 0);
     
     var composite = base;
-    if (uniforms.edge_beziers_enabled > 0.5) {
-        composite = mix(composite, vec3f(1.0), edge_a);
+    if (uniforms.base_color_beziers_enabled > 0.5) {
+        composite = composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb;
     }
     if (uniforms.color_beziers_enabled > 0.5) {
         composite = composite * (1.0 - color_bezier.a) + color_bezier.rgb;
+    }
+    if (uniforms.edge_beziers_enabled > 0.5) {
+        composite = mix(composite, vec3f(1.0), edge_a);
     }
 
     // Painterly color quantization: partial posterization to mimic limited palette

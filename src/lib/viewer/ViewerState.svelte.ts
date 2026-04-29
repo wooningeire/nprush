@@ -12,6 +12,7 @@ export class ViewerState {
     width = $state(300);
     height = $state(150);
     edgeBeziersEnabled = $state(false);
+    baseColorBeziersEnabled = $state(false);
     colorBeziersEnabled = $state(false);
     compareBlurred = $state(false);
     blurRadius = $state(32);

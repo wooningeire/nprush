@@ -100,15 +100,15 @@ export class GpuBezierForwardPipelineManager {
         });
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder) {
+    dispatch(commandEncoder: GPUCommandEncoder, clear: boolean = true) {
         if (!this.bindGroup || !this.targetView) return;
         const pass = commandEncoder.beginRenderPass({
             label: "bezier forward pass",
             colorAttachments: [
                 {
                     view: this.targetView,
-                    clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-                    loadOp: "clear",
+                    clearValue: clear ? { r: 0.0, g: 0.0, b: 0.0, a: 0.0 } : undefined,
+                    loadOp: clear ? "clear" : "load",
                     storeOp: "store",
                 },
             ],

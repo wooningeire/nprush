@@ -14,6 +14,10 @@ const {
         Edge Beziers
     </label>
     <label>
+        <input type="checkbox" bind:checked={viewerState.baseColorBeziersEnabled} />
+        Base Color Beziers
+    </label>
+    <label>
         <input type="checkbox" bind:checked={viewerState.colorBeziersEnabled} />
         Color Beziers
     </label>

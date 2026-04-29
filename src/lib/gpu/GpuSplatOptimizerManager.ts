@@ -224,14 +224,26 @@ export class GpuSplatOptimizerManager {
             for (const msg of info.messages) console.warn(`[splat_render] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
         
+        this.renderBindGroupLayout = device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+            ],
+        });
+
         this.renderPipeline = device.createRenderPipeline({
             label: "splat render pipeline",
-            layout: "auto",
+            layout: device.createPipelineLayout({ bindGroupLayouts: [this.renderBindGroupLayout] }),
             vertex: { module: renderModule, entryPoint: "vert" },
             fragment: { module: renderModule, entryPoint: "frag", targets: [{ format }] },
             primitive: { topology: "triangle-list" },
         });
-        this.renderBindGroupLayout = this.renderPipeline.getBindGroupLayout(0);
     }
 
     writeSplatVPMatrix(mat: Mat4, blurEnabled: boolean = false) {
@@ -280,6 +292,7 @@ export class GpuSplatOptimizerManager {
         depthTextureView: GPUTextureView,
         edgeTextureView: GPUTextureView,
         bezierViewTextureView: GPUTextureView,
+        baseColorBezierViewTextureView: GPUTextureView,
         colorBezierViewTextureView: GPUTextureView,
     ) {
         this.renderBindGroup = this.device.createBindGroup({
@@ -290,17 +303,18 @@ export class GpuSplatOptimizerManager {
                 { binding: 2, resource: depthTextureView },
                 { binding: 3, resource: edgeTextureView },
                 { binding: 4, resource: bezierViewTextureView },
-                { binding: 5, resource: colorBezierViewTextureView },
-                { binding: 6, resource: { buffer: this.renderUniformsBuffer } },
+                { binding: 5, resource: baseColorBezierViewTextureView },
+                { binding: 6, resource: colorBezierViewTextureView },
+                { binding: 7, resource: { buffer: this.renderUniformsBuffer } },
             ],
         });
     }
 
-    writeRenderUniforms(edgeEnabled: boolean, colorEnabled: boolean, blurEnabled: boolean) {
+    writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, blurEnabled: boolean) {
         this.device.queue.writeBuffer(
             this.renderUniformsBuffer,
             0,
-            new Float32Array([edgeEnabled ? 1 : 0, colorEnabled ? 1 : 0, blurEnabled ? 1 : 0])
+            new Float32Array([edgeEnabled ? 1 : 0, baseColorEnabled ? 1 : 0, colorEnabled ? 1 : 0, blurEnabled ? 1 : 0])
         );
     }
 
