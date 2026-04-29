@@ -255,7 +255,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     C_pred += Ts[bezier_count] * background;
     D_pred += Ts[bezier_count] * bg_depth;
 
-    let dC = 2.0 * (C_pred - tgt_color);
+    let dC_raw = 2.0 * (C_pred - tgt_color);
+
+    // Luminance/contrast-weighted color loss.
+    // 1. Decompose error into luminance and chrominance components.
+    //    Luma weights (BT.709): Y = 0.2126 R + 0.7152 G + 0.0722 B
+    let luma_w = vec3f(0.2126, 0.7152, 0.0722);
+    let luma_err = dot(dC_raw * 0.5, luma_w); // signed luma error (before *2)
+    // 2. Local contrast: magnitude of spatial color gradient at this pixel.
+    //    High contrast → loss matters more; flat regions → down-weight.
+    let px_i = vec2i(global_id.xy);
+    let px_dims_i = vec2i(dims);
+    let px_r2 = clamp(px_i + vec2i(1, 0), vec2i(0), px_dims_i - 1);
+    let px_l2 = clamp(px_i - vec2i(1, 0), vec2i(0), px_dims_i - 1);
+    let px_u2 = clamp(px_i + vec2i(0, 1), vec2i(0), px_dims_i - 1);
+    let px_d2 = clamp(px_i - vec2i(0, 1), vec2i(0), px_dims_i - 1);
+    let luma_r = dot(textureLoad(targetTex, px_r2, 0).rgb, luma_w);
+    let luma_l = dot(textureLoad(targetTex, px_l2, 0).rgb, luma_w);
+    let luma_u = dot(textureLoad(targetTex, px_u2, 0).rgb, luma_w);
+    let luma_d = dot(textureLoad(targetTex, px_d2, 0).rgb, luma_w);
+    let contrast = sqrt((luma_r - luma_l) * (luma_r - luma_l) + (luma_u - luma_d) * (luma_u - luma_d));
+    // Contrast weight: 1.0 baseline + boost in high-contrast areas, capped.
+    let contrast_weight = 1.0 + clamp(contrast * 8.0, 0.0, 3.0);
+    // 3. Luma-weighted gradient: luma channel gets 3x weight vs chroma.
+    //    dC = dC_chroma + 3 * dC_luma_component
+    let dC_luma = luma_err * luma_w * 6.0; // 2 (from MSE) * 3 (luma boost)
+    let dC_chroma = dC_raw - dot(dC_raw, luma_w) * luma_w; // chroma residual
+    let dC = (dC_luma + dC_chroma) * contrast_weight;
     // let dD_total = 2.0 * (D_pred - tgt_depth);
     let dD_total = 0.0;
     var dT = dot(dC, background) + dD_total * bg_depth;
