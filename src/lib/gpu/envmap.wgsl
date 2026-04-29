@@ -37,6 +37,7 @@ fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
 }
 
 const PI: f32 = 3.14159265358979;
+fn reinhard(c: vec3f) -> vec3f { return c / (c + 1.0); }
 
 @fragment
 fn frag(in: VsOut) -> @location(0) vec4f {
@@ -55,5 +56,5 @@ fn frag(in: VsOut) -> @location(0) vec4f {
     let v = 0.5 - lat / PI;
 
     let color = textureSample(envTex, envSampler, vec2f(u, v)).rgb;
-    return vec4f(color, 1.0);
+    return vec4f(reinhard(color * 4.0), 1.0);
 }

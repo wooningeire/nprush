@@ -25,6 +25,6 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let g = accum[base + 1u];
     let b = accum[base + 2u];
     let n = max(accum[base + 3u], 1.0);
-    let color = reinhard(vec3f(r, g, b) / n);
+    let color = reinhard((vec3f(r, g, b) / n) * 4.0);
     textureStore(out_tex, vec2i(gid.xy), vec4f(color, 1.0));
 }

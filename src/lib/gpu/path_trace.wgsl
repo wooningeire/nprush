@@ -153,7 +153,7 @@ fn sample_env(dir: vec3f) -> vec3f {
     // Z-up equirectangular, matching envmap.wgsl
     let u = atan2(dir.y, dir.x) / (2.0 * PI) + 0.5;
     let v = 0.5 - asin(clamp(dir.z, -1.0, 1.0)) / PI;
-    return textureSampleLevel(env_tex, env_sampler, vec2f(u, v), 0.0).rgb * 4;
+    return textureSampleLevel(env_tex, env_sampler, vec2f(u, v), 0.0).rgb;
 }
 
 // ── Cosine-weighted hemisphere ────────────────────────────────────────────────
@@ -193,7 +193,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     var ray_o = ro;
     var ray_d = rd;
 
-    for (var bounce = 0; bounce < 3; bounce++) {
+    for (var bounce = 0; bounce < 8; bounce++) {
         let hit = scene_hit(ray_o, ray_d);
         if (!hit.hit) {
             radiance += throughput * sample_env(ray_d);
