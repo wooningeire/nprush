@@ -23,6 +23,11 @@ struct BezierUniforms {
     _pad: vec3f,
 }
 
+struct ADCArray {
+    grad_accum: array<f32, NUM_BEZIERS>,
+    loss_accum: array<f32, NUM_BEZIERS>,
+}
+
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
 @group(0) @binding(1) var<storage, read_write> grads: GradArray;
 @group(0) @binding(2) var targetTex: texture_2d<f32>;
@@ -30,6 +35,7 @@ struct BezierUniforms {
 @group(0) @binding(4) var<uniform> uniforms: BezierUniforms;
 @group(0) @binding(5) var bgTex: texture_2d<f32>;
 @group(0) @binding(6) var bgDepthTex: texture_2d<f32>;
+@group(0) @binding(7) var<storage, read_write> adc: ADCArray;
 
 const N_SEG: u32 = 16u;
 
@@ -242,7 +248,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     D_pred += Ts[bezier_count] * bg_depth;
 
     let dC = 2.0 * (C_pred - tgt_color);
-    let dD_total = 2.0 * (D_pred - tgt_depth);
+    // let dD_total = 2.0 * (D_pred - tgt_depth);
+    let dD_total = 0.0;
     var dT = dot(dC, background) + dD_total * bg_depth;
 
     let FP_SCALE_POS = 10000.0;
@@ -360,5 +367,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         
         atomicAdd(&grads.data[base + 16u], i32(dWidth * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 17u], i32(dSoft * FP_SCALE_POS));
+
+        // Accumulate this bezier's contribution to the color loss for ADC pruning.
+        let color_loss_contrib = dot(dC * dC, vec3f(1.0)) * (T_prev * a);
+        adc.loss_accum[i] += color_loss_contrib;
     }
 }

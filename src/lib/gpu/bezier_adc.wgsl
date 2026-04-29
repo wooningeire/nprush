@@ -20,6 +20,7 @@ struct AdamState {
 
 struct ADCArray {
     grad_accum: array<f32, NUM_BEZIERS>,
+    loss_accum: array<f32, NUM_BEZIERS>,
 }
 
 @group(0) @binding(0) var<storage, read_write> beziers: BezierArray;
@@ -41,6 +42,7 @@ fn main() {
 
     let ADC_PERIOD = 25.0;
     let TAU_POS = 0.0001;
+    let TAU_LOSS = 0.0005; // kill if not moving but contributing to loss
     let SPLIT_LEN_THRESHOLD = 0.25;
     let MIN_DEAD_FRACTION = 0.3;
     let MIN_DEAD_SLOTS = u32(f32(NUM_BEZIERS) * MIN_DEAD_FRACTION);
@@ -51,6 +53,15 @@ fn main() {
 
         let grad_norm = adc.grad_accum[i] / ADC_PERIOD;
         adc.grad_accum[i] = 0.0;
+
+        let loss_norm = adc.loss_accum[i] / ADC_PERIOD;
+        adc.loss_accum[i] = 0.0;
+
+        // Kill beziers that are stuck (not moving) but still adding to the loss.
+        if (grad_norm <= TAU_POS && loss_norm > TAU_LOSS) {
+            beziers.items[i].color.a = 0.0;
+            continue;
+        }
 
         if (grad_norm <= TAU_POS) {
             continue;

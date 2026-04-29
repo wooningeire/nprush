@@ -57,19 +57,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     var pos_grad_norm2 = 0.0;
 
     // lr per param: 0-11=positions (0.005), 12-14=color (0.02), 15=opacity (0.01), 16-17=width/softness (0.002)
-    let lr_table = array<f32, 18>(
-        0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
+    const lr_table = array<f32, 18>(
+        0.0001, 0.0001, 0.0001, 0.005, 0.005, 0.005,
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.02,  0.02,  0.02,  0.01,  0.002, 0.002
     );
     // max_update per param
-    let mu_table = array<f32, 18>(
+    const mu_table = array<f32, 18>(
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.001, 0.001, 0.001, 0.0005, 0.005, 0.005
     );
     // fp_scale: 10000 for positions/width/softness, 100000 for color
-    let fps_table = array<f32, 18>(
+    const fps_table = array<f32, 18>(
         10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0,
         10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0,
         100000.0, 100000.0, 100000.0, 100000.0, 10000.0, 10000.0

@@ -104,11 +104,12 @@ export class GpuBezierOptimizerManager {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
-        // One f32 per curve: positional gradient norm accumulated across each
-        // ADC period; reset to 0 inside the ADC shader.
+        // Two f32 per curve: positional gradient norm (grad_accum) and color
+        // loss contribution (loss_accum), both accumulated across each ADC
+        // period and reset to 0 inside the ADC shader.
         this.adcBuffer = device.createBuffer({
             label: "bezier adc buffer",
-            size: this.numBeziers * 4,
+            size: this.numBeziers * 8,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
@@ -136,6 +137,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 6, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
             ],
         });
         const backwardModule = device.createShaderModule({
@@ -250,6 +252,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 4, resource: { buffer: this.bezierUniformsBuffer } },
                 { binding: 5, resource: bgColorTextureView },
                 { binding: 6, resource: bgDepthTextureView },
+                { binding: 7, resource: { buffer: this.adcBuffer } },
             ],
         });
     }
