@@ -61,11 +61,12 @@ fn vs_main(
     let proj2 = project_to_screen(uniforms.vp, b.p2.xyz, aspect);
     let proj3 = project_to_screen(uniforms.vp, b.p3.xyz, aspect);
 
-    // Cull only if ALL control points are behind camera (w < 0).
-    // Culling on any single point is too aggressive — a curve can still be
-    // partially visible even when one control point is behind the near plane,
-    // and the flicker from toggling this cull is a major source of jitter.
-    if (proj0.z < 0.0 && proj1.z < 0.0 && proj2.z < 0.0 && proj3.z < 0.0) {
+    // Cull if ANY control point is behind the camera (w <= 0).
+    // When w <= 0 the perspective divide flips sign, producing a mirrored
+    // screen-space position that makes the AABB span the entire viewport.
+    // Curves that straddle the near plane must be culled here; the optimizer
+    // will pull them back into view via the backward pass.
+    if (proj0.z <= 0.0 || proj1.z <= 0.0 || proj2.z <= 0.0 || proj3.z <= 0.0) {
         var out: VsOut;
         out.pos = vec4f(0.0, 0.0, 0.0, -1.0); // degenerate
         out.bezier_idx = bezier_idx;
@@ -82,9 +83,12 @@ fn vs_main(
     let softness = max(b.p1.w, 0.0001);
     let pad = width + softness;
 
-    // Tight AABB around the bezier hull + padding
-    let min_p = min(min(p0, p1), min(p2, p3)) - vec2f(pad);
-    let max_p = max(max(p0, p1), max(p2, p3)) + vec2f(pad);
+    // Tight AABB around the bezier hull + padding.
+    // Clamp to a generous screen-space bound so a single off-screen control
+    // point can never produce a quad that covers the entire viewport.
+    let SCREEN_BOUND = 4.0; // aspect-corrected NDC units; well beyond any visible pixel
+    let min_p = max(min(min(p0, p1), min(p2, p3)) - vec2f(pad), vec2f(-SCREEN_BOUND));
+    let max_p = min(max(max(p0, p1), max(p2, p3)) + vec2f(pad), vec2f( SCREEN_BOUND));
 
     // Emit a quad (triangle-strip: 4 verts) covering the AABB
     // vi: 0=(min_x,max_y), 1=(min_x,min_y), 2=(max_x,max_y), 3=(max_x,min_y)
