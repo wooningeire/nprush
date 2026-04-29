@@ -46,15 +46,10 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
     let R = pow(15.0 / safe_shape_b, 1.0 / shape_a);
     
     // Local quad vertices — these ARE the scaled_p coordinates
-    var lx: f32; var ly: f32;
-    switch vi {
-        case 0u: { lx = -R; ly = -R; }
-        case 1u: { lx =  R; ly = -R; }
-        case 2u: { lx = -R; ly =  R; }
-        case 3u: { lx = -R; ly =  R; }
-        case 4u: { lx =  R; ly = -R; }
-        default: { lx =  R; ly =  R; }
-    }
+    let quad_x = array<f32, 6>(-R,  R, -R, -R,  R,  R);
+    let quad_y = array<f32, 6>(-R, -R,  R,  R, -R,  R);
+    let lx = quad_x[vi];
+    let ly = quad_y[vi];
     
     // Scale then rotate into world space
     let local_offset = vec3f(lx * sx, ly * sy, 0.0);
@@ -88,10 +83,7 @@ fn frag(v: VsOut) -> FragOut {
     let r = max(length(v.local_p), 0.0001);
     let pw = -shape_b * pow(r, shape_a);
 
-    var a = 0.0;
-    if (pw > -15.0) {
-        a = exp(pw) * s.color.a;
-    }
+    var a = select(0.0, exp(pw) * s.color.a, pw > -15.0);
     a = clamp(a, 0.0, 0.999);
     
     if (a < 0.001) {

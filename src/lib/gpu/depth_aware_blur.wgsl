@@ -29,18 +29,20 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     for (var dy = -radius; dy <= radius; dy++) {
         for (var dx = -radius; dx <= radius; dx++) {
             let n_px = px + vec2i(dx, dy);
-            if (n_px.x < 0 || n_px.x >= i32(dims.x) || n_px.y < 0 || n_px.y >= i32(dims.y)) { continue; }
+            let in_bounds = n_px.x >= 0 && n_px.x < i32(dims.x) && n_px.y >= 0 && n_px.y < i32(dims.y);
+            let s_px = clamp(n_px, vec2i(0), vec2i(dims) - 1);
             
-            let n_col = textureLoad(srcColor, n_px, 0).rgb;
-            let n_depth = textureLoad(srcDepth, n_px, 0).r;
+            let n_col = textureLoad(srcColor, s_px, 0).rgb;
+            let n_depth = textureLoad(srcDepth, s_px, 0).r;
             
             let d2 = f32(dx*dx + dy*dy);
             let dc2 = dot(n_col - center_col, n_col - center_col);
             let dd2 = (n_depth - center_depth) * (n_depth - center_depth);
             
-            let w = exp(-d2 / (2.0 * sigma_s * sigma_s)) * 
+            let w_raw = exp(-d2 / (2.0 * sigma_s * sigma_s)) * 
                     exp(-dc2 / (2.0 * sigma_c * sigma_c)) *
                     exp(-dd2 / (2.0 * sigma_d * sigma_d));
+            let w = select(0.0, w_raw, in_bounds);
                      
             sum_col += n_col * w;
             sum_w += w;

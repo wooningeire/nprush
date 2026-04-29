@@ -75,11 +75,8 @@ fn vs_main(
     
     // Calculate tangent and normal in aspect-corrected space
     var tangent = vec2f(screen_p_next.x - screen_p.x, (screen_p_next.y - screen_p.y) / aspect);
-    if (length(tangent) < 1e-6) {
-        tangent = vec2f(1.0, 0.0);
-    } else {
-        tangent = normalize(tangent);
-    }
+    let tangent_len = length(tangent);
+    tangent = select(vec2f(1.0, 0.0), normalize(tangent), tangent_len >= 1e-6);
     
     // Normal in NDC space (undo aspect correction)
     let normal_ndc = vec2f(-tangent.y * aspect, tangent.x);

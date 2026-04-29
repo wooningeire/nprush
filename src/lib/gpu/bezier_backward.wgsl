@@ -234,10 +234,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     
     var background = vec3f(0.0);
     var bg_depth = 1.0;
-    if (uniforms.mode > 0.5) {
-        background = background_sample;
-        bg_depth = bg_depth_sample;
-    }
+    let color_mode = uniforms.mode > 0.5;
+    background = select(vec3f(0.0), background_sample, color_mode);
+    bg_depth   = select(1.0, bg_depth_sample, color_mode);
 
     C_pred += Ts[bezier_count] * background;
     D_pred += Ts[bezier_count] * bg_depth;
@@ -301,23 +300,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let a_geom = a / max(local_opacity, 1e-4);
         
         // Edge mode weighting: penalize opacity if not on an edge
-        var off_w = 0.0;
-        if (uniforms.mode < 0.5) {
-            let OFF_EDGE_ALPHA = 0.35;
-            off_w = OFF_EDGE_ALPHA * (1.0 - tgt_depth);
-        }
+        let OFF_EDGE_ALPHA = 0.35;
+        let off_w = select(0.0, OFF_EDGE_ALPHA * (1.0 - tgt_depth), uniforms.mode < 0.5);
 
         var d_opacity = (da * (1.0 - smoothstep(inner, outer, d)) + off_w * a_geom) * pressure;
 
         var dD = 0.0;
         var dWidth = 0.0;
         var dSoft = 0.0;
-        if (in_softband) {
-            dD = -(da + off_w) * local_opacity * smoothstep_deriv;
-            dWidth = ((da + off_w) * local_opacity * smoothstep_deriv / denom) * pressure;
-            dSoft = (-(da + off_w) * local_opacity * smoothstep_deriv * (local_width - d)
-                / max(2.0 * local_softness * local_softness, 1e-6)) * pressure;
-        }
+        dD     = select(0.0, -(da + off_w) * local_opacity * smoothstep_deriv, in_softband);
+        dWidth = select(0.0, ((da + off_w) * local_opacity * smoothstep_deriv / denom) * pressure, in_softband);
+        dSoft  = select(0.0, (-(da + off_w) * local_opacity * smoothstep_deriv * (local_width - d)
+                / max(2.0 * local_softness * local_softness, 1e-6)) * pressure, in_softband);
 
         // Depth gradient with respect to control points (z/w component)
         let B_pixel = bernstein(t_pixel);

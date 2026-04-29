@@ -34,10 +34,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let coord = vec2i(id.xy) + params.direction * i;
         let clamped = clamp(coord, vec2i(0), vec2i(dims) - 1);
         var col = textureLoad(src, clamped, 0).rgb;
-        
-        if (input_is_srgb) {
-            col = srgb_to_linear(col);
-        }
+        col = select(col, srgb_to_linear(col), input_is_srgb);
         
         let w = exp(-f32(i * i) / (2.0 * params.sigma * params.sigma));
         sum += col * w;
@@ -45,9 +42,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
 
     var result = sum / weight_sum;
-    if (output_is_srgb) {
-        result = linear_to_srgb(result);
-    }
+    result = select(result, linear_to_srgb(result), output_is_srgb);
 
     textureStore(dst, id.xy, vec4f(result, 1.0));
 }

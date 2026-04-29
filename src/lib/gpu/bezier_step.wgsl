@@ -56,20 +56,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let t = current_t + 1.0;
     var pos_grad_norm2 = 0.0;
 
+    // lr per param: 0-11=positions (0.005), 12-14=color (0.02), 15=opacity (0.01), 16-17=width/softness (0.002)
+    let lr_table = array<f32, 18>(
+        0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
+        0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
+        0.02,  0.02,  0.02,  0.01,  0.002, 0.002
+    );
+    // max_update per param
+    let mu_table = array<f32, 18>(
+        0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
+        0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
+        0.001, 0.001, 0.001, 0.0005, 0.005, 0.005
+    );
+    // fp_scale: 10000 for positions/width/softness, 100000 for color
+    let fps_table = array<f32, 18>(
+        10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0,
+        10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0,
+        100000.0, 100000.0, 100000.0, 100000.0, 10000.0, 10000.0
+    );
+
     for (var lp = 0u; lp < 18u; lp++) {
         let param_idx = base_idx + lp;
         let raw_grad = atomicExchange(&grads.data[param_idx], 0);
         
-        var fp_scale = 100000.0;
-        if (lp < 12u || lp >= 16u) {
-            fp_scale = 10000.0;
-        }
+        let fp_scale = fps_table[lp];
         let grad = f32(raw_grad) / fp_scale / 16384.0;
 
-        var lr = 0.005; // Base LR for positions
-        if (lp >= 12u && lp <= 14u) { lr = 0.02; }  // Color rgb
-        if (lp == 15u) { lr = 0.01; }               // Opacity
-        if (lp == 16u || lp == 17u) { lr = 0.002; } // Width/softness
+        let lr = lr_table[lp];
 
         let beta1 = 0.9;
         let beta2 = 0.999;
@@ -88,41 +101,42 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         
         let raw_update = lr * m_hat / (sqrt(v_hat) + epsilon);
         
-        var max_update = 0.01;
-        if (lp < 12u) { max_update = 0.005; }
-        if (lp >= 12u && lp <= 14u) { max_update = 0.001; }
-        if (lp == 15u) { max_update = 0.0005; }
-        if (lp == 16u || lp == 17u) { max_update = 0.005; }
-        
+        let max_update = mu_table[lp];
         let update = clamp(raw_update, -max_update, max_update);
 
-        // Apply update to the corresponding parameter
-        if (lp == 0u) { b.p0.x -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 1u) { b.p0.y -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 2u) { b.p0.z -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 3u) { b.p1.x -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 4u) { b.p1.y -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 5u) { b.p1.z -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 6u) { b.p2.x -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 7u) { b.p2.y -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 8u) { b.p2.z -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 9u) { b.p3.x -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 10u) { b.p3.y -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 11u) { b.p3.z -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 12u) { b.color.r = clamp(b.color.r - update, 0.05, 1.0); }
-        else if (lp == 13u) { b.color.g = clamp(b.color.g - update, 0.05, 1.0); }
-        else if (lp == 14u) { b.color.b = clamp(b.color.b - update, 0.05, 1.0); }
-        else if (lp == 15u) { b.color.a = clamp(b.color.a - update, 0.00, 0.99); }
-        else if (lp == 16u) { b.p0.w = clamp(b.p0.w - update, 0.001, 0.05); }
-        else if (lp == 17u) { b.p1.w = clamp(b.p1.w - update, 0.001, 0.03); }
+        // Unpack bezier fields into a flat array, apply update, repack
+        var params_arr = array<f32, 18>(
+            b.p0.x, b.p0.y, b.p0.z,
+            b.p1.x, b.p1.y, b.p1.z,
+            b.p2.x, b.p2.y, b.p2.z,
+            b.p3.x, b.p3.y, b.p3.z,
+            b.color.r, b.color.g, b.color.b, b.color.a,
+            b.p0.w, b.p1.w
+        );
+        let lo = array<f32, 18>(
+            -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
+            -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
+            0.05, 0.05, 0.05, 0.00, 0.001, 0.001
+        );
+        let hi = array<f32, 18>(
+            1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
+            1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
+            1.0, 1.0, 1.0, 0.99, 0.05, 0.03
+        );
+        params_arr[lp] = clamp(params_arr[lp] - update, lo[lp], hi[lp]);
+        b.p0    = vec4f(params_arr[0],  params_arr[1],  params_arr[2],  params_arr[16]);
+        b.p1    = vec4f(params_arr[3],  params_arr[4],  params_arr[5],  params_arr[17]);
+        b.p2    = vec4f(params_arr[6],  params_arr[7],  params_arr[8],  b.p2.w);
+        b.p3    = vec4f(params_arr[9],  params_arr[10], params_arr[11], b.p3.w);
+        b.color = vec4f(params_arr[12], params_arr[13], params_arr[14], params_arr[15]);
+
+        if (lp <= 11u) { pos_grad_norm2 += grad * grad; }
     }
 
     adc.grad_accum[bezier_id] += sqrt(pos_grad_norm2);
 
     // Prune very thin or transparent beziers
-    if (b.color.a < 0.001 || b.p0.w <= 0.001) {
-        b.color.a = 0.0;
-    }
+    b.color.a = select(b.color.a, 0.0, b.color.a < 0.001 || b.p0.w <= 0.001);
 
     beziers.items[bezier_id] = b;
 }

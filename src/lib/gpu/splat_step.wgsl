@@ -44,20 +44,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     // Param layout: 0=px, 1=py, 2=pz, 3=sx, 4=r, 5=g, 6=b, 7=opacity,
     // 8=qw, 9=qx, 10=qy, 11=qz, 12=sy, 13=shape_a, 14=shape_b
+    // lr per param
+    let lr_table    = array<f32, 15>(0.01, 0.01, 0.01, 0.01, 0.02, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.005, 0.01, 0.01, 0.01);
+    // max_update per param
+    let mu_table    = array<f32, 15>(0.005, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.05, 0.05);
+    // fp_scale: 10000 for pos/scale/quat/shape, 100000 for color
+    let fps_table   = array<f32, 15>(10000.0, 10000.0, 10000.0, 10000.0, 100000.0, 100000.0, 100000.0, 100000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0);
+
     for (var lp = 0u; lp < 15u; lp++) {
         let param_idx = base_idx + lp;
         let raw_grad = atomicExchange(&grads.data[param_idx], 0);
-        var fp_scale = 100000.0;
-        if (lp <= 3u || lp >= 8u) { fp_scale = 10000.0; }
+        let fp_scale = fps_table[lp];
         let grad = f32(raw_grad) / fp_scale / 16384.0;
 
-        var lr = 0.03;
-        if (lp <= 2u) { lr = 0.01; }           // position xyz
-        if (lp == 3u || lp == 12u) { lr = 0.01; } // scale sx, sy
-        if (lp >= 4u && lp <= 6u) { lr = 0.02; }  // color
-        if (lp == 7u) { lr = 0.01; }              // opacity
-        if (lp >= 8u && lp <= 11u) { lr = 0.005; } // quaternion
-        if (lp == 13u || lp == 14u) { lr = 0.01; } // shape
+        let lr = lr_table[lp];
 
         let beta1 = 0.9;
         let beta2 = 0.999;
@@ -72,30 +72,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let v_hat = v / (1.0 - pow(beta2, t));
         let raw_update = lr * m_hat / (sqrt(v_hat) + epsilon);
 
-        var max_update = 0.01;
-        if (lp <= 2u) { max_update = 0.005; }
-        if (lp == 3u || lp == 12u) { max_update = 0.005; }
-        if (lp >= 4u && lp <= 6u) { max_update = 0.001; }
-        if (lp == 7u) { max_update = 0.0005; }
-        if (lp >= 8u && lp <= 11u) { max_update = 0.005; }
-        if (lp == 13u || lp == 14u) { max_update = 0.05; }
+        let max_update = mu_table[lp];
         let update = clamp(raw_update, -max_update, max_update);
 
-        if (lp == 0u) { s.pos_sx.x -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 1u) { s.pos_sx.y -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 2u) { s.pos_sx.z -= update; pos_grad_norm2 += grad * grad; }
-        else if (lp == 3u) { s.pos_sx.w = clamp(s.pos_sx.w - update, 0.001, 2.0); }
-        else if (lp == 4u) { s.color.r = clamp(s.color.r - update, 0.05, 1.0); }
-        else if (lp == 5u) { s.color.g = clamp(s.color.g - update, 0.05, 1.0); }
-        else if (lp == 6u) { s.color.b = clamp(s.color.b - update, 0.05, 1.0); }
-        else if (lp == 7u) { s.color.a = clamp(s.color.a - update, 0.01, 0.99); }
-        else if (lp == 8u) { s.quat.x -= update; }
-        else if (lp == 9u) { s.quat.y -= update; }
-        else if (lp == 10u) { s.quat.z -= update; }
-        else if (lp == 11u) { s.quat.w -= update; }
-        else if (lp == 12u) { s.sy_shape.x = clamp(s.sy_shape.x - update, 0.001, 2.0); }
-        else if (lp == 13u) { s.sy_shape.y = clamp(s.sy_shape.y - update, 0.1, 10.0); }
-        else if (lp == 14u) { s.sy_shape.z = clamp(s.sy_shape.z - update, 0.01, 5.0); }
+        // Unpack splat fields into a flat array, apply update, repack
+        var params_arr = array<f32, 15>(
+            s.pos_sx.x, s.pos_sx.y, s.pos_sx.z, s.pos_sx.w,
+            s.color.r,  s.color.g,  s.color.b,  s.color.a,
+            s.quat.x,   s.quat.y,   s.quat.z,   s.quat.w,
+            s.sy_shape.x, s.sy_shape.y, s.sy_shape.z
+        );
+        let lo = array<f32, 15>(-1e9, -1e9, -1e9, 0.001, 0.05, 0.05, 0.05, 0.01, -1e9, -1e9, -1e9, -1e9, 0.001, 0.1, 0.01);
+        let hi = array<f32, 15>( 1e9,  1e9,  1e9, 2.0,   1.0,  1.0,  1.0,  0.99,  1e9,  1e9,  1e9,  1e9,  2.0, 10.0, 5.0);
+        params_arr[lp] = clamp(params_arr[lp] - update, lo[lp], hi[lp]);
+        s.pos_sx   = vec4f(params_arr[0], params_arr[1], params_arr[2], params_arr[3]);
+        s.color    = vec4f(params_arr[4], params_arr[5], params_arr[6], params_arr[7]);
+        s.quat     = vec4f(params_arr[8], params_arr[9], params_arr[10], params_arr[11]);
+        s.sy_shape = vec4f(params_arr[12], params_arr[13], params_arr[14], s.sy_shape.w);
+
+        if (lp <= 2u) { pos_grad_norm2 += grad * grad; }
     }
 
     // Re-normalize quaternion
@@ -105,9 +100,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     adc.grad_accum[splat_id] += sqrt(pos_grad_norm2);
 
     let area = s.pos_sx.w * s.sy_shape.x;
-    if (s.color.a < 0.05 || area < 0.0001) {
-        s.color.a = 0.0;
-    }
+    s.color.a = select(s.color.a, 0.0, s.color.a < 0.05 || area < 0.0001);
 
     splats.splats[splat_id] = s;
 }

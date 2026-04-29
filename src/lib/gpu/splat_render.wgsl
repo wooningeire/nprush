@@ -24,15 +24,10 @@ fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
     // Fullscreen quad: 2 triangles, 6 vertices
     // tri 0: v0(-1,-1) v1(1,-1) v2(-1,1)
     // tri 1: v3(-1,1) v4(1,-1) v5(1,1)
-    var x: f32; var y: f32;
-    switch vi {
-        case 0u: { x = -1.0; y = -1.0; }
-        case 1u: { x =  1.0; y = -1.0; }
-        case 2u: { x = -1.0; y =  1.0; }
-        case 3u: { x = -1.0; y =  1.0; }
-        case 4u: { x =  1.0; y = -1.0; }
-        default: { x =  1.0; y =  1.0; }
-    }
+    let quad_x = array<f32, 6>(-1.0,  1.0, -1.0, -1.0,  1.0,  1.0);
+    let quad_y = array<f32, 6>(-1.0, -1.0,  1.0,  1.0, -1.0,  1.0);
+    let x = quad_x[vi];
+    let y = quad_y[vi];
 
     var o: VsOut;
     o.pos = vec4f(x, y, 0.0, 1.0);
@@ -187,18 +182,20 @@ fn frag(v: VsOut) -> @location(0) vec4f {
             for (var dy = -15; dy <= 15; dy++) {
                 for (var dx = -15; dx <= 15; dx++) {
                     let n_px = px + vec2i(dx, dy);
-                    if (n_px.x < 0 || n_px.x >= i32(dims.x) || n_px.y < 0 || n_px.y >= i32(dims.y)) { continue; }
+                    let in_bounds = n_px.x >= 0 && n_px.x < i32(dims.x) && n_px.y >= 0 && n_px.y < i32(dims.y);
+                    let s_px = clamp(n_px, vec2i(0), vec2i(dims) - 1);
                     
-                    let n_col = textureLoad(targetTex, n_px, 0).rgb;
-                    let n_depth = textureLoad(targetDepthTex, n_px, 0).r;
+                    let n_col = textureLoad(targetTex, s_px, 0).rgb;
+                    let n_depth = textureLoad(targetDepthTex, s_px, 0).r;
                     
                     let d2 = f32(dx*dx + dy*dy);
                     let dc2 = dot(n_col - center_col, n_col - center_col);
                     let dd2 = (n_depth - center_depth) * (n_depth - center_depth);
                     
-                    let w = exp(-d2 / (2.0 * sigma_s * sigma_s)) * 
+                    let w_raw = exp(-d2 / (2.0 * sigma_s * sigma_s)) * 
                             exp(-dc2 / (2.0 * sigma_c * sigma_c)) *
                             exp(-dd2 / (2.0 * sigma_d * sigma_d));
+                    let w = select(0.0, w_raw, in_bounds);
                              
                     sum_col += n_col * w;
                     sum_w += w;
@@ -237,15 +234,9 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     let color_bezier = textureLoad(colorBezierViewTex, color_bezier_px, 0);
     
     var composite = base;
-    if (uniforms.base_color_beziers_enabled > 0.5) {
-        composite = composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb;
-    }
-    if (uniforms.color_beziers_enabled > 0.5) {
-        composite = composite * (1.0 - color_bezier.a) + color_bezier.rgb;
-    }
-    if (uniforms.edge_beziers_enabled > 0.5) {
-        composite = mix(composite, vec3f(1.0), edge_a);
-    }
+    composite = select(composite, composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb, uniforms.base_color_beziers_enabled > 0.5);
+    composite = select(composite, composite * (1.0 - color_bezier.a) + color_bezier.rgb, uniforms.color_beziers_enabled > 0.5);
+    composite = select(composite, mix(composite, vec3f(1.0), edge_a), uniforms.edge_beziers_enabled > 0.5);
 
     // Painterly color quantization: partial posterization to mimic limited palette
     let levels = 10.0;

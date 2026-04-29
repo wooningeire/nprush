@@ -41,18 +41,11 @@ fn vert(in: VertexInput) -> VertexOutput {
 fn frag(in: VertexOutput) -> FragOutput {
     var out: FragOutput;
     
-    if (uniforms.shadingMode < 0.5) {
-        // Normals mode
-        let color = (normalize(in.normal) + 1) * 0.5;
-        out.color = vec4f(color, 1);
-    } else {
-        // Shaded mode (MatCap)
-        let vn = normalize(in.viewNormal);
-        let uv = vn.xy * 0.5 + 0.5;
-        // Flip Y for texture sampling
-        let matcapColor = textureSample(matcapTex, matcapSampler, vec2f(uv.x, 1.0 - uv.y));
-        out.color = vec4f(matcapColor.rgb, 1.0);
-    }
+    let normals_color = (normalize(in.normal) + 1.0) * 0.5;
+    let vn = normalize(in.viewNormal);
+    let uv = vn.xy * 0.5 + 0.5;
+    let matcap_color = textureSample(matcapTex, matcapSampler, vec2f(uv.x, 1.0 - uv.y)).rgb;
+    out.color = vec4f(select(matcap_color, normals_color, uniforms.shadingMode < 0.5), 1.0);
     
     out.depth = vec4f(in.viewDepth, in.viewDepth, in.viewDepth, 1.0);
     return out;

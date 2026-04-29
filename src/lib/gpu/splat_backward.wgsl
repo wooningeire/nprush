@@ -177,9 +177,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let shape_a = s.sy_shape.y;
         let shape_b = s.sy_shape.z;
         let power = -shape_b * pow(ps.r, shape_a);
-        var a = 0.0;
-        if (power > -15.0) { a = exp(power) * s.color.a; }
-        a = clamp(a, 0.0, 0.999);
+        let a = clamp(select(0.0, exp(power) * s.color.a, power > -15.0), 0.0, 0.999);
         alphas[idx] = a;
         C_pred += Ts[idx] * a * s.color.rgb;
         let depth = clamp(ps.w / 10.0, 0.0, 1.0);
@@ -232,59 +230,59 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         var d_ax_screen = vec2f(0.0);
         var d_ay_screen = vec2f(0.0);
 
-        if (power > -15.0) {
-            let a_un = exp(power);
-            d_opacity = da * a_un;
-            let d_power = da * opacity * a_un;
-            let r_pow_a = pow(ps.r, shape_a);
-            let r_pow_a_m2 = pow(ps.r, shape_a - 2.0);
-            d_shape_a = d_power * (-shape_b * r_pow_a * log(ps.r));
-            d_shape_b = d_power * (-r_pow_a);
-            let d_sp = d_power * (-shape_b * shape_a * r_pow_a_m2) * ps.sp;
+        let above_floor = power > -15.0;
+        let a_un = select(0.0, exp(power), above_floor);
+        d_opacity = select(0.0, da * a_un, above_floor);
+        let d_power = select(0.0, da * opacity * a_un, above_floor);
+        let r_pow_a   = pow(ps.r, shape_a);
+        let r_pow_a_m2 = pow(ps.r, shape_a - 2.0);
+        d_shape_a = select(0.0, d_power * (-shape_b * r_pow_a * log(ps.r)), above_floor);
+        d_shape_b = select(0.0, d_power * (-r_pow_a), above_floor);
+        let d_sp_raw = d_power * (-shape_b * shape_a * r_pow_a_m2) * ps.sp;
+        let d_sp = select(vec2f(0.0), d_sp_raw, above_floor);
 
-            // d_sp -> d_d via M_inv^T
-            let d_d = vec2f(
-                d_sp.x * ps.m11 * ps.inv_det + d_sp.y * (-ps.m10) * ps.inv_det,
-                d_sp.x * (-ps.m01) * ps.inv_det + d_sp.y * ps.m00 * ps.inv_det
-            );
-            d_screen = -d_d;
+        // d_sp -> d_d via M_inv^T
+        let d_d = vec2f(
+            d_sp.x * ps.m11 * ps.inv_det + d_sp.y * (-ps.m10) * ps.inv_det,
+            d_sp.x * (-ps.m01) * ps.inv_det + d_sp.y * ps.m00 * ps.inv_det
+        );
+        d_screen = -d_d;
 
-            // d_sp -> d_M_scaled columns via inverse derivative
-            // sp = M_inv * d, so d_M_ij = -(M_inv^T * d_sp)_i * (M_inv * d)_... 
-            // Actually: d(M_inv)/d(M_kl) = -M_inv[:,k] * M_inv[l,:] 
-            // d_loss/d_M_kl = -sum_ij d_sp_i * M_inv_ik * sp_j  where j indexes d
-            // Wait: sp = M_inv * d. d_loss/d_M_inv_ij = d_sp_i * d_j
-            // d_loss/d_M_kl = -sum_ij (M_inv^T)_ki * d_sp_i * d_j * (M_inv^T)_lj
-            // = -(M_inv^T * d_sp)_k * (M_inv^T * d)_l... no
-            // sp = M_inv * d. Let me use: d_M = -M_inv^T * outer(d_sp, d) * M_inv^T... 
-            // Actually simpler: sp_i = sum_j (M_inv)_ij * d_j
-            // d_loss/d_M_kl = sum_i d_sp_i * d(M_inv_ij)/d(M_kl) * d_j
-            // d(M_inv)/d(M_kl) => (M * M_inv = I) => dM * M_inv + M * dM_inv = 0
-            //   dM_inv = -M_inv * dM * M_inv
-            // d(M_inv)_ij / d(M_kl) = -sum_m (M_inv)_im * delta_mk * (M_inv)_lj
-            //                        = -(M_inv)_ik * (M_inv)_lj
-            // So: d_loss/d_M_kl = -sum_ij d_sp_i * (M_inv)_ik * (M_inv)_lj * d_j
-            //                   = -(M_inv^T * d_sp)_k * (M_inv^T * d)_l... 
-            // Wait: sum_i (M_inv)_ik * d_sp_i = (M_inv^T * d_sp)_k, and
-            //        sum_j (M_inv)_lj * d_j = sp_l (since sp = M_inv * d)
-            // Hmm no: sum_j (M_inv)_lj * d_j = (M_inv * d)_l = sp_l
-            // So d_loss/d_M_kl = -(M_inv^T * d_sp)_k * sp_l
-            let minvT_dsp = vec2f(
-                d_sp.x * ps.m11 * ps.inv_det + d_sp.y * (-ps.m10) * ps.inv_det,
-                d_sp.x * (-ps.m01) * ps.inv_det + d_sp.y * ps.m00 * ps.inv_det
-            );
-            // d_M = -outer(minvT_dsp, sp)
-            // M = [[m00, m01], [m10, m11]] = [[ax_screen.x*sx, ay_screen.x*sy], [ax_screen.y*sx, ay_screen.y*sy]]
-            let d_m00 = -minvT_dsp.x * ps.sp.x;
-            let d_m01 = -minvT_dsp.x * ps.sp.y;
-            let d_m10 = -minvT_dsp.y * ps.sp.x;
-            let d_m11 = -minvT_dsp.y * ps.sp.y;
-            // m00 = ax_screen.x * sx => d_ax_screen.x += d_m00 * sx, d_sx += d_m00 * ax_screen.x
-            d_ax_screen = vec2f(d_m00 * sx, d_m10 * sx);
-            d_ay_screen = vec2f(d_m01 * sy, d_m11 * sy);
-            d_sx = d_m00 * ps.ax_screen.x + d_m10 * ps.ax_screen.y;
-            d_sy = d_m01 * ps.ay_screen.x + d_m11 * ps.ay_screen.y;
-        }
+        // d_sp -> d_M_scaled columns via inverse derivative
+        // sp = M_inv * d, so d_M_ij = -(M_inv^T * d_sp)_i * (M_inv * d)_... 
+        // Actually: d(M_inv)/d(M_kl) = -M_inv[:,k] * M_inv[l,:] 
+        // d_loss/d_M_kl = -sum_ij d_sp_i * M_inv_ik * sp_j  where j indexes d
+        // Wait: sp = M_inv * d. d_loss/d_M_inv_ij = d_sp_i * d_j
+        // d_loss/d_M_kl = -sum_ij (M_inv^T)_ki * d_sp_i * d_j * (M_inv^T)_lj
+        // = -(M_inv^T * d_sp)_k * (M_inv^T * d)_l... no
+        // sp = M_inv * d. Let me use: d_M = -M_inv^T * outer(d_sp, d) * M_inv^T... 
+        // Actually simpler: sp_i = sum_j (M_inv)_ij * d_j
+        // d_loss/d_M_kl = sum_i d_sp_i * d(M_inv_ij)/d(M_kl) * d_j
+        // d(M_inv)/d(M_kl) => (M * M_inv = I) => dM * M_inv + M * dM_inv = 0
+        //   dM_inv = -M_inv * dM * M_inv
+        // d(M_inv)_ij / d(M_kl) = -sum_m (M_inv)_im * delta_mk * (M_inv)_lj
+        //                        = -(M_inv)_ik * (M_inv)_lj
+        // So: d_loss/d_M_kl = -sum_ij d_sp_i * (M_inv)_ik * (M_inv)_lj * d_j
+        //                   = -(M_inv^T * d_sp)_k * (M_inv^T * d)_l... 
+        // Wait: sum_i (M_inv)_ik * d_sp_i = (M_inv^T * d_sp)_k, and
+        //        sum_j (M_inv)_lj * d_j = sp_l (since sp = M_inv * d)
+        // Hmm no: sum_j (M_inv)_lj * d_j = (M_inv * d)_l = sp_l
+        // So d_loss/d_M_kl = -(M_inv^T * d_sp)_k * sp_l
+        let minvT_dsp = vec2f(
+            d_sp.x * ps.m11 * ps.inv_det + d_sp.y * (-ps.m10) * ps.inv_det,
+            d_sp.x * (-ps.m01) * ps.inv_det + d_sp.y * ps.m00 * ps.inv_det
+        );
+        // d_M = -outer(minvT_dsp, sp)
+        // M = [[m00, m01], [m10, m11]] = [[ax_screen.x*sx, ay_screen.x*sy], [ax_screen.y*sx, ay_screen.y*sy]]
+        let d_m00 = -minvT_dsp.x * ps.sp.x;
+        let d_m01 = -minvT_dsp.x * ps.sp.y;
+        let d_m10 = -minvT_dsp.y * ps.sp.x;
+        let d_m11 = -minvT_dsp.y * ps.sp.y;
+        // m00 = ax_screen.x * sx => d_ax_screen.x += d_m00 * sx, d_sx += d_m00 * ax_screen.x
+        d_ax_screen = vec2f(d_m00 * sx, d_m10 * sx);
+        d_ay_screen = vec2f(d_m01 * sy, d_m11 * sy);
+        d_sx = d_m00 * ps.ax_screen.x + d_m10 * ps.ax_screen.y;
+        d_sy = d_m01 * ps.ay_screen.x + d_m11 * ps.ay_screen.y;
 
         // Project d_screen back to d_pos (3D)
         // screen = (clip.x/w * aspect, clip.y/w) where clip = VP * (pos,1), w = clip.w
@@ -303,10 +301,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             let ds_dx = aspect * (vp_0j * w - ps.clip_xy.x * vp_3j) / w2;
             let ds_dy = (vp_1j * w - ps.clip_xy.y * vp_3j) / w2;
             d_pos[ax] = d_screen.x * ds_dx + d_screen.y * ds_dy;
-            
-            if (ps.w > 0.0 && ps.w < 10.0) {
-                d_pos[ax] += vp_3j / 10.0 * d_depth;
-            }
+            d_pos[ax] += select(0.0, vp_3j / 10.0 * d_depth, ps.w > 0.0 && ps.w < 10.0);
         }
 
         // d_ax_screen -> d_quat (approximate: ignore Jacobian's dependence on quat)
