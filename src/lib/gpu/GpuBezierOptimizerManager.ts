@@ -138,6 +138,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 6, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
             ],
         });
         const backwardModule = device.createShaderModule({
@@ -276,6 +277,7 @@ export class GpuBezierOptimizerManager {
         targetDepthTextureView: GPUTextureView,
         bgColorTextureView: GPUTextureView,
         bgDepthTextureView: GPUTextureView,
+        normalTextureView: GPUTextureView,
         width: number,
         height: number,
     ) {
@@ -292,6 +294,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 5, resource: bgColorTextureView },
                 { binding: 6, resource: bgDepthTextureView },
                 { binding: 7, resource: { buffer: this.adcBuffer } },
+                { binding: 8, resource: normalTextureView },
             ],
         });
     }

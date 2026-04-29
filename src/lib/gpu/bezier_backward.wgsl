@@ -43,6 +43,7 @@ struct ADCArray {
 @group(0) @binding(5) var bgTex: texture_2d<f32>;
 @group(0) @binding(6) var bgDepthTex: texture_2d<f32>;
 @group(0) @binding(7) var<storage, read_write> adc: ADCArray;
+@group(0) @binding(8) var normalTex: texture_2d<f32>;
 
 const N_SEG: u32 = 16u;
 
@@ -431,28 +432,40 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             let grad_y = -(cu - cd) * 0.5;
             let grad_color = vec2f(grad_x, grad_y);
 
+            // Normal gradient via central differences
+            let nr_scalar = dot(textureLoad(normalTex, px_r, 0).rgb, vec3f(0.333));
+            let nl_scalar = dot(textureLoad(normalTex, px_l, 0).rgb, vec3f(0.333));
+            let nu_scalar = dot(textureLoad(normalTex, px_u, 0).rgb, vec3f(0.333));
+            let nd_scalar = dot(textureLoad(normalTex, px_d, 0).rgb, vec3f(0.333));
+            let grad_norm_x = (nr_scalar - nl_scalar) * 0.5 * aspect;
+            let grad_norm_y = -(nu_scalar - nd_scalar) * 0.5;
+            let grad_normal = vec2f(grad_norm_x, grad_norm_y);
+
+            // Flow vector combines color and normal gradients equally
+            let flow_vec = grad_color + grad_normal;
+
             // --- Tangent influence (commented out) ---
-            // loss = REG_DIR * (tangent · grad_color)^2
+            // loss = REG_DIR * (tangent · flow_vec)^2
             // let dir_vec = tangent;
 
             // --- Bitangent influence (active) ---
-            // loss = REG_DIR * (bitangent · grad_color)^2
-            // Penalises the bitangent aligning with the color gradient,
-            // which pushes the tangent to align with the gradient instead —
+            // loss = REG_DIR * (bitangent · flow_vec)^2
+            // Penalises the bitangent aligning with the flow vector,
+            // which pushes the tangent to align with the flow instead —
             // i.e. the curve runs across isocurves (perpendicular to flat regions).
             let dir_vec = tangent;
 
-            let tg = dot(dir_vec, grad_color);
+            let tg = dot(dir_vec, flow_vec);
             let d_loss_dir = REG_DIR * 2.0 * tg;
 
-            // d_loss/d_dir_vec = d_loss_dir * grad_color
+            // d_loss/d_dir_vec = d_loss_dir * flow_vec
             // For bitangent = (-ty, tx): d_bitangent/d_tangent = [[ 0,-1],[1, 0]]
             // d_loss/d_tangent = d_loss/d_bitangent * d_bitangent/d_tangent
-            //   = d_loss_dir * grad_color * [[0,1],[-1,0]]
-            //   = d_loss_dir * vec2f(grad_color.y, -grad_color.x)
-            // For tangent variant just use: d_loss_dir * grad_color directly.
-            let d_tangent_vec = d_loss_dir * vec2f(grad_color.y, -grad_color.x); // bitangent chain rule
-            // let d_tangent_vec = d_loss_dir * grad_color; // tangent variant
+            //   = d_loss_dir * flow_vec * [[0,1],[-1,0]]
+            //   = d_loss_dir * vec2f(flow_vec.y, -flow_vec.x)
+            // For tangent variant just use: d_loss_dir * flow_vec directly.
+            let d_tangent_vec = d_loss_dir * vec2f(flow_vec.y, -flow_vec.x); // bitangent chain rule
+            // let d_tangent_vec = d_loss_dir * flow_vec; // tangent variant
 
             // d_tangent/d_seg: tangent = seg / |seg|
             let inv_len = 1.0 / sqrt(len2);
