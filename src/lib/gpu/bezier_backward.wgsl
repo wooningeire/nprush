@@ -18,9 +18,16 @@ struct GradArray {
 }
 
 struct BezierUniforms {
-    vp: mat4x4f,
-    mode: f32, // 0: Edge, 1: Color+Depth
-    _pad: vec3f,
+    vp: mat4x4f,             // offset 0,  size 64
+    mode: f32,               // offset 64, size 4
+    max_width: f32,          // offset 68, size 4
+    prune_alpha_thresh: f32, // offset 72, size 4
+    prune_width_thresh: f32, // offset 76, size 4
+    bg_penalty: f32,         // offset 80, size 4
+    _pad0: f32,              // offset 84, size 4
+    _pad1: f32,              // offset 88, size 4
+    _pad2: f32,              // offset 92, size 4
+    // total: 96 bytes
 }
 
 struct ADCArray {
@@ -253,6 +260,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let dD_total = 0.0;
     var dT = dot(dC, background) + dD_total * bg_depth;
 
+    // Edge mode: coverage loss driving total alpha to match the edge map.
+    let EDGE_LOSS_WEIGHT = 2.0;
+    let coverage = 1.0 - Ts[bezier_count];
+    let edge_target = tgt_color.r;
+    let d_coverage_edge = select(0.0, EDGE_LOSS_WEIGHT * 2.0 * (coverage - edge_target), uniforms.mode < 0.5);
+    dT += -d_coverage_edge;
+
+    // Color mode: penalize opacity directly on background pixels (tgt_depth ≈ 1 = no geometry).
+    // Computed per-bezier in the backward loop below; is_background is used there.
+    let is_background = step(0.995, tgt_depth);
+
     let FP_SCALE_POS = 10000.0;
     let FP_SCALE_COL = 100000.0;
 
@@ -306,13 +324,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let smoothstep_deriv = 6.0 * x_inner * (1.0 - x_inner) / denom;
         let in_softband = (d > inner) && (d < outer);
 
-        // Edge mode weighting: penalize opacity if not on an edge (edge mode only)
-        let OFF_EDGE_ALPHA = 0.35;
-        let off_w = select(0.0, OFF_EDGE_ALPHA * (1.0 - tgt_depth), uniforms.mode < 0.5);
-
         // da/d(opacity): chain through a = a_geom * local_opacity * pressure
         let a_geom = 1.0 - smoothstep(inner, outer, d);
-        var d_opacity = (da * a_geom + off_w * a_geom) * pressure;
+        // Direct background penalty: push opacity to zero on background pixels.
+        // Weight is per-layer (0 = disabled for base color, >0 for fine color layer).
+        let bg_opacity_penalty = uniforms.bg_penalty * is_background;
+        var d_opacity = da * a_geom * pressure + bg_opacity_penalty;
 
         // da/d(d): chain through smoothstep
         // da/d(width) and da/d(softness): chain through inner/outer
@@ -322,7 +339,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         var dD = 0.0;
         var dWidth = 0.0;
         var dSoft = 0.0;
-        let da_eff = (da + off_w) * local_opacity;
+        let da_eff = da * local_opacity;
         dD     = select(0.0, -da_eff * smoothstep_deriv, in_softband);
         // d(smoothstep)/d(width) = smoothstep_deriv * d(x_inner)/d(width)
         // x_inner = (d - inner)/denom, denom = outer - inner = 2*softness*pressure

@@ -22,7 +22,7 @@ struct SplatUniforms {
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
 @group(0) @binding(1) var<storage, read_write> grads: GradArray;
 @group(0) @binding(2) var targetTex: texture_2d<f32>;
-@group(0) @binding(3) var targetEdgeTex: texture_2d<f32>;
+@group(0) @binding(3) var targetDepthTex: texture_2d<f32>;
 @group(0) @binding(4) var<uniform> splat_uniforms: SplatUniforms;
 
 const MAX_TILE_SPLATS = 1024u;
@@ -162,7 +162,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
     let p = pixel_to_p(global_id.xy, dims, aspect);
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
-    let tgt_depth = textureLoad(targetEdgeTex, global_id.xy, 0).r;
+    let tgt_depth = textureLoad(targetDepthTex, global_id.xy, 0).r;
 
     var alphas = array<f32, MAX_TILE_SPLATS>();
     var Ts = array<f32, MAX_TILE_SPLATS + 1u>();

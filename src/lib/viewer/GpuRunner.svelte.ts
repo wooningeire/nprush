@@ -213,9 +213,13 @@ export class GpuRunner {
                 this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on second color layer
-                // Fine color layer: less aggressive killing so thin strokes survive
+                // Fine color layer: less aggressive killing so thin strokes survive,
+                // but background penalty enabled to kill off-model curves.
                 this.colorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.colorLayerBezierManager.writeNoKill(true);
+                this.colorLayerBezierManager.writeBgPenalty(3.0);
+                // Base color layer: no background penalty (blurred target bleeds into bg)
+                this.baseColorLayerBezierManager.writeBgPenalty(0.0);
             });
         });
     }

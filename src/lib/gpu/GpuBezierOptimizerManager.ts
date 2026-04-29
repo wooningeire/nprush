@@ -115,7 +115,7 @@ export class GpuBezierOptimizerManager {
 
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier VP uniforms buffer",
-            size: 96, // mat4x4f (64) + f32 (4) + align(16) + vec3f (12) -> size 96
+            size: 96, // mat4x4f(64) + mode(4) + max_width(4) + prune_alpha(4) + prune_width(4) + bg_penalty(4) + pad(12)
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -229,6 +229,17 @@ export class GpuBezierOptimizerManager {
             this.bezierUniformsBuffer,
             64,
             new Float32Array([mode])
+        );
+    }
+
+    writeBgPenalty(weight: number = 0) {
+        // Writes BezierUniforms.bg_penalty at offset 80.
+        // Layout: vp(64) + mode(4) + max_width(4) + prune_alpha(4) + prune_width(4) = 80
+        // 0 = disabled (base color layer), >0 = enabled (fine color layer).
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            80,
+            new Float32Array([weight])
         );
     }
 

@@ -26,11 +26,16 @@ struct ADCArray {
 }
 
 struct StepUniforms {
-    vp: mat4x4f,
-    mode: f32,
-    max_width: f32,        // 0 = use default cap
-    prune_alpha_thresh: f32, // opacity below this → kill (0 = use default 0.001)
-    prune_width_thresh: f32, // width below this → kill (0 = use default 0.001)
+    vp: mat4x4f,             // offset 0,  size 64
+    mode: f32,               // offset 64, size 4
+    max_width: f32,          // offset 68, size 4
+    prune_alpha_thresh: f32, // offset 72, size 4
+    prune_width_thresh: f32, // offset 76, size 4
+    bg_penalty: f32,         // offset 80, size 4  (unused in step, keeps layout aligned)
+    _pad0: f32,              // offset 84
+    _pad1: f32,              // offset 88
+    _pad2: f32,              // offset 92
+    // total: 96 bytes
 }
 
 @group(0) @binding(0) var<storage, read_write> beziers: BezierArray;

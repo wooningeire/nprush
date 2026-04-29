@@ -270,7 +270,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 0, resource: { buffer: this.splatBuffer } },
                 { binding: 1, resource: { buffer: this.gradBuffer } },
                 { binding: 2, resource: targetTextureView },
-                { binding: 3, resource: targetDepthTextureView },
+                { binding: 3, resource: targetDepthTextureView }, // actual depth, not edge
                 { binding: 4, resource: { buffer: this.splatUniformsBuffer } },
             ],
         });
