@@ -116,10 +116,10 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
-        // VP matrix for backward and forward shaders (mat4x4f = 64 bytes) + blur_enabled (4 bytes) + padding
+        // VP matrix for backward and forward shaders (mat4x4f = 64 bytes) + inv VP (64 bytes) + blur_enabled (4 bytes) + padding
         this.splatUniformsBuffer = device.createBuffer({
             label: "splat VP uniforms buffer",
-            size: 96,
+            size: 160,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -247,7 +247,7 @@ export class GpuSplatOptimizerManager {
         });
     }
 
-    writeSplatVPMatrix(mat: Mat4, blurEnabled: boolean = false) {
+    writeSplatVPMatrix(mat: Mat4, invMat: Mat4, blurEnabled: boolean = false) {
         this.device.queue.writeBuffer(
             this.splatUniformsBuffer,
             0,
@@ -258,6 +258,13 @@ export class GpuSplatOptimizerManager {
         this.device.queue.writeBuffer(
             this.splatUniformsBuffer,
             64,
+            (invMat as Float32Array).buffer,
+            (invMat as Float32Array).byteOffset,
+            (invMat as Float32Array).byteLength
+        );
+        this.device.queue.writeBuffer(
+            this.splatUniformsBuffer,
+            128,
             new Float32Array([blurEnabled ? 1 : 0])
         );
     }
@@ -313,11 +320,11 @@ export class GpuSplatOptimizerManager {
         });
     }
 
-    writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, blurEnabled: boolean, posterizationEnabled: boolean) {
+    writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, posterizationEnabled: boolean) {
         this.device.queue.writeBuffer(
             this.renderUniformsBuffer,
             0,
-            new Float32Array([edgeEnabled ? 1 : 0, baseColorEnabled ? 1 : 0, colorEnabled ? 1 : 0, blurEnabled ? 1 : 0, posterizationEnabled ? 1 : 0])
+            new Float32Array([edgeEnabled ? 1 : 0, baseColorEnabled ? 1 : 0, colorEnabled ? 1 : 0, posterizationEnabled ? 1 : 0])
         );
     }
 

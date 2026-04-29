@@ -46,6 +46,8 @@ struct ADCArray {
 @group(0) @binding(8) var normalTex: texture_2d<f32>;
 
 const N_SEG: u32 = 16u;
+// Reciprocal depth near-plane constant — must match mesh.wgsl and splat_forward.wgsl.
+const DEPTH_NEAR_BEZ: f32 = 0.1;
 
 fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
     let omt = 1.0 - t;
@@ -232,9 +234,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let a_geom = 1.0 - smoothstep(inner, outer, min_d);
         var a = clamp(a_geom * local_opacity, 0.0, 0.999);
 
-        // Interpolate depth (w-component of projected points)
+        // Interpolate depth (w-component of projected points) and apply the same
+        // reciprocal encoding used by mesh.wgsl / splat_forward.wgsl so that
+        // D_pred is in the same [0,1) space as tgt_depth.
         let B = bernstein(t);
-        let d_val = dot(B, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
+        let raw_w = dot(B, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
+        let linear_w = max(raw_w, DEPTH_NEAR_BEZ);
+        let d_val = clamp(1.0 - DEPTH_NEAR_BEZ / linear_w, 0.0, 1.0);
 
         alphas[idx] = a;
         min_seg[idx] = min_k;
@@ -257,6 +263,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     D_pred += Ts[bezier_count] * bg_depth;
 
     let dC_raw = 2.0 * (C_pred - tgt_color);
+
+    // Depth loss in color mode: constrain beziers to lie on the mesh surface.
+    // Only applied on foreground pixels (tgt_depth < 0.99) to avoid fighting
+    // the color loss on background. Weight is small so color dominates.
+    let DEPTH_LOSS_WEIGHT = 0.5;
+    let is_foreground_bez = tgt_depth < 0.99;
+    let dD_depth = select(0.0, DEPTH_LOSS_WEIGHT * 2.0 * (D_pred - tgt_depth), is_foreground_bez && color_mode);
 
     // Luminance/contrast-weighted color loss.
     // 1. Decompose error into luminance and chrominance components.
@@ -284,7 +297,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let dC_chroma = dC_raw - dot(dC_raw, luma_w) * luma_w; // chroma residual
     let dC = (dC_luma + dC_chroma) * contrast_weight;
     // let dD_total = 2.0 * (D_pred - tgt_depth);
-    let dD_total = 0.0;
+    let dD_total = dD_depth;
     var dT = dot(dC, background) + dD_total * bg_depth;
 
     // Edge mode: coverage loss driving total alpha to match the edge map.
@@ -342,6 +355,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let t_pixel = (f32(k - 1u) + u_clamped) / f32(N_SEG);
         let dt_pixel = t_pixel - 0.5;
         let pressure = 1.0 - 4.0 * dt_pixel * dt_pixel;
+        let B_pixel = bernstein(t_pixel);
         let local_width = width * pressure;
         let local_softness = softness * pressure;
         let local_opacity = opacity * pressure;
@@ -386,9 +400,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let dx_ds = pressure * (denom - 2.0 * d_minus_inner) / max(denom * denom, 1e-12);
         dSoft  = select(0.0, -da_eff * smoothstep_deriv * dx_ds, in_softband);
 
-        // Depth gradient with respect to control points (z/w component)
-        let B_pixel = bernstein(t_pixel);
-        let dDepth_dZs = dD_total * (T_prev * a) * B_pixel;
+        // Depth gradient with respect to control points (z/w component).
+        // d_val = 1 - DEPTH_NEAR / raw_w  =>  d(d_val)/d(raw_w) = DEPTH_NEAR / raw_w²
+        // raw_w = dot(B, [w0,w1,w2,w3])   =>  d(raw_w)/d(wi) = B[i]
+        // Chain: d_loss/d(wi) = dD_total * T_prev * a * d(d_val)/d(raw_w) * B[i]
+        // Re-project to get the w (clip.w) for each control point — .z from project_center is clip.w.
+        let w0 = project_center(uniforms.vp, b.p0.xyz, aspect).z;
+        let w1 = project_center(uniforms.vp, b.p1.xyz, aspect).z;
+        let w2 = project_center(uniforms.vp, b.p2.xyz, aspect).z;
+        let w3 = project_center(uniforms.vp, b.p3.xyz, aspect).z;
+        let raw_w_bwd = dot(B_pixel, vec4f(w0, w1, w2, w3));
+        let linear_w_bwd = max(raw_w_bwd, DEPTH_NEAR_BEZ);
+        let d_dval_d_w = DEPTH_NEAR_BEZ / (linear_w_bwd * linear_w_bwd);
+        let dDepth_dZs = dD_total * (T_prev * a) * d_dval_d_w * B_pixel;
 
         let dProj = -dD * d_vec / d;
         let dPrevPt = (1.0 - u_clamped) * dProj;

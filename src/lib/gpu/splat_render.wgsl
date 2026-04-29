@@ -11,7 +11,6 @@ struct RenderUniforms {
     edge_beziers_enabled: f32,
     base_color_beziers_enabled: f32,
     color_beziers_enabled: f32,
-    blur_enabled: f32,
     posterization_enabled: f32,
 }
 @group(0) @binding(7) var<uniform> uniforms: RenderUniforms;
@@ -38,7 +37,7 @@ fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
 }
 
 const STRIP_HEIGHT: f32 = 0.18;
-const NUM_PANELS: f32 = 9.0;
+const NUM_PANELS: f32 = 6.0;
 
 // Fit a source with given aspect into a panel with given aspect
 fn fitInPanel(panel_uv: vec2f, panel_aspect: f32, src_aspect: f32) -> vec2f {
@@ -95,115 +94,48 @@ fn frag(v: VsOut) -> @location(0) vec4f {
         let edge_dims = vec2f(textureDimensions(targetEdgeTex));
         let depth_aspect = depth_dims.x / depth_dims.y;
         let edge_aspect = edge_dims.x / edge_dims.y;
-        let target_aspect = dims.x / dims.y;
         
         let bg = vec4f(0.05, 0.05, 0.05, 1.0);
         
         if (panel_idx < 0.5) {
-            // Panel 0: Target color
-            let fitted = fitInPanel(panel_uv, panel_aspect, target_aspect);
-            if (fitted.x < 0.0) { return bg; }
-            let px = vec2i(fitted * dims);
-            return textureLoad(targetTex, px, 0);
-        } else if (panel_idx < 1.5) {
-            // Panel 1: Splat color, in the splats' native aspect-correct domain
+            // Panel 0: Splat color, in the splats' native aspect-correct domain
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * vec2f(textureDimensions(splatViewTex)));
             return textureLoad(splatViewTex, px, 0);
-        } else if (panel_idx < 2.5) {
-            // Panel 2: Target depth
+        } else if (panel_idx < 1.5) {
+            // Panel 1: Target depth
             let fitted = fitInPanel(panel_uv, panel_aspect, depth_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * depth_dims);
             let d = textureLoad(targetDepthTex, px, 0).r;
             return vec4f(d, d, d, 1.0);
-        } else if (panel_idx < 3.5) {
-            // Panel 3: Target edges
+        } else if (panel_idx < 2.5) {
+            // Panel 2: Target edges
             let fitted = fitInPanel(panel_uv, panel_aspect, edge_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * edge_dims);
             let e = textureLoad(targetEdgeTex, px, 0).r;
             return vec4f(e, e, e, 1.0);
-        } else if (panel_idx < 4.5) {
-            // Panel 4: Splat edges (Sobel of color-splat output)
-            let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
-            if (fitted.x < 0.0) { return bg; }
-            
-            let px = vec2i(fitted * vec2f(textureDimensions(splatViewTex)));
-            let tl = dot(textureLoad(splatViewTex, px + vec2i(-1, -1), 0).rgb, vec3f(0.333));
-            let tc = dot(textureLoad(splatViewTex, px + vec2i( 0, -1), 0).rgb, vec3f(0.333));
-            let tr = dot(textureLoad(splatViewTex, px + vec2i( 1, -1), 0).rgb, vec3f(0.333));
-            let ml = dot(textureLoad(splatViewTex, px + vec2i(-1,  0), 0).rgb, vec3f(0.333));
-            let mr = dot(textureLoad(splatViewTex, px + vec2i( 1,  0), 0).rgb, vec3f(0.333));
-            let bl = dot(textureLoad(splatViewTex, px + vec2i(-1,  1), 0).rgb, vec3f(0.333));
-            let bc = dot(textureLoad(splatViewTex, px + vec2i( 0,  1), 0).rgb, vec3f(0.333));
-            let br = dot(textureLoad(splatViewTex, px + vec2i( 1,  1), 0).rgb, vec3f(0.333));
-            
-            let gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
-            let gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
-            
-            let e = clamp(sqrt(gx * gx + gy * gy) * 8.0, 0.0, 1.0);
-            return vec4f(e, e, e, 1.0);
-        } else if (panel_idx < 5.5) {
-            // Panel 5: Edge layer
+        } else if (panel_idx < 3.5) {
+            // Panel 3: Edge layer
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * vec2f(textureDimensions(bezierViewTex)));
             let e = textureLoad(bezierViewTex, px, 0).r;
             return vec4f(e, e, e, 1.0);
-        } else if (panel_idx < 6.5) {
-            // Panel 6: Base Color Bezier layer
+        } else if (panel_idx < 4.5) {
+            // Panel 4: Base Color Bezier layer
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * vec2f(textureDimensions(baseColorBezierViewTex)));
             return textureLoad(baseColorBezierViewTex, px, 0);
-        } else if (panel_idx < 7.5) {
-            // Panel 7: Color Bezier layer
+        } else {
+            // Panel 5: Color Bezier layer
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * vec2f(textureDimensions(colorBezierViewTex)));
             return textureLoad(colorBezierViewTex, px, 0);
-        } else {
-            // Panel 8: Edge-preserving blurred target
-            let fitted = fitInPanel(panel_uv, panel_aspect, target_aspect);
-            if (fitted.x < 0.0) { return bg; }
-            let px_f = fitted * dims;
-            let px = vec2i(px_f);
-            
-            let center_col = textureLoad(targetTex, px, 0).rgb;
-            let center_depth = textureLoad(targetDepthTex, px, 0).r;
-            
-            var sum_col = vec3f(0.0);
-            var sum_w = 0.0;
-            
-            let sigma_s = 10.0; // Spatial sigma
-            let sigma_c = 0.5; // Color sigma
-            let sigma_d = 0.5; // Depth sigma
-            
-            for (var dy = -15; dy <= 15; dy++) {
-                for (var dx = -15; dx <= 15; dx++) {
-                    let n_px = px + vec2i(dx, dy);
-                    let in_bounds = n_px.x >= 0 && n_px.x < i32(dims.x) && n_px.y >= 0 && n_px.y < i32(dims.y);
-                    let s_px = clamp(n_px, vec2i(0), vec2i(dims) - 1);
-                    
-                    let n_col = textureLoad(targetTex, s_px, 0).rgb;
-                    let n_depth = textureLoad(targetDepthTex, s_px, 0).r;
-                    
-                    let d2 = f32(dx*dx + dy*dy);
-                    let dc2 = dot(n_col - center_col, n_col - center_col);
-                    let dd2 = (n_depth - center_depth) * (n_depth - center_depth);
-                    
-                    let w_raw = exp(-d2 / (2.0 * sigma_s * sigma_s)) * 
-                            exp(-dc2 / (2.0 * sigma_c * sigma_c)) *
-                            exp(-dd2 / (2.0 * sigma_d * sigma_d));
-                    let w = select(0.0, w_raw, in_bounds);
-                             
-                    sum_col += n_col * w;
-                    sum_w += w;
-                }
-            }
-            return vec4f(sum_col / max(sum_w, 1e-5), 1.0);
         }
     }
     

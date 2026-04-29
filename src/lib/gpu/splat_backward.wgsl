@@ -15,6 +15,7 @@ struct GradArray {
 
 struct SplatUniforms {
     vp: mat4x4f,
+    vp_inv: mat4x4f,
     blur_enabled: f32,
     _pad: vec3f,
 }
@@ -54,6 +55,23 @@ fn project_axis(vp: mat4x4f, ax_world: vec3f, clip_xy: vec2f, w: f32, aspect: f3
         (ac.x * w - clip_xy.x * ac.w) / (w * w) * aspect,
         (ac.y * w - clip_xy.y * ac.w) / (w * w)
     );
+}
+
+// Reconstruct world-space position from reciprocal-encoded depth and aspect-corrected screen coords.
+// depth = 1 - DEPTH_NEAR/w  =>  w = DEPTH_NEAR / (1 - depth)
+// For WebGPU perspective (zNear=0.01, zFar=100): z_clip ≈ w (close approximation for w >> zNear).
+// world = VP_inv * clip
+fn reconstruct_world_pos(p: vec2f, depth: f32, aspect: f32) -> vec3f {
+    const DEPTH_NEAR_R = 0.1;
+    // Recover view-space depth w from reciprocal encoding
+    let w = DEPTH_NEAR_R / max(1.0 - depth, 1e-5);
+    // p is aspect-corrected: p.x = ndc_x * aspect, p.y = ndc_y
+    let ndc_x = p.x / aspect;
+    let ndc_y = p.y;
+    // Approximate z_clip ≈ w (valid for zFar >> zNear, which holds for zNear=0.01, zFar=100)
+    let clip = vec4f(ndc_x * w, ndc_y * w, w, w);
+    let world = splat_uniforms.vp_inv * clip;
+    return world.xyz / world.w;
 }
 
 struct ProjectedSplat {
@@ -315,6 +333,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             // d(w)/d(pos[ax]) = VP[3][ax] (homogeneous row)
             let d_depth_d_w = DEPTH_NEAR / (w * w);
             d_pos[ax] += select(0.0, vp_3j * d_depth_d_w * d_depth, ps.w > DEPTH_NEAR);
+        }
+
+        // 3D position loss: reconstruct the mesh surface point in world space and pull
+        // the splat center toward it. This constrains all 3 DOF of position (not just
+        // depth), making the depth loss view-consistent across camera rotations.
+        // Only applied on foreground pixels where the mesh surface is visible.
+        if (is_foreground) {
+            let surf_pos = reconstruct_world_pos(p, tgt_depth, aspect);
+            let pos_err = s.pos_sx.xyz - surf_pos;
+            // Weight by splat contribution T_prev * a so only visible splats are pulled.
+            let POS3D_WEIGHT = 0.3;
+            let d_pos3d = POS3D_WEIGHT * 2.0 * pos_err * (T_prev * a);
+            d_pos += d_pos3d;
         }
 
         // d_ax_screen -> d_quat (approximate: ignore Jacobian's dependence on quat)
