@@ -368,6 +368,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let d_qy_total = d_qy_ax + d_qy_ay;
         let d_qz_total = d_qz_ax + d_qz_ay;
 
+        // Shape regularization: push toward flat-topped profile (gouache-like)
+        // shape_a=6 → flat plateau, shape_b=0.3 → wide coverage before falloff
+        let REG_SHAPE_STRENGTH = 0.005;
+        let target_shape_a = 6.0;
+        let target_shape_b = 0.3;
+        d_shape_a += REG_SHAPE_STRENGTH * 2.0 * (shape_a - target_shape_a);
+        d_shape_b += REG_SHAPE_STRENGTH * 2.0 * (shape_b - target_shape_b);
+
         let FP_SCALE_POS = 10000.0;
         let FP_SCALE_COL = 100000.0;
 

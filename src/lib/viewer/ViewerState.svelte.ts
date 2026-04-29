@@ -14,12 +14,12 @@ export class ViewerState {
     edgeBeziersEnabled = $state(false);
     colorBeziersEnabled = $state(false);
     compareBlurred = $state(false);
-    blurRadius = $state(16);
+    blurRadius = $state(32);
     shadingMode = $state<'normals' | 'shaded'>('normals');
     
     bezierRegEnabled = $state(false);
-    bezierRegWidth = $state(0.003);
-    bezierRegSoftness = $state(0.001);
+    bezierRegWidth = $state(0.02);
+    bezierRegSoftness = $state(0.01);
 
     runner = $state<GpuRunner | null>(null);
     

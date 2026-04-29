@@ -233,5 +233,11 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     if (uniforms.color_beziers_enabled > 0.5) {
         composite = composite * (1.0 - color_bezier.a) + color_bezier.rgb;
     }
+
+    // Painterly color quantization: partial posterization to mimic limited palette
+    let levels = 10.0;
+    let quantized = floor(composite * levels + 0.5) / levels;
+    composite = mix(composite, quantized, 0.5);
+
     return vec4f(composite, 1.0);
 }

@@ -54,13 +54,13 @@ const {
             <div class="slider-group">
                 <label>
                     Width: {viewerState.bezierRegWidth.toFixed(4)}
-                    <input type="range" min="0.0001" max="0.01" step="0.0001" bind:value={viewerState.bezierRegWidth} />
+                    <input type="range" min="0.001" max="0.05" step="0.001" bind:value={viewerState.bezierRegWidth} />
                 </label>
             </div>
             <div class="slider-group">
                 <label>
                     Softness: {viewerState.bezierRegSoftness.toFixed(4)}
-                    <input type="range" min="0.0001" max="0.01" step="0.0001" bind:value={viewerState.bezierRegSoftness} />
+                    <input type="range" min="0.001" max="0.03" step="0.001" bind:value={viewerState.bezierRegSoftness} />
                 </label>
             </div>
         {/if}
