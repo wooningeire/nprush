@@ -10,7 +10,7 @@ import { GpuDepthAwareBlurPipelineManager } from "$/gpu/GpuDepthAwareBlurPipelin
 import type { MeshData } from "$/gpu/loadGlb";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 
-const OPTIM_SHORT = 128;
+const OPTIM_SHORT = 256;
 
 // The edge layer is now cubic bezier curves. A handful is enough since each
 // curve is a 1D primitive that natively traces a contour.
@@ -213,6 +213,9 @@ export class GpuRunner {
                 this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on second color layer
+                // Fine color layer: less aggressive killing so thin strokes survive
+                this.colorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
+                this.colorLayerBezierManager.writeNoKill(true);
             });
         });
     }

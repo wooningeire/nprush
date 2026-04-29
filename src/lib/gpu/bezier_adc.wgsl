@@ -15,7 +15,8 @@ struct AdamState {
     v: array<f32, NUM_BEZIER_PARAMS>,
     t: f32,
     pixel_count: f32,
-    pad: vec2f,
+    no_kill: f32, // 1.0 = disable loss-based killing in ADC
+    pad: f32,
 }
 
 struct ADCArray {
@@ -57,7 +58,8 @@ fn main() {
         adc.loss_accum[i] = 0.0;
 
         // Kill beziers that are stuck (not moving) but still adding to the loss.
-        if (grad_norm <= TAU_POS && loss_norm > TAU_LOSS) {
+        // Skipped when no_kill is set (e.g. fine color layer).
+        if (adam.no_kill < 0.5 && grad_norm <= TAU_POS && loss_norm > TAU_LOSS) {
             beziers.items[i].color.a = 0.0;
             continue;
         }

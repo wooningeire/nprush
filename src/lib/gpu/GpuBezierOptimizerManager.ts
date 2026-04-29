@@ -241,6 +241,25 @@ export class GpuBezierOptimizerManager {
         );
     }
 
+    writeKillThresholds(alphaThresh: number = 0, widthThresh: number = 0) {
+        // Writes prune_alpha_thresh (offset 72) and prune_width_thresh (offset 76).
+        // 0 = use default (0.001). Set higher to kill more aggressively, lower for less.
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            72,
+            new Float32Array([alphaThresh, widthThresh])
+        );
+    }
+
+    writeNoKill(noKill: boolean) {
+        // Writes adam.no_kill flag at offset numParams*8 + 8 (after t and pixel_count).
+        this.device.queue.writeBuffer(
+            this.adamBuffer,
+            this.numParams * 8 + 8,
+            new Float32Array([noKill ? 1.0 : 0.0])
+        );
+    }
+
     setBackwardTarget(
         targetTextureView: GPUTextureView,
         targetDepthTextureView: GPUTextureView,

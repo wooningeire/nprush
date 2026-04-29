@@ -28,8 +28,9 @@ struct ADCArray {
 struct StepUniforms {
     vp: mat4x4f,
     mode: f32,
-    max_width: f32, // 0 = use default cap (0.05)
-    _pad: vec2f,
+    max_width: f32,        // 0 = use default cap
+    prune_alpha_thresh: f32, // opacity below this → kill (0 = use default 0.001)
+    prune_width_thresh: f32, // width below this → kill (0 = use default 0.001)
 }
 
 @group(0) @binding(0) var<storage, read_write> beziers: BezierArray;
@@ -142,8 +143,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     adc.grad_accum[bezier_id] += sqrt(pos_grad_norm2);
 
-    // Prune very thin or transparent beziers
-    b.color.a = select(b.color.a, 0.0, b.color.a < 0.001 || b.p0.w <= 0.001);
+    // Prune very thin or transparent beziers — thresholds are configurable
+    // per layer so fine color beziers can use a lower kill threshold.
+    let alpha_thresh = select(0.001, uniforms.prune_alpha_thresh, uniforms.prune_alpha_thresh > 0.0);
+    let width_thresh = select(0.001, uniforms.prune_width_thresh, uniforms.prune_width_thresh > 0.0);
+    b.color.a = select(b.color.a, 0.0, b.color.a < alpha_thresh || b.p0.w <= width_thresh);
 
     beziers.items[bezier_id] = b;
 }
