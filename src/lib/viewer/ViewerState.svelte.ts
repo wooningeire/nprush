@@ -17,10 +17,6 @@ export class ViewerState {
     blurRadius = $state(32);
     shadingMode = $state<'normals' | 'shaded'>('normals');
     
-    bezierRegEnabled = $state(false);
-    bezierRegWidth = $state(0.02);
-    bezierRegSoftness = $state(0.01);
-
     runner = $state<GpuRunner | null>(null);
     
     readonly orbit = new CameraOrbit();

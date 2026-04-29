@@ -186,18 +186,8 @@ export class GpuRunner {
             $effect(() => this.bezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.colorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => {
-                this.edgeLayerBezierManager.writeRegParams(
-                    this.viewerState.bezierRegEnabled,
-                    this.viewerState.bezierRegWidth,
-                    this.viewerState.bezierRegSoftness,
-                    0 // Edge mode
-                );
-                this.colorLayerBezierManager.writeRegParams(
-                    this.viewerState.bezierRegEnabled,
-                    this.viewerState.bezierRegWidth,
-                    this.viewerState.bezierRegSoftness,
-                    1 // Color+Depth mode
-                );
+                this.edgeLayerBezierManager.writeMode(0); // Edge mode
+                this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
             });
         });
     }

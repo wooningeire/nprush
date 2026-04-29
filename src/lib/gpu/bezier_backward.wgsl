@@ -19,10 +19,8 @@ struct GradArray {
 
 struct BezierUniforms {
     vp: mat4x4f,
-    reg_enabled: f32,
-    reg_width: f32,
-    reg_softness: f32,
     mode: f32, // 0: Edge, 1: Color+Depth
+    _pad: vec3f,
 }
 
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
@@ -316,11 +314,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let B_pixel = bernstein(t_pixel);
         let dDepth_dZs = dD_total * (T_prev * a) * B_pixel;
 
-        // Regularization loss
-        if (uniforms.reg_enabled > 0.5) {
-            dWidth += 2.0 * (width - uniforms.reg_width) * 0.01;
-            dSoft += 2.0 * (softness - uniforms.reg_softness) * 0.01;
-        }
+
 
         let dProj = -dD * d_vec / d;
         let dPrevPt = (1.0 - u_clamped) * dProj;
