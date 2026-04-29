@@ -22,6 +22,7 @@ export class ViewerState {
     posterizationEnabled = $state(false);
     compareBlurred = $state(false);
     shadingMode = $state<'normals' | 'shaded'>('normals');
+    blurRadius = $state(16);
     
     runner = $state<GpuRunner | null>(null);
     
