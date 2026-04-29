@@ -164,8 +164,10 @@ export class GpuPathTracePipelineManager {
 
     reset() {
         if (!this.accumBuffer) return;
-        const zeros = new Float32Array(this.accumWidth * this.accumHeight * 4);
-        this.device.queue.writeBuffer(this.accumBuffer, 0, zeros);
+        // clearBuffer zeros the entire buffer efficiently on GPU
+        const encoder = this.device.createCommandEncoder({ label: "pt reset" });
+        encoder.clearBuffer(this.accumBuffer);
+        this.device.queue.submit([encoder.finish()]);
         this.frameCount = 0;
     }
 

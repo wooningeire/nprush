@@ -234,6 +234,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
                 { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
                 { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 8, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
             ],
         });
 
@@ -294,6 +295,7 @@ export class GpuSplatOptimizerManager {
         bezierViewTextureView: GPUTextureView,
         baseColorBezierViewTextureView: GPUTextureView,
         colorBezierViewTextureView: GPUTextureView,
+        ptTextureView: GPUTextureView,
     ) {
         this.renderBindGroup = this.device.createBindGroup({
             layout: this.renderBindGroupLayout,
@@ -306,6 +308,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 5, resource: baseColorBezierViewTextureView },
                 { binding: 6, resource: colorBezierViewTextureView },
                 { binding: 7, resource: { buffer: this.renderUniformsBuffer } },
+                { binding: 8, resource: ptTextureView },
             ],
         });
     }

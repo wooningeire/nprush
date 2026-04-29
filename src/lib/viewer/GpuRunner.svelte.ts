@@ -530,6 +530,7 @@ export class GpuRunner {
                     this.fullBezierTextureView,
                     this.fullBaseColorBezierTextureView!,
                     this.fullColorBezierTextureView,
+                    this.dummyTextureView!, // PT not ready yet at setup time
                 );
             }
 
@@ -604,8 +605,8 @@ export class GpuRunner {
             this.pathTracePipelineManager.dispatch(commandEncoder);
 
             // Use path trace output as the optimization target if available, else fall back to raster.
-            const ptView = this.pathTracePipelineManager.outputTextureView;
-            const optimTargetView = ptView ?? this.optimTextureView!;
+            const ptOutputView = this.pathTracePipelineManager.outputTextureView;
+            const optimTargetView = ptOutputView ?? this.optimTextureView!;
 
             // 1c. Run separable blur on targets if enabled
             if (this.viewerState.compareBlurred) {
@@ -741,6 +742,7 @@ export class GpuRunner {
             }
 
             // 5. Render Splat Visualization to Screen View (uses full-res textures)
+            const ptView = this.pathTracePipelineManager.outputTextureView ?? this.dummyTextureView!;
             this.splatOptimizerManager.setRenderTarget(
                 this.targetTextureView!,
                 this.fullSplatTextureView!,
@@ -749,6 +751,7 @@ export class GpuRunner {
                 this.fullBezierTextureView!,
                 this.fullBaseColorBezierTextureView!,
                 this.fullColorBezierTextureView!,
+                ptView,
             );
 
             const screenView = currentTexture.createView();

@@ -1,23 +1,23 @@
 // CPU-side SAH BVH builder.
-// Produces a flat array of BvhNode structs for upload to the GPU.
+// Produces a flat buffer of BvhNode structs for upload to the GPU.
 //
-// Node layout (8 x f32 = 32 bytes):
-//   [min_x, min_y, min_z, data0,  max_x, max_y, max_z, data1]
+// Node layout (8 x 4 bytes = 32 bytes):
+//   bytes  0-11: min_x, min_y, min_z  (f32)
+//   bytes 12-15: data0                (u32) — left child idx (internal) or first tri idx (leaf)
+//   bytes 16-27: max_x, max_y, max_z  (f32)
+//   bytes 28-31: data1                (u32) — right child idx (internal) or (count|LEAF_FLAG) (leaf)
 //
-// Internal node: data0 = left child index, data1 = right child index
-// Leaf node:     data0 = first triangle index in reordered tri_indices,
-//                data1 = tri_count | LEAF_FLAG (bit 31 set)
-//
-// Triangle indices are stored in a separate reordered array so the GPU
-// can look up triangles by BVH leaf range without indirection overhead.
+// The GPU shader reads this as array<f32> and uses bitcast<u32> for data0/data1.
+// Storing u32 values via DataView.setUint32 ensures the bit pattern is preserved
+// when the GPU does bitcast<u32>(f32_array[slot]).
 
-export const LEAF_FLAG = 0x80000000;
-const MAX_LEAF_TRIS = 4; // max triangles per leaf before splitting
-const SAH_BINS = 8;      // number of SAH binning buckets
+export const LEAF_FLAG = 0x80000000 >>> 0;
+const MAX_LEAF_TRIS = 4;
+const SAH_BINS = 8;
 
 export interface BvhResult {
-    // Flat node array: 8 f32 per node
-    nodes: Float32Array;
+    // Raw bytes: 32 bytes per node, mixed f32/u32 fields
+    nodes: ArrayBuffer;
     // Reordered triangle indices (3 u32 per triangle)
     triIndices: Uint32Array;
 }
@@ -54,13 +54,13 @@ function emptyAABB(): AABB {
 }
 
 function triAABB(verts: Float32Array, i0: number, i1: number, i2: number): AABB {
-    const VSTRIDE = 10;
-    const p0 = [verts[i0 * VSTRIDE], verts[i0 * VSTRIDE + 1], verts[i0 * VSTRIDE + 2]] as [number, number, number];
-    const p1 = [verts[i1 * VSTRIDE], verts[i1 * VSTRIDE + 1], verts[i1 * VSTRIDE + 2]] as [number, number, number];
-    const p2 = [verts[i2 * VSTRIDE], verts[i2 * VSTRIDE + 1], verts[i2 * VSTRIDE + 2]] as [number, number, number];
+    const S = 10;
+    const ax = verts[i0*S], ay = verts[i0*S+1], az = verts[i0*S+2];
+    const bx = verts[i1*S], by = verts[i1*S+1], bz = verts[i1*S+2];
+    const cx = verts[i2*S], cy = verts[i2*S+1], cz = verts[i2*S+2];
     return {
-        min: [Math.min(p0[0], p1[0], p2[0]), Math.min(p0[1], p1[1], p2[1]), Math.min(p0[2], p1[2], p2[2])],
-        max: [Math.max(p0[0], p1[0], p2[0]), Math.max(p0[1], p1[1], p2[1]), Math.max(p0[2], p1[2], p2[2])],
+        min: [Math.min(ax,bx,cx), Math.min(ay,by,cy), Math.min(az,bz,cz)],
+        max: [Math.max(ax,bx,cx), Math.max(ay,by,cy), Math.max(az,bz,cz)],
     };
 }
 
@@ -70,55 +70,70 @@ interface BuildTri {
     centroid: [number, number, number];
 }
 
-// Flat node storage (built incrementally)
-const nodeData: number[] = []; // 8 floats per node
+// ── Node storage using DataView for correct f32/u32 interleaving ──────────────
+// Each node: 8 slots × 4 bytes = 32 bytes
+// Slots: [f32 minX, f32 minY, f32 minZ, u32 data0, f32 maxX, f32 maxY, f32 maxZ, u32 data1]
+const NODE_BYTES = 32;
+let nodeBuf: ArrayBuffer = new ArrayBuffer(0);
+let nodeDv: DataView = new DataView(nodeBuf);
+let nodeCount = 0;
 
-function pushNode(
-    minX: number, minY: number, minZ: number, data0: number,
-    maxX: number, maxY: number, maxZ: number, data1: number,
-): number {
-    const idx = nodeData.length / 8;
-    nodeData.push(minX, minY, minZ, data0, maxX, maxY, maxZ, data1);
-    return idx;
+function growNodes(needed: number) {
+    if (needed * NODE_BYTES <= nodeBuf.byteLength) return;
+    const newSize = Math.max(needed * NODE_BYTES, nodeBuf.byteLength * 2, 1024);
+    const newBuf = new ArrayBuffer(newSize);
+    new Uint8Array(newBuf).set(new Uint8Array(nodeBuf));
+    nodeBuf = newBuf;
+    nodeDv = new DataView(nodeBuf);
 }
 
-function setNodeData(nodeIdx: number, data0: number, data1: number) {
-    nodeData[nodeIdx * 8 + 3] = data0;
-    nodeData[nodeIdx * 8 + 7] = data1;
+function allocNode(): number {
+    growNodes(nodeCount + 1);
+    return nodeCount++;
 }
 
-// Reordered triangle output
-const outTris: number[] = []; // i0, i1, i2 per tri
+function writeNodeBounds(idx: number, mn: [number,number,number], mx: [number,number,number]) {
+    const off = idx * NODE_BYTES;
+    nodeDv.setFloat32(off +  0, mn[0], true);
+    nodeDv.setFloat32(off +  4, mn[1], true);
+    nodeDv.setFloat32(off +  8, mn[2], true);
+    nodeDv.setFloat32(off + 16, mx[0], true);
+    nodeDv.setFloat32(off + 20, mx[1], true);
+    nodeDv.setFloat32(off + 24, mx[2], true);
+}
 
+function writeNodeData(idx: number, data0: number, data1: number) {
+    const off = idx * NODE_BYTES;
+    nodeDv.setUint32(off + 12, data0 >>> 0, true);
+    nodeDv.setUint32(off + 28, data1 >>> 0, true);
+}
+
+// ── Triangle output ───────────────────────────────────────────────────────────
+let outTris: number[] = [];
+
+// ── Recursive builder ─────────────────────────────────────────────────────────
 function buildNode(tris: BuildTri[]): number {
-    // Compute bounds of all triangle AABBs and centroids
     let bounds = emptyAABB();
     let centBounds = emptyAABB();
     for (const t of tris) {
         bounds = aabbUnion(bounds, t.aabb);
-        const cb: AABB = { min: t.centroid, max: t.centroid };
-        centBounds = aabbUnion(centBounds, cb);
+        centBounds = aabbUnion(centBounds, { min: t.centroid, max: t.centroid });
     }
 
-    // Allocate node slot now (fill data later)
-    const nodeIdx = pushNode(
-        bounds.min[0], bounds.min[1], bounds.min[2], 0,
-        bounds.max[0], bounds.max[1], bounds.max[2], 0,
-    );
+    const nodeIdx = allocNode();
+    writeNodeBounds(nodeIdx, bounds.min, bounds.max);
 
     if (tris.length <= MAX_LEAF_TRIS) {
-        // Leaf
         const start = outTris.length / 3;
         for (const t of tris) outTris.push(t.i0, t.i1, t.i2);
-        setNodeData(nodeIdx, start, (tris.length | LEAF_FLAG) >>> 0);
+        writeNodeData(nodeIdx, start, (tris.length | LEAF_FLAG) >>> 0);
         return nodeIdx;
     }
 
-    // Find best SAH split
+    // SAH split
     let bestCost = Infinity;
     let bestAxis = 0;
     let bestSplit = 0;
-
     const parentSA = aabbSurfaceArea(bounds);
 
     for (let axis = 0; axis < 3; axis++) {
@@ -126,23 +141,18 @@ function buildNode(tris: BuildTri[]): number {
         const cMax = centBounds.max[axis];
         if (cMax - cMin < 1e-8) continue;
 
-        // Bin triangles
         const binBounds: AABB[] = Array.from({ length: SAH_BINS }, emptyAABB);
         const binCount = new Int32Array(SAH_BINS);
-
         for (const t of tris) {
-            const c = t.centroid[axis];
-            let b = Math.floor(((c - cMin) / (cMax - cMin)) * SAH_BINS);
+            let b = Math.floor(((t.centroid[axis] - cMin) / (cMax - cMin)) * SAH_BINS);
             b = Math.min(b, SAH_BINS - 1);
             binBounds[b] = aabbUnion(binBounds[b], t.aabb);
             binCount[b]++;
         }
 
-        // Sweep left→right and right→left to find best split
         const leftBounds: AABB[] = new Array(SAH_BINS - 1);
         const leftCounts = new Int32Array(SAH_BINS - 1);
-        let lb = emptyAABB();
-        let lc = 0;
+        let lb = emptyAABB(), lc = 0;
         for (let i = 0; i < SAH_BINS - 1; i++) {
             lb = aabbUnion(lb, binBounds[i]);
             lc += binCount[i];
@@ -150,39 +160,30 @@ function buildNode(tris: BuildTri[]): number {
             leftCounts[i] = lc;
         }
 
-        let rb = emptyAABB();
-        let rc = 0;
+        let rb = emptyAABB(), rc = 0;
         for (let i = SAH_BINS - 2; i >= 0; i--) {
             rb = aabbUnion(rb, binBounds[i + 1]);
             rc += binCount[i + 1];
             const cost = (aabbSurfaceArea(leftBounds[i]) * leftCounts[i] +
                           aabbSurfaceArea(rb) * rc) / parentSA;
-            if (cost < bestCost) {
-                bestCost = cost;
-                bestAxis = axis;
-                bestSplit = i;
-            }
+            if (cost < bestCost) { bestCost = cost; bestAxis = axis; bestSplit = i; }
         }
     }
 
-    // Partition
     const cMin = centBounds.min[bestAxis];
     const cMax = centBounds.max[bestAxis];
-    let left: BuildTri[];
-    let right: BuildTri[];
+    let left: BuildTri[], right: BuildTri[];
 
     if (cMax - cMin < 1e-8 || bestCost >= tris.length) {
-        // Degenerate: split in half
         const mid = Math.floor(tris.length / 2);
         left = tris.slice(0, mid);
         right = tris.slice(mid);
     } else {
-        left = [];
-        right = [];
+        left = []; right = [];
         for (const t of tris) {
             let b = Math.floor(((t.centroid[bestAxis] - cMin) / (cMax - cMin)) * SAH_BINS);
             b = Math.min(b, SAH_BINS - 1);
-            if (b <= bestSplit) left.push(t); else right.push(t);
+            (b <= bestSplit ? left : right).push(t);
         }
         if (left.length === 0 || right.length === 0) {
             const mid = Math.floor(tris.length / 2);
@@ -193,19 +194,18 @@ function buildNode(tris: BuildTri[]): number {
 
     const leftIdx  = buildNode(left);
     const rightIdx = buildNode(right);
-    setNodeData(nodeIdx, leftIdx, rightIdx);
+    writeNodeData(nodeIdx, leftIdx, rightIdx);
     return nodeIdx;
 }
 
 export function buildBvh(verts: Float32Array, indices: Uint32Array): BvhResult {
-    // Reset global state
-    nodeData.length = 0;
-    outTris.length = 0;
+    nodeCount = 0;
+    outTris = [];
 
     const numTris = indices.length / 3;
     const tris: BuildTri[] = [];
     for (let ti = 0; ti < numTris; ti++) {
-        const i0 = indices[ti * 3 + 0];
+        const i0 = indices[ti * 3];
         const i1 = indices[ti * 3 + 1];
         const i2 = indices[ti * 3 + 2];
         const aabb = triAABB(verts, i0, i1, i2);
@@ -214,8 +214,9 @@ export function buildBvh(verts: Float32Array, indices: Uint32Array): BvhResult {
 
     buildNode(tris);
 
+    // Return only the used portion of the node buffer
     return {
-        nodes: new Float32Array(nodeData),
+        nodes: nodeBuf.slice(0, nodeCount * NODE_BYTES),
         triIndices: new Uint32Array(outTris),
     };
 }

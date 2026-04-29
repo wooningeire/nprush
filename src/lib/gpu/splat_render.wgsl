@@ -5,6 +5,7 @@
 @group(0) @binding(4) var bezierViewTex: texture_2d<f32>;
 @group(0) @binding(5) var baseColorBezierViewTex: texture_2d<f32>;
 @group(0) @binding(6) var colorBezierViewTex: texture_2d<f32>;
+@group(0) @binding(8) var ptTex: texture_2d<f32>;
 
 struct RenderUniforms {
     edge_beziers_enabled: f32,
@@ -207,11 +208,16 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     
     let main_uv_y = v.uv.y / (1.0 - STRIP_HEIGHT);
 
-    // Left half: target (full-res target texture, sampled across the half-width panel)
+    // Left half: path-traced result (upsampled from optim resolution)
     if (v.uv.x < 0.498) {
         let tx = v.uv.x * 2.0;
-        let px = vec2i(vec2f(tx, main_uv_y) * dims);
-        return textureLoad(targetTex, px, 0);
+        let pt_dims = vec2f(textureDimensions(ptTex));
+        let px = vec2i(vec2f(tx, main_uv_y) * pt_dims);
+        let pt_color = textureLoad(ptTex, clamp(px, vec2i(0), vec2i(pt_dims) - 1), 0);
+        // Overlay target mesh render faintly if PT not yet accumulated (alpha channel = 0)
+        let raster_px = vec2i(vec2f(tx, main_uv_y) * dims);
+        let raster = textureLoad(targetTex, clamp(raster_px, vec2i(0), vec2i(dims) - 1), 0);
+        return select(raster, pt_color, pt_color.a > 0.0);
     }
 
     // Separator
