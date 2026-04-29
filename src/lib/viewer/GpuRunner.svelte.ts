@@ -114,8 +114,11 @@ export class GpuRunner {
         viewerState,
         mesh,
         groundMesh,
+        groundPbrMesh,
         matcapTexture,
         brushTexture,
+        groundAlbedoTexture,
+        groundNormalTexture,
         numSplats = 512,
     }: {
         device: GPUDevice,
@@ -125,8 +128,11 @@ export class GpuRunner {
         viewerState: any,
         mesh: MeshData,
         groundMesh: MeshData | null,
+        groundPbrMesh: MeshData | null,
         matcapTexture: GPUTexture,
         brushTexture: GPUTexture,
+        groundAlbedoTexture?: GPUTexture,
+        groundNormalTexture?: GPUTexture,
         numSplats?: number,
     }) {
         this.device = device;
@@ -149,6 +155,9 @@ export class GpuRunner {
         if (groundMesh) {
             this.meshRenderPipelineManager.setGroundMesh(groundMesh);
         }
+        if (groundPbrMesh && groundAlbedoTexture && groundNormalTexture) {
+            this.meshRenderPipelineManager.setPbrMesh(groundPbrMesh, groundAlbedoTexture, groundNormalTexture, matcapTexture);
+        }
 
         this.envmapPipelineManager = new GpuEnvmapPipelineManager({
             device,
@@ -164,6 +173,7 @@ export class GpuRunner {
         // Upload scene geometry for path tracing
         const ptMeshes: MeshData[] = [mesh];
         if (groundMesh) ptMeshes.push(groundMesh);
+        if (groundPbrMesh) ptMeshes.push(groundPbrMesh);
         this.pathTracePipelineManager.setMeshes(ptMeshes);
 
         // The color-layer instance owns the visualization render pipeline, which

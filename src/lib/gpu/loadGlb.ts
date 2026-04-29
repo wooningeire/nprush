@@ -11,9 +11,11 @@
 import { mat3, mat4, vec3 } from "wgpu-matrix";
 
 export interface MeshData {
-    // Interleaved [px, py, pz, nx, ny, nz, r, g, b, a] per vertex.
+    // Interleaved [px, py, pz, nx, ny, nz, r, g, b, a, u, v] per vertex.
     vertices: Float32Array;
     indices: Uint32Array;
+    /** True when TEXCOORD_0 was present in at least one primitive. */
+    hasUvs: boolean;
 }
 
 const GLB_MAGIC = 0x46546c67; // "glTF"
@@ -79,6 +81,7 @@ interface GlbMesh {
 }
 
 interface GlbNode {
+    name?: string;
     mesh?: number;
     children?: number[];
     matrix?: number[];
@@ -105,19 +108,21 @@ export async function loadGlb(
     url: string,
     normalize = true,
     materialOverride?: [number, number, number, number],
+    meshName?: string,
 ): Promise<MeshData> {
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`Failed to fetch ${url}: ${response.status}`);
     }
     const buffer = await response.arrayBuffer();
-    return parseGlb(buffer, normalize, materialOverride);
+    return parseGlb(buffer, normalize, materialOverride, meshName);
 }
 
 function parseGlb(
     buffer: ArrayBuffer,
     normalize = true,
     materialOverride?: [number, number, number, number],
+    meshName?: string,
 ): MeshData {
     const dv = new DataView(buffer);
     if (dv.getUint32(0, true) !== GLB_MAGIC) {
@@ -147,7 +152,9 @@ function parseGlb(
     const positions: number[] = [];
     const normals: number[] = [];
     const colors: number[] = []; // rgba per vertex
+    const uvs: number[] = []; // uv per vertex
     const indices: number[] = [];
+    let hasUvs = false;
 
     const sceneIdx = json.scene ?? 0;
     const scene = json.scenes?.[sceneIdx];
@@ -155,7 +162,7 @@ function parseGlb(
 
     const identity = mat4.identity();
     for (const nodeIdx of rootNodes) {
-        walkNode(json, bin, nodeIdx, identity, positions, normals, colors, indices, materialOverride);
+        walkNode(json, bin, nodeIdx, identity, positions, normals, colors, uvs, indices, materialOverride, (found) => { if (found) hasUvs = true; }, meshName);
     }
 
     if (positions.length === 0) {
@@ -163,20 +170,22 @@ function parseGlb(
     }
 
     const vertCount = positions.length / 3;
-    // Stride: pos(3) + normal(3) + color(4) = 10 floats
-    const STRIDE = 10;
+    // Stride: pos(3) + normal(3) + color(4) + uv(2) = 12 floats
+    const STRIDE = 12;
     const interleaved = new Float32Array(vertCount * STRIDE);
     for (let i = 0; i < vertCount; i++) {
-        interleaved[i * STRIDE + 0] = positions[i * 3 + 0];
-        interleaved[i * STRIDE + 1] = positions[i * 3 + 1];
-        interleaved[i * STRIDE + 2] = positions[i * 3 + 2];
-        interleaved[i * STRIDE + 3] = normals[i * 3 + 0];
-        interleaved[i * STRIDE + 4] = normals[i * 3 + 1];
-        interleaved[i * STRIDE + 5] = normals[i * 3 + 2];
-        interleaved[i * STRIDE + 6] = colors[i * 4 + 0];
-        interleaved[i * STRIDE + 7] = colors[i * 4 + 1];
-        interleaved[i * STRIDE + 8] = colors[i * 4 + 2];
-        interleaved[i * STRIDE + 9] = colors[i * 4 + 3];
+        interleaved[i * STRIDE + 0]  = positions[i * 3 + 0];
+        interleaved[i * STRIDE + 1]  = positions[i * 3 + 1];
+        interleaved[i * STRIDE + 2]  = positions[i * 3 + 2];
+        interleaved[i * STRIDE + 3]  = normals[i * 3 + 0];
+        interleaved[i * STRIDE + 4]  = normals[i * 3 + 1];
+        interleaved[i * STRIDE + 5]  = normals[i * 3 + 2];
+        interleaved[i * STRIDE + 6]  = colors[i * 4 + 0];
+        interleaved[i * STRIDE + 7]  = colors[i * 4 + 1];
+        interleaved[i * STRIDE + 8]  = colors[i * 4 + 2];
+        interleaved[i * STRIDE + 9]  = colors[i * 4 + 3];
+        interleaved[i * STRIDE + 10] = uvs[i * 2 + 0] ?? 0;
+        interleaved[i * STRIDE + 11] = uvs[i * 2 + 1] ?? 0;
     }
 
     if (normalize) {
@@ -186,6 +195,7 @@ function parseGlb(
     return {
         vertices: interleaved,
         indices: new Uint32Array(indices),
+        hasUvs,
     };
 }
 
@@ -197,14 +207,20 @@ function walkNode(
     outPositions: number[],
     outNormals: number[],
     outColors: number[],
+    outUvs: number[],
     outIndices: number[],
     materialOverride?: [number, number, number, number],
+    onHasUvs?: (found: boolean) => void,
+    meshName?: string,
 ) {
     const node = json.nodes![nodeIdx];
     const local = nodeMatrix(node);
     const xform = mat4.mul(parentXform, local);
 
-    if (node.mesh !== undefined) {
+    // If a name filter is set, only process nodes whose name matches
+    const nameMatches = !meshName || node.name === meshName;
+
+    if (nameMatches && node.mesh !== undefined) {
         const mesh = json.meshes![node.mesh];
         for (const prim of mesh.primitives) {
             if ((prim.mode ?? 4) !== 4) continue;
@@ -216,6 +232,12 @@ function walkNode(
             let normals: Float32Array | null = null;
             if (prim.attributes.NORMAL !== undefined) {
                 normals = readAccessor(json, bin, prim.attributes.NORMAL) as Float32Array;
+            }
+
+            let uvData: Float32Array | null = null;
+            if (prim.attributes.TEXCOORD_0 !== undefined) {
+                uvData = readAccessor(json, bin, prim.attributes.TEXCOORD_0) as Float32Array;
+                onHasUvs?.(true);
             }
 
             // Read material base color factor (default white).
@@ -252,6 +274,12 @@ function walkNode(
                 }
 
                 outColors.push(matColor[0], matColor[1], matColor[2], matColor[3]);
+
+                if (uvData) {
+                    outUvs.push(uvData[i * 2 + 0], uvData[i * 2 + 1]);
+                } else {
+                    outUvs.push(0, 0);
+                }
             }
 
             if (prim.indices !== undefined) {
@@ -272,7 +300,7 @@ function walkNode(
 
     if (node.children) {
         for (const childIdx of node.children) {
-            walkNode(json, bin, childIdx, xform, outPositions, outNormals, outColors, outIndices, materialOverride);
+            walkNode(json, bin, childIdx, xform, outPositions, outNormals, outColors, outUvs, outIndices, materialOverride, onHasUvs, meshName);
         }
     }
 }

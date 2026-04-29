@@ -8,6 +8,8 @@ import artelorianUrl from "$/assets/artelorian.glb?url";
 import groundUrl from "$/assets/ground.glb?url";
 import hdrUrl from "$/assets/lakeside_sunrise_2k.hdr?url";
 import brushUrl from "$/assets/brush.png?url";
+import groundAlbedoUrl from "$/assets/brown_mud_03_diff_2k.jpg?url";
+import groundNormalUrl from "$/assets/brown_mud_03_nor_gl_2k.png?url";
 import { loadHdrTexture } from "$/gpu/loadHdrTexture";
 import { loadTexture } from "$/gpu/loadTexture";
 
@@ -47,16 +49,19 @@ export class ViewerState {
         onMount(async () => {
             // Kick off mesh load and gpu request concurrently; both are awaited
             // before we build the runner since the mesh is a constructor input.
-            const [gpu, mesh, groundMesh] = await Promise.all([
+            const [gpu, mesh, groundMesh, groundPbrMesh] = await Promise.all([
                 requestGpu({ canvas: await canvasPromise }),
                 loadGlb(artelorianUrl),
-                loadGlb(groundUrl, false, [1, 1, 1, 0]).catch(() => null), // keep world-space; a=0 flags as specular mirror
+                loadGlb(groundUrl, false, [1, 1, 1, 0]),           // Plane — specular mirror, world-space
+                loadGlb(groundUrl, false, [1, 1, 1, 1], 'Plane.001'), // Plane.001 — PBR textured
             ]);
             if (!gpu) return;
 
-            const [envTexture, brushTexture] = await Promise.all([
+            const [envTexture, brushTexture, groundAlbedoTexture, groundNormalTexture] = await Promise.all([
                 loadHdrTexture(gpu.device, hdrUrl),
                 loadTexture(gpu.device, brushUrl),
+                loadTexture(gpu.device, groundAlbedoUrl),
+                loadTexture(gpu.device, groundNormalUrl),
             ]);
 
             const gpuRunner = new GpuRunner({
@@ -67,8 +72,11 @@ export class ViewerState {
                 viewerState: state,
                 mesh,
                 groundMesh,
+                groundPbrMesh,
                 matcapTexture: envTexture,
                 brushTexture,
+                groundAlbedoTexture,
+                groundNormalTexture,
                 numSplats,
             });
             state.runner = gpuRunner;

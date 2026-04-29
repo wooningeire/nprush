@@ -7,10 +7,13 @@ import meshModuleSrc from "./mesh.wgsl?raw";
 export const MESH_DEPTH_FORMAT: GPUTextureFormat = "depth24plus";
 
 // Renders an arbitrary indexed triangle mesh into the color + depth attachments
-// using the shared scene uniforms. Vertex layout is interleaved [position(vec3),
-// normal(vec3)] -- the same layout we used for the procedural sphere this
-// replaced -- and indices are uint32 so concatenated GLB scenes with more than
-// 65535 vertices work without special casing.
+// using the shared scene uniforms.
+//
+// Vertex layout is interleaved [position(vec3), normal(vec3), color(vec4), uv(vec2)]
+// — stride 12 floats / 48 bytes. Indices are uint32.
+//
+// The ground mesh (Plane.001) uses a separate PBR pipeline that samples an
+// albedo texture and a tangent-space normal map.
 export class GpuMeshRenderPipelineManager {
     readonly renderPipeline: GPURenderPipeline;
     readonly uniformsManager: GpuUniformsBufferManager;
@@ -23,8 +26,18 @@ export class GpuMeshRenderPipelineManager {
     private groundIndexBuffer: GPUBuffer | null = null;
     private groundIndexCount: number = 0;
 
-    private static readonly STRIDE = 40; // 10 floats * 4 bytes (pos + normal + color)
+    private pbrVertexBuffer: GPUBuffer | null = null;
+    private pbrIndexBuffer: GPUBuffer | null = null;
+    private pbrIndexCount: number = 0;
+    private pbrBindGroup: GPUBindGroup | null = null;
+    private pbrPipeline: GPURenderPipeline | null = null;
+
+    // Stride: pos(3) + normal(3) + color(4) + uv(2) = 12 floats × 4 bytes
+    private static readonly STRIDE = 48;
     private readonly device: GPUDevice;
+
+    // Store format for use in setGroundMesh (set during construction)
+    private _format!: GPUTextureFormat;
 
     constructor({
         device,
@@ -39,100 +52,61 @@ export class GpuMeshRenderPipelineManager {
     }) {
         this.device = device;
         this.uniformsManager = uniformsManager;
+        this._format = format;
 
         const module = device.createShaderModule({
             label: "mesh module",
             code: meshModuleSrc,
         });
 
-        const pipelineLayout = device.createPipelineLayout({
-            label: "mesh render pipeline layout",
-            bindGroupLayouts: [
-                device.createBindGroupLayout({
-                    entries: [
-                        {
-                            binding: 0,
-                            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-                            buffer: { type: "uniform" },
-                        },
-                        {
-                            binding: 1,
-                            visibility: GPUShaderStage.FRAGMENT,
-                            texture: { sampleType: "float" },
-                        },
-                        {
-                            binding: 2,
-                            visibility: GPUShaderStage.FRAGMENT,
-                            sampler: { type: "filtering" },
-                        },
-                    ],
-                }),
+        const vertexBufferLayout: GPUVertexBufferLayout = {
+            arrayStride: GpuMeshRenderPipelineManager.STRIDE,
+            attributes: [
+                { shaderLocation: 0, offset: 0,  format: "float32x3" }, // position
+                { shaderLocation: 1, offset: 12, format: "float32x3" }, // normal
+                { shaderLocation: 2, offset: 24, format: "float32x4" }, // color
+                { shaderLocation: 3, offset: 40, format: "float32x2" }, // uv
+            ],
+        };
+
+        // Bind group layout for the standard (matcap) pipeline
+        const standardBgl = device.createBindGroupLayout({
+            label: "mesh standard bgl",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
             ],
         });
+
+        const pipelineLayout = device.createPipelineLayout({
+            label: "mesh render pipeline layout",
+            bindGroupLayouts: [standardBgl],
+        });
+
+        const fragmentTargets: GPUColorTargetState[] = [{ format }, { format }];
+
+        const primitiveState: GPUPrimitiveState = {
+            topology: "triangle-list",
+            cullMode: "back",
+            frontFace: "ccw",
+        };
+
+        const depthStencil: GPUDepthStencilState = {
+            format: MESH_DEPTH_FORMAT,
+            depthWriteEnabled: true,
+            depthCompare: "less",
+        };
 
         this.renderPipeline = device.createRenderPipeline({
             label: "mesh render pipeline",
             layout: pipelineLayout,
-
-            vertex: {
-                module,
-                entryPoint: "vert",
-                buffers: [
-                    {
-                        arrayStride: GpuMeshRenderPipelineManager.STRIDE,
-                        attributes: [
-                            {
-                                shaderLocation: 0,
-                                offset: 0,
-                                format: "float32x3",
-                            },
-                            {
-                                shaderLocation: 1,
-                                offset: 12,
-                                format: "float32x3",
-                            },
-                            {
-                                shaderLocation: 2,
-                                offset: 24,
-                                format: "float32x4",
-                            },
-                        ],
-                    },
-                ],
-            },
-
-            fragment: {
-                module,
-                entryPoint: "frag",
-                targets: [
-                    {
-                        format,
-                    },
-                    {
-                        format,
-                    },
-                ],
-            },
-
-            primitive: {
-                topology: "triangle-list",
-                // glTF 2.0 spec mandates CCW front faces. Cull the inside of
-                // closed meshes so back-face fragments don't fight front faces
-                // for the visible pixel.
-                cullMode: "back",
-                frontFace: "ccw",
-            },
-
-            depthStencil: {
-                format: MESH_DEPTH_FORMAT,
-                depthWriteEnabled: true,
-                depthCompare: "less",
-            },
+            vertex: { module, entryPoint: "vert", buffers: [vertexBufferLayout] },
+            fragment: { module, entryPoint: "frag", targets: fragmentTargets },
+            primitive: primitiveState,
+            depthStencil,
         });
 
-        // Aligned-size requirement: WebGPU requires buffer sizes to be a
-        // multiple of 4. Float32 + Uint32 arrays already satisfy this so a
-        // direct upload is fine.
         this.vertexBuffer = device.createBuffer({
             label: "mesh vertex buffer",
             size: mesh.vertices.byteLength,
@@ -149,6 +123,7 @@ export class GpuMeshRenderPipelineManager {
         this.indexCount = mesh.indices.length;
     }
 
+    /** Upload a plain ground mesh rendered with the standard matcap pipeline. */
     setGroundMesh(mesh: MeshData) {
         if (this.groundVertexBuffer) this.groundVertexBuffer.destroy();
         if (this.groundIndexBuffer) this.groundIndexBuffer.destroy();
@@ -169,27 +144,112 @@ export class GpuMeshRenderPipelineManager {
         this.groundIndexCount = mesh.indices.length;
     }
 
+    /**
+     * Upload a PBR mesh (Plane.001) with albedo + normal map textures.
+     * albedoTexture: sRGB diffuse map
+     * normalTexture: OpenGL-convention tangent-space normal map
+     * matcapTexture: shared env/matcap texture (for lighting)
+     */
+    setPbrMesh(
+        mesh: MeshData,
+        albedoTexture: GPUTexture,
+        normalTexture: GPUTexture,
+        matcapTexture: GPUTexture,
+    ) {
+        if (this.pbrVertexBuffer) this.pbrVertexBuffer.destroy();
+        if (this.pbrIndexBuffer) this.pbrIndexBuffer.destroy();
+
+        this.pbrVertexBuffer = this.device.createBuffer({
+            label: "pbr vertex buffer",
+            size: mesh.vertices.byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.pbrVertexBuffer, 0, mesh.vertices as any);
+
+        this.pbrIndexBuffer = this.device.createBuffer({
+            label: "pbr index buffer",
+            size: mesh.indices.byteLength,
+            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.pbrIndexBuffer, 0, mesh.indices as any);
+        this.pbrIndexCount = mesh.indices.length;
+
+        const module = this.device.createShaderModule({
+            label: "mesh pbr module",
+            code: meshModuleSrc,
+        });
+
+        const pbrBgl = this.device.createBindGroupLayout({
+            label: "mesh pbr bgl",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+                { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+            ],
+        });
+
+        const pbrLayout = this.device.createPipelineLayout({
+            label: "mesh pbr pipeline layout",
+            bindGroupLayouts: [pbrBgl],
+        });
+
+        this.pbrPipeline = this.device.createRenderPipeline({
+            label: "ground pbr pipeline",
+            layout: pbrLayout,
+            vertex: {
+                module,
+                entryPoint: "vert_pbr",
+                buffers: [{
+                    arrayStride: GpuMeshRenderPipelineManager.STRIDE,
+                    attributes: [
+                        { shaderLocation: 0, offset: 0,  format: "float32x3" },
+                        { shaderLocation: 1, offset: 12, format: "float32x3" },
+                        { shaderLocation: 2, offset: 24, format: "float32x4" },
+                        { shaderLocation: 3, offset: 40, format: "float32x2" },
+                    ],
+                }],
+            },
+            fragment: {
+                module,
+                entryPoint: "frag_pbr",
+                targets: [{ format: this._format }, { format: this._format }],
+            },
+            primitive: { topology: "triangle-list", cullMode: "back", frontFace: "ccw" },
+            depthStencil: { format: MESH_DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: "less" },
+        });
+
+        const pbrSampler = this.device.createSampler({
+            magFilter: "linear",
+            minFilter: "linear",
+            mipmapFilter: "linear",
+            addressModeU: "repeat",
+            addressModeV: "repeat",
+        });
+
+        this.pbrBindGroup = this.device.createBindGroup({
+            label: "ground pbr bind group",
+            layout: pbrBgl,
+            entries: [
+                { binding: 0, resource: { buffer: this.uniformsManager.uniformsBuffer } },
+                { binding: 1, resource: matcapTexture.createView() },
+                { binding: 2, resource: this.device.createSampler({ magFilter: "linear", minFilter: "linear" }) },
+                { binding: 3, resource: albedoTexture.createView() },
+                { binding: 4, resource: normalTexture.createView() },
+                { binding: 5, resource: pbrSampler },
+            ],
+        });
+    }
+
     addDraw(renderPassEncoder: GPURenderPassEncoder, matcapTextureView: GPUTextureView) {
-        // We create a transient bind group because the texture might change or just for simplicity.
-        // Or we could store it if it's static. Let's create it once if possible.
         const bindGroup = this.device.createBindGroup({
             layout: this.renderPipeline.getBindGroupLayout(0),
             entries: [
-                {
-                    binding: 0,
-                    resource: { buffer: this.uniformsManager.uniformsBuffer },
-                },
-                {
-                    binding: 1,
-                    resource: matcapTextureView,
-                },
-                {
-                    binding: 2,
-                    resource: this.device.createSampler({
-                        magFilter: "linear",
-                        minFilter: "linear",
-                    }),
-                },
+                { binding: 0, resource: { buffer: this.uniformsManager.uniformsBuffer } },
+                { binding: 1, resource: matcapTextureView },
+                { binding: 2, resource: this.device.createSampler({ magFilter: "linear", minFilter: "linear" }) },
             ],
         });
 
@@ -199,11 +259,20 @@ export class GpuMeshRenderPipelineManager {
         renderPassEncoder.setIndexBuffer(this.indexBuffer, "uint32");
         renderPassEncoder.drawIndexed(this.indexCount);
 
-        // Draw ground mesh if loaded
+        // Draw plain ground mesh with standard matcap pipeline
         if (this.groundVertexBuffer && this.groundIndexBuffer && this.groundIndexCount > 0) {
             renderPassEncoder.setVertexBuffer(0, this.groundVertexBuffer);
             renderPassEncoder.setIndexBuffer(this.groundIndexBuffer, "uint32");
             renderPassEncoder.drawIndexed(this.groundIndexCount);
+        }
+
+        // Draw PBR mesh (Plane.001) with PBR pipeline
+        if (this.pbrPipeline && this.pbrBindGroup && this.pbrVertexBuffer && this.pbrIndexBuffer && this.pbrIndexCount > 0) {
+            renderPassEncoder.setPipeline(this.pbrPipeline);
+            renderPassEncoder.setBindGroup(0, this.pbrBindGroup);
+            renderPassEncoder.setVertexBuffer(0, this.pbrVertexBuffer);
+            renderPassEncoder.setIndexBuffer(this.pbrIndexBuffer, "uint32");
+            renderPassEncoder.drawIndexed(this.pbrIndexCount);
         }
     }
 }

@@ -1,7 +1,7 @@
 // Progressive path tracer — diffuse-only, 1 sample per pixel per frame.
 // Uses a flat BVH for O(log n) ray-scene intersection.
 //
-// Vertex layout (stride 10 f32): [px,py,pz, nx,ny,nz, r,g,b,a]
+// Vertex layout (stride 12 f32): [px,py,pz, nx,ny,nz, r,g,b,a, u,v]
 //
 // BVH node layout (8 f32 = 32 bytes):
 //   [min_x, min_y, min_z, data0,  max_x, max_y, max_z, data1]
@@ -12,7 +12,7 @@
 // bvh_tris: reordered [i0, i1, i2] per triangle (u32)
 
 const LEAF_FLAG: u32 = 0x80000000u;
-const VSTRIDE:   u32 = 10u;
+const VSTRIDE:   u32 = 12u;
 const MAX_STACK: u32 = 64u;
 
 struct PTUniforms {

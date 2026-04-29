@@ -54,7 +54,7 @@ function emptyAABB(): AABB {
 }
 
 function triAABB(verts: Float32Array, i0: number, i1: number, i2: number): AABB {
-    const S = 10;
+    const S = 12;
     const ax = verts[i0*S], ay = verts[i0*S+1], az = verts[i0*S+2];
     const bx = verts[i1*S], by = verts[i1*S+1], bz = verts[i1*S+2];
     const cx = verts[i2*S], cy = verts[i2*S+1], cz = verts[i2*S+2];

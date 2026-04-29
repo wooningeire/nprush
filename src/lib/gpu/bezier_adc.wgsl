@@ -118,6 +118,13 @@ fn main() {
         }
     }
 
+    // --- Pass 1.5: Split or clone high-gradient curves into dead slots ---
+    for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
+        var b = beziers.items[i];
+        if (b.color.a < 0.005) { continue; }
+
+        let grad_norm = adc.grad_accum[i] / ADC_PERIOD;
+
         if (grad_norm <= TAU_POS) { continue; }
         if (dead_count == 0u) { continue; }
 
@@ -172,19 +179,21 @@ fn main() {
             adam.m[new_idx * 18u + p] = 0.0;
             adam.v[new_idx * 18u + p] = 0.0;
         }
+    }
+
     // --- Pass 2: seed new beziers at the highest-loss uncovered pixels ---
     // Fill ALL remaining dead slots so population stays at capacity.
     // Cap at 512 spawns per ADC cycle to keep GPU time bounded while allowing rapid revival.
     let max_spawns = min(dead_count, 512u);
     let stride = max(1u, PIXEL_LOSS_SIZE / 4096u); // scan ~4096 pixels per pass to find local maxima efficiently
 
-    for (var pass = 0u; pass < max_spawns; pass = pass + 1u) {
+    for (var spawn_i = 0u; spawn_i < max_spawns; spawn_i = spawn_i + 1u) {
         if (dead_count == 0u) { break; }
 
         // Find a high-loss pixel efficiently using a strided scan
         var best_px = 0u;
         var best_val = 0;
-        let start_offset = (pass * 997u) % stride;
+        let start_offset = (spawn_i * 997u) % stride;
         
         for (var px = start_offset; px < PIXEL_LOSS_SIZE; px = px + stride) {
             let v = atomicLoad(&pixel_loss[px]);
@@ -198,7 +207,7 @@ fn main() {
         // always get filled (important for fine layers with near-zero residual).
         var spawn_px = best_px;
         if (best_val <= 0) {
-            let seed_fb = f32(pass) * 1234.5678 + adam.t * 0.1;
+            let seed_fb = f32(spawn_i) * 1234.5678 + adam.t * 0.1;
             let rx = u32(fract(sin(seed_fb * 12.9898) * 43758.5453) * f32(OPTIM_WIDTH));
             let ry = u32(fract(sin(seed_fb * 78.233)  * 43758.5453) * f32(OPTIM_HEIGHT));
             spawn_px = ry * OPTIM_WIDTH + rx;
@@ -213,7 +222,7 @@ fn main() {
         let spawn_depth = 0.5;
         let center = pixel_to_world(spawn_px, spawn_depth);
 
-        let seed = f32(spawn_px) * 1.61803 + f32(pass) * 2.71828;
+        let seed = f32(spawn_px) * 1.61803 + f32(spawn_i) * 2.71828;
         let angle = fract(sin(seed * 127.1) * 43758.5453) * 6.28318;
         let tx = cos(angle) * 0.025;
         let tz = sin(angle) * 0.025;

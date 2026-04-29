@@ -89,7 +89,7 @@ export class GpuPathTracePipelineManager {
     }
 
     setMeshes(meshes: MeshData[]) {
-        const VSTRIDE = 10;
+        const VSTRIDE = 12;
         let totalVerts = 0;
         let totalTris  = 0;
         for (const m of meshes) {
