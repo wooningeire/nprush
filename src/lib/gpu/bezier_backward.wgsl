@@ -361,14 +361,96 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let B_pixel = bernstein(t_pixel);
         let dDepth_dZs = dD_total * (T_prev * a) * B_pixel;
 
-
-
         let dProj = -dD * d_vec / d;
         let dPrevPt = (1.0 - u_clamped) * dProj;
         let dCurrPt = u_clamped * dProj;
 
         let B_prev = bernstein(t_prev);
         let B_curr = bernstein(t_curr);
+
+        // --- Regularization (fine color layer only: max_width > 0) ---
+        let is_fine = uniforms.max_width > 0.0;
+        let base = i * 18u;
+
+        // 1. Softness → 0: loss = REG_SOFT * softness^2
+        //    d_soft += REG_SOFT * 2 * softness
+        let REG_SOFT = 5.0;
+        dSoft += select(0.0, REG_SOFT * 2.0 * softness, is_fine);
+
+        // 2. Direction regularization: align tangent with direction of least color change.
+        //    loss = REG_DIR * (tangent_ndc · grad_color)^2
+        //    where tangent_ndc is the bezier tangent at t_pixel in aspect-corrected screen space,
+        //    and grad_color is the image gradient of targetTex at this pixel.
+        //
+        //    Tangent = normalize(curr_pt - prev_pt) in aspect-corrected space.
+        //    grad_color via central differences on targetTex.
+        //
+        //    d_loss/d_tangent = REG_DIR * 2 * (t·g) * g
+        //    d_tangent/d_control_points flows through the bezier derivative.
+        let REG_DIR = 0.5;
+        if (is_fine && len2 > 1e-10) {
+            // Tangent in aspect-corrected screen space (already normalized by len)
+            let tangent = seg / sqrt(len2); // seg = curr_pt - prev_pt
+
+            // Color gradient via central differences (1-pixel step in NDC)
+            let px = vec2i(global_id.xy);
+            let px_dims = vec2i(dims);
+            let px_r = clamp(px + vec2i(1, 0), vec2i(0), px_dims - 1);
+            let px_l = clamp(px - vec2i(1, 0), vec2i(0), px_dims - 1);
+            let px_u = clamp(px + vec2i(0, 1), vec2i(0), px_dims - 1);
+            let px_d = clamp(px - vec2i(0, 1), vec2i(0), px_dims - 1);
+            let cr = dot(textureLoad(targetTex, px_r, 0).rgb, vec3f(0.333));
+            let cl = dot(textureLoad(targetTex, px_l, 0).rgb, vec3f(0.333));
+            let cu = dot(textureLoad(targetTex, px_u, 0).rgb, vec3f(0.333));
+            let cd = dot(textureLoad(targetTex, px_d, 0).rgb, vec3f(0.333));
+            // grad in aspect-corrected screen space: x scaled by aspect, y flipped
+            let grad_x = (cr - cl) * 0.5 * aspect;
+            let grad_y = -(cu - cd) * 0.5; // y flipped (image y vs NDC y)
+            let grad_color = vec2f(grad_x, grad_y);
+
+            // loss = REG_DIR * (tangent · grad_color)^2
+            let tg = dot(tangent, grad_color);
+            let d_loss_dir = REG_DIR * 2.0 * tg;
+
+            // d_loss/d_tangent = d_loss_dir * grad_color
+            // d_tangent/d_seg: tangent = seg / |seg|
+            //   d_tangent_i/d_seg_j = (delta_ij - tangent_i*tangent_j) / |seg|
+            let d_tangent = d_loss_dir * grad_color;
+            let inv_len = 1.0 / sqrt(len2);
+            let d_seg = (d_tangent - tangent * dot(d_tangent, tangent)) * inv_len;
+
+            // seg = curr_pt - prev_pt, so d_curr_pt += d_seg, d_prev_pt -= d_seg
+            let dPrevPt_dir = -d_seg;
+            let dCurrPt_dir =  d_seg;
+
+            // Accumulate into 2D control point gradients via Bernstein weights
+            let dP0_dir = B_prev.x * dPrevPt_dir + B_curr.x * dCurrPt_dir;
+            let dP1_dir = B_prev.y * dPrevPt_dir + B_curr.y * dCurrPt_dir;
+            let dP2_dir = B_prev.z * dPrevPt_dir + B_curr.z * dCurrPt_dir;
+            let dP3_dir = B_prev.w * dPrevPt_dir + B_curr.w * dCurrPt_dir;
+
+            // Backproject to 3D and add to existing position gradients
+            let dP0_dir3 = backproject_gradient(uniforms.vp, b.p0.xyz, aspect, dP0_dir);
+            let dP1_dir3 = backproject_gradient(uniforms.vp, b.p1.xyz, aspect, dP1_dir);
+            let dP2_dir3 = backproject_gradient(uniforms.vp, b.p2.xyz, aspect, dP2_dir);
+            let dP3_dir3 = backproject_gradient(uniforms.vp, b.p3.xyz, aspect, dP3_dir);
+
+            atomicAdd(&grads.data[base + 0u], i32(dP0_dir3.x * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 1u], i32(dP0_dir3.y * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 2u], i32(dP0_dir3.z * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 3u], i32(dP1_dir3.x * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 4u], i32(dP1_dir3.y * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 5u], i32(dP1_dir3.z * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 6u], i32(dP2_dir3.x * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 7u], i32(dP2_dir3.y * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 8u], i32(dP2_dir3.z * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 9u], i32(dP3_dir3.x * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 10u], i32(dP3_dir3.y * FP_SCALE_POS));
+            atomicAdd(&grads.data[base + 11u], i32(dP3_dir3.z * FP_SCALE_POS));
+        }
+
+
+
         let dP0_2d = B_prev.x * dPrevPt + B_curr.x * dCurrPt;
         let dP1_2d = B_prev.y * dPrevPt + B_curr.y * dCurrPt;
         let dP2_2d = B_prev.z * dPrevPt + B_curr.z * dCurrPt;
@@ -380,7 +462,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let dP2_3d = backproject_gradient(uniforms.vp, b.p2.xyz, aspect, dP2_2d);
         let dP3_3d = backproject_gradient(uniforms.vp, b.p3.xyz, aspect, dP3_2d);
 
-        let base = i * 18u;
         atomicAdd(&grads.data[base + 0u], i32(dP0_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 1u], i32(dP0_3d.y * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 2u], i32((dP0_3d.z + dDepth_dZs.x) * FP_SCALE_POS));
