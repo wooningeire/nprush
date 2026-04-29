@@ -49,7 +49,11 @@ fn vs_main(
     @builtin(instance_index) ii: u32,
     @builtin(vertex_index) vi: u32
 ) -> VsOut {
-    let b = beziers.items[ii];
+    // Draw back-to-front: mirror the gaussian approach where index 0 is drawn last
+    // (front-most). The optimizer pushes active curves toward lower indices, so
+    // reversing instance order gives an approximate depth sort for free.
+    let bezier_idx = NUM_BEZIERS - 1u - ii;
+    let b = beziers.items[bezier_idx];
     let aspect = uniforms.dims.x / uniforms.dims.y;
 
     let proj0 = project_to_screen(uniforms.vp, b.p0.xyz, aspect);
@@ -61,7 +65,7 @@ fn vs_main(
     if (proj0.z < 0.0 || proj1.z < 0.0 || proj2.z < 0.0 || proj3.z < 0.0) {
         var out: VsOut;
         out.pos = vec4f(0.0, 0.0, 0.0, -1.0); // degenerate
-        out.bezier_idx = ii;
+        out.bezier_idx = bezier_idx;
         out.p_screen = vec2f(0.0);
         return out;
     }
@@ -94,7 +98,7 @@ fn vs_main(
 
     var out: VsOut;
     out.pos = vec4f(ndc, 0.0, 1.0);
-    out.bezier_idx = ii;
+    out.bezier_idx = bezier_idx;
     out.p_screen = c; // aspect-corrected screen position of this fragment
     return out;
 }
