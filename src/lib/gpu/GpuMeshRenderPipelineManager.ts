@@ -23,7 +23,7 @@ export class GpuMeshRenderPipelineManager {
     private groundIndexBuffer: GPUBuffer | null = null;
     private groundIndexCount: number = 0;
 
-    private static readonly STRIDE = 24; // 6 floats * 4 bytes (pos + normal)
+    private static readonly STRIDE = 40; // 10 floats * 4 bytes (pos + normal + color)
     private readonly device: GPUDevice;
 
     constructor({
@@ -90,6 +90,11 @@ export class GpuMeshRenderPipelineManager {
                                 shaderLocation: 1,
                                 offset: 12,
                                 format: "float32x3",
+                            },
+                            {
+                                shaderLocation: 2,
+                                offset: 24,
+                                format: "float32x4",
                             },
                         ],
                     },

@@ -11,6 +11,7 @@ struct Uniforms {
 struct VertexInput {
     @location(0) position: vec3f,
     @location(1) normal: vec3f,
+    @location(2) color: vec4f,
 }
 
 struct VertexOutput {
@@ -18,6 +19,7 @@ struct VertexOutput {
     @location(0) normal: vec3f,
     @location(1) viewDepth: f32,
     @location(2) viewNormal: vec3f,
+    @location(3) color: vec4f,
 }
 
 struct FragOutput {
@@ -34,19 +36,23 @@ fn vert(in: VertexInput) -> VertexOutput {
     out.normal = in.normal;
     out.viewNormal = (uniforms.viewMat * vec4f(in.normal, 0)).xyz;
     out.viewDepth = clamp(out.position.w / DEPTH_VIZ_FAR, 0.0, 1.0);
+    out.color = in.color;
     return out;
 }
 
 @fragment
 fn frag(in: VertexOutput) -> FragOutput {
     var out: FragOutput;
-    
+
     let normals_color = (normalize(in.normal) + 1.0) * 0.5;
     let vn = normalize(in.viewNormal);
     let uv = vn.xy * 0.5 + 0.5;
     let matcap_color = textureSample(matcapTex, matcapSampler, vec2f(uv.x, 1.0 - uv.y)).rgb;
-    out.color = vec4f(select(matcap_color, normals_color, uniforms.shadingMode < 0.5), 1.0);
-    
+
+    // Tint the matcap by the material base color (linear multiply).
+    let tinted_matcap = matcap_color * in.color.rgb;
+
+    out.color = vec4f(select(tinted_matcap, normals_color, uniforms.shadingMode < 0.5), 1.0);
     out.depth = vec4f(in.viewDepth, in.viewDepth, in.viewDepth, 1.0);
     return out;
 }

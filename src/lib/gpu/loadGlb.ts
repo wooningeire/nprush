@@ -1,17 +1,17 @@
 // Minimal GLB (binary glTF 2.0) loader. Walks every mesh primitive in the file,
 // pulls out POSITION + NORMAL + indices, applies the node transform stack, and
-// concatenates everything into a single interleaved [pos, normal] vertex
+// concatenates everything into a single interleaved [pos, normal, color] vertex
 // buffer with a single uint32 index buffer. The result is auto-centered and
 // uniformly scaled to fit a unit-radius bounding sphere so the existing camera
 // (which orbits at radius ~3 around the origin) frames the model correctly.
 //
-// Intentionally limited: no animations, skinning, materials, textures, or
-// non-triangle primitives. We ignore everything outside the mesh geometry.
+// Supports: node TRS transforms, pbrMetallicRoughness baseColorFactor.
+// Does not support: animations, skinning, texture maps, non-triangle primitives.
 
 import { mat3, mat4, vec3 } from "wgpu-matrix";
 
 export interface MeshData {
-    // Interleaved [px, py, pz, nx, ny, nz] per vertex.
+    // Interleaved [px, py, pz, nx, ny, nz, r, g, b, a] per vertex.
     vertices: Float32Array;
     indices: Uint32Array;
 }
@@ -65,6 +65,13 @@ interface GlbPrimitive {
     attributes: Record<string, number>;
     indices?: number;
     mode?: number;
+    material?: number;
+}
+
+interface GlbMaterial {
+    pbrMetallicRoughness?: {
+        baseColorFactor?: [number, number, number, number];
+    };
 }
 
 interface GlbMesh {
@@ -91,18 +98,19 @@ interface GlbJson {
     meshes?: GlbMesh[];
     accessors?: GlbAccessor[];
     bufferViews?: GlbBufferView[];
+    materials?: GlbMaterial[];
 }
 
-export async function loadGlb(url: string): Promise<MeshData> {
+export async function loadGlb(url: string, normalize = true): Promise<MeshData> {
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`Failed to fetch ${url}: ${response.status}`);
     }
     const buffer = await response.arrayBuffer();
-    return parseGlb(buffer);
+    return parseGlb(buffer, normalize);
 }
 
-function parseGlb(buffer: ArrayBuffer): MeshData {
+function parseGlb(buffer: ArrayBuffer, normalize = true): MeshData {
     const dv = new DataView(buffer);
     if (dv.getUint32(0, true) !== GLB_MAGIC) {
         throw new Error("Not a GLB: bad magic");
@@ -130,6 +138,7 @@ function parseGlb(buffer: ArrayBuffer): MeshData {
 
     const positions: number[] = [];
     const normals: number[] = [];
+    const colors: number[] = []; // rgba per vertex
     const indices: number[] = [];
 
     const sceneIdx = json.scene ?? 0;
@@ -138,7 +147,7 @@ function parseGlb(buffer: ArrayBuffer): MeshData {
 
     const identity = mat4.identity();
     for (const nodeIdx of rootNodes) {
-        walkNode(json, bin, nodeIdx, identity, positions, normals, indices);
+        walkNode(json, bin, nodeIdx, identity, positions, normals, colors, indices);
     }
 
     if (positions.length === 0) {
@@ -146,17 +155,25 @@ function parseGlb(buffer: ArrayBuffer): MeshData {
     }
 
     const vertCount = positions.length / 3;
-    const interleaved = new Float32Array(vertCount * 6);
+    // Stride: pos(3) + normal(3) + color(4) = 10 floats
+    const STRIDE = 10;
+    const interleaved = new Float32Array(vertCount * STRIDE);
     for (let i = 0; i < vertCount; i++) {
-        interleaved[i * 6 + 0] = positions[i * 3 + 0];
-        interleaved[i * 6 + 1] = positions[i * 3 + 1];
-        interleaved[i * 6 + 2] = positions[i * 3 + 2];
-        interleaved[i * 6 + 3] = normals[i * 3 + 0];
-        interleaved[i * 6 + 4] = normals[i * 3 + 1];
-        interleaved[i * 6 + 5] = normals[i * 3 + 2];
+        interleaved[i * STRIDE + 0] = positions[i * 3 + 0];
+        interleaved[i * STRIDE + 1] = positions[i * 3 + 1];
+        interleaved[i * STRIDE + 2] = positions[i * 3 + 2];
+        interleaved[i * STRIDE + 3] = normals[i * 3 + 0];
+        interleaved[i * STRIDE + 4] = normals[i * 3 + 1];
+        interleaved[i * STRIDE + 5] = normals[i * 3 + 2];
+        interleaved[i * STRIDE + 6] = colors[i * 4 + 0];
+        interleaved[i * STRIDE + 7] = colors[i * 4 + 1];
+        interleaved[i * STRIDE + 8] = colors[i * 4 + 2];
+        interleaved[i * STRIDE + 9] = colors[i * 4 + 3];
     }
 
-    centerAndScaleToUnit(interleaved);
+    if (normalize) {
+        centerAndScaleToUnit(interleaved, STRIDE);
+    }
 
     return {
         vertices: interleaved,
@@ -171,6 +188,7 @@ function walkNode(
     parentXform: Float32Array,
     outPositions: number[],
     outNormals: number[],
+    outColors: number[],
     outIndices: number[],
 ) {
     const node = json.nodes![nodeIdx];
@@ -180,7 +198,6 @@ function walkNode(
     if (node.mesh !== undefined) {
         const mesh = json.meshes![node.mesh];
         for (const prim of mesh.primitives) {
-            // Default mode 4 == TRIANGLES; we only support triangle lists.
             if ((prim.mode ?? 4) !== 4) continue;
 
             const posIdx = prim.attributes.POSITION;
@@ -192,11 +209,17 @@ function walkNode(
                 normals = readAccessor(json, bin, prim.attributes.NORMAL) as Float32Array;
             }
 
+            // Read material base color factor (default white)
+            let matColor: [number, number, number, number] = [1, 1, 1, 1];
+            if (prim.material !== undefined && json.materials) {
+                const mat = json.materials[prim.material];
+                const bc = mat?.pbrMetallicRoughness?.baseColorFactor;
+                if (bc) matColor = bc;
+            }
+
             const baseVertex = outPositions.length / 3;
             const numVerts = positions.length / 3;
 
-            // Use the inverse-transpose 3x3 for normals so non-uniform scale
-            // doesn't skew them, and translation in the affine doesn't leak in.
             const normalXform = mat3.transpose(mat3.inverse(mat3.fromMat4(xform)));
             for (let i = 0; i < numVerts; i++) {
                 const px = positions[i * 3 + 0];
@@ -213,15 +236,15 @@ function walkNode(
                     const n = vec3.normalize(tn);
                     outNormals.push(n[0], n[1], n[2]);
                 } else {
-                    outNormals.push(0, 0, 0); // filled in below
+                    outNormals.push(0, 0, 0);
                 }
+
+                outColors.push(matColor[0], matColor[1], matColor[2], matColor[3]);
             }
 
             if (prim.indices !== undefined) {
                 const ix = readAccessor(json, bin, prim.indices) as
-                    | Uint8Array
-                    | Uint16Array
-                    | Uint32Array;
+                    | Uint8Array | Uint16Array | Uint32Array;
                 for (let i = 0; i < ix.length; i++) {
                     outIndices.push(baseVertex + ix[i]);
                 }
@@ -230,7 +253,6 @@ function walkNode(
             }
 
             if (!normals) {
-                // Fall back to face-averaged normals for any primitive without them.
                 computeFlatNormals(outPositions, outIndices, baseVertex, numVerts, outNormals);
             }
         }
@@ -238,7 +260,7 @@ function walkNode(
 
     if (node.children) {
         for (const childIdx of node.children) {
-            walkNode(json, bin, childIdx, xform, outPositions, outNormals, outIndices);
+            walkNode(json, bin, childIdx, xform, outPositions, outNormals, outColors, outIndices);
         }
     }
 }
@@ -377,8 +399,7 @@ function computeFlatNormals(
     }
 }
 
-function centerAndScaleToUnit(interleaved: Float32Array) {
-    const stride = 6;
+function centerAndScaleToUnit(interleaved: Float32Array, stride: number) {
     const numVerts = interleaved.length / stride;
     let minX = Infinity, minY = Infinity, minZ = Infinity;
     let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;

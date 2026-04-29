@@ -47,7 +47,7 @@ export class ViewerState {
             const [gpu, mesh, groundMesh] = await Promise.all([
                 requestGpu({ canvas: await canvasPromise }),
                 loadGlb(artelorianUrl),
-                loadGlb(groundUrl).catch(() => null), // optional — don't fail if missing
+                loadGlb(groundUrl, false).catch(() => null), // keep world-space translation
             ]);
             if (!gpu) return;
 
