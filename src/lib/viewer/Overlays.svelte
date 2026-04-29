@@ -13,13 +13,35 @@ const {
         <input type="checkbox" bind:checked={viewerState.edgeBeziersEnabled} />
         Edge Beziers
     </label>
+    {#if viewerState.edgeBeziersEnabled}
+        <label class="sub">
+            <input type="checkbox" bind:checked={viewerState.edgeBezierTrainingPaused} />
+            Pause training
+        </label>
+    {/if}
     <label>
         <input type="checkbox" bind:checked={viewerState.baseColorBeziersEnabled} />
         Base Color Beziers
     </label>
+    {#if viewerState.baseColorBeziersEnabled}
+        <label class="sub">
+            <input type="checkbox" bind:checked={viewerState.baseColorBezierTrainingPaused} />
+            Pause training
+        </label>
+    {/if}
     <label>
         <input type="checkbox" bind:checked={viewerState.colorBeziersEnabled} />
         Color Beziers
+    </label>
+    {#if viewerState.colorBeziersEnabled}
+        <label class="sub">
+            <input type="checkbox" bind:checked={viewerState.colorBezierTrainingPaused} />
+            Pause training
+        </label>
+    {/if}
+    <label>
+        <input type="checkbox" bind:checked={viewerState.splatTrainingPaused} />
+        Pause Splat Training
     </label>
     <label>
         <input type="checkbox" bind:checked={viewerState.compareBlurred} />
@@ -72,6 +94,12 @@ const {
             gap: 0.5rem;
             cursor: pointer;
             user-select: none;
+
+            &.sub {
+                margin-left: 1.25rem;
+                font-size: 0.8rem;
+                color: rgba(255, 255, 255, 0.65);
+            }
         }
 
         input {

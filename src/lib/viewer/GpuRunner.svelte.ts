@@ -606,7 +606,9 @@ export class GpuRunner {
                 this.optimWidth,
                 this.optimHeight
             );
-            this.splatOptimizerManager.dispatch(commandEncoder);
+            if (!this.viewerState.splatTrainingPaused) {
+                this.splatOptimizerManager.dispatch(commandEncoder);
+            }
 
             // 3.1 Render current splats at optim-res to use as background for color beziers.
             this.splatForwardManager.setTarget(
@@ -623,7 +625,9 @@ export class GpuRunner {
             // 3b. Train the bezier edge layer: its target is the freshly-computed
             // edge texture, so the curves learn to trace the depth silhouette.
             if (this.viewerState.edgeBeziersEnabled) {
-                this.edgeLayerBezierManager.dispatch(commandEncoder);
+                if (!this.viewerState.edgeBezierTrainingPaused) {
+                    this.edgeLayerBezierManager.dispatch(commandEncoder);
+                }
             }
 
             // Train base color beziers against depth-aware blurred target
@@ -637,7 +641,9 @@ export class GpuRunner {
                     this.optimWidth,
                     this.optimHeight,
                 );
-                this.baseColorLayerBezierManager.dispatch(commandEncoder);
+                if (!this.viewerState.baseColorBezierTrainingPaused) {
+                    this.baseColorLayerBezierManager.dispatch(commandEncoder);
+                }
 
                 // Render base color beziers into optimSplatTextureView (loadOp: "load")
                 // This makes it the background for the NEXT layer!
@@ -656,7 +662,9 @@ export class GpuRunner {
                     this.optimWidth,
                     this.optimHeight,
                 );
-                this.colorLayerBezierManager.dispatch(commandEncoder);
+                if (!this.viewerState.colorBezierTrainingPaused) {
+                    this.colorLayerBezierManager.dispatch(commandEncoder);
+                }
             }
 
             // 4. Run edge detection on full-res depth (for display)

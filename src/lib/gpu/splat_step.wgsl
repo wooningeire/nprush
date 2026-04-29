@@ -45,7 +45,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     // Param layout: 0=px, 1=py, 2=pz, 3=sx, 4=r, 5=g, 6=b, 7=opacity,
     // 8=qw, 9=qx, 10=qy, 11=qz, 12=sy, 13=shape_a, 14=shape_b
     // lr per param
-    let lr_table    = array<f32, 15>(0.001, 0.001, 0.001, 0.01, 0.02, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.005, 0.01, 0.01, 0.01);
+    let lr_table    = array<f32, 15>(0.0005, 0.0005, 0.0005, 0.01, 0.02, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.005, 0.01, 0.01, 0.01);
     // max_update per param
     let mu_table    = array<f32, 15>(0.005, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.05, 0.05);
     // fp_scale: 10000 for pos/scale/quat/shape, 100000 for color
