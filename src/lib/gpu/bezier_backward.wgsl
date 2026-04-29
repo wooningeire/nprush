@@ -18,16 +18,17 @@ struct GradArray {
 }
 
 struct BezierUniforms {
-    vp: mat4x4f,             // offset 0,  size 64
-    mode: f32,               // offset 64, size 4
-    max_width: f32,          // offset 68, size 4
-    prune_alpha_thresh: f32, // offset 72, size 4
-    prune_width_thresh: f32, // offset 76, size 4
-    bg_penalty: f32,         // offset 80, size 4
-    _pad0: f32,              // offset 84, size 4
-    _pad1: f32,              // offset 88, size 4
-    _pad2: f32,              // offset 92, size 4
-    // total: 96 bytes
+    vp: mat4x4f,             // offset 0,   size 64
+    mode: f32,               // offset 64,  size 4
+    max_width: f32,          // offset 68,  size 4
+    prune_alpha_thresh: f32, // offset 72,  size 4
+    prune_width_thresh: f32, // offset 76,  size 4
+    bg_penalty: f32,         // offset 80,  size 4
+    _pad0: f32,              // offset 84,  size 4
+    _pad1: f32,              // offset 88,  size 4
+    _pad2: f32,              // offset 92,  size 4
+    vp_inv: mat4x4f,         // offset 96,  size 64
+    // total: 160 bytes
 }
 
 struct ADCArray {
@@ -44,6 +45,9 @@ struct ADCArray {
 @group(0) @binding(6) var bgDepthTex: texture_2d<f32>;
 @group(0) @binding(7) var<storage, read_write> adc: ADCArray;
 @group(0) @binding(8) var normalTex: texture_2d<f32>;
+// Per-pixel residual loss map: accumulated as fixed-point i32 (scale 10000).
+// ADC reads this to find high-loss regions and seeds new beziers there.
+@group(0) @binding(9) var<storage, read_write> pixel_loss: array<atomic<i32>, PIXEL_LOSS_SIZE>;
 
 const N_SEG: u32 = 16u;
 // Reciprocal depth near-plane constant — must match mesh.wgsl and splat_forward.wgsl.
@@ -563,4 +567,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let color_loss_contrib = dot(dC * dC, vec3f(1.0)) * (T_prev * a);
         adc.loss_accum[i] += color_loss_contrib;
     }
+
+    // Accumulate per-pixel residual loss for ADC seeding.
+    // Use the uncovered MSE: pixels with high transmittance (no bezier covers them)
+    // and high color error are the best candidates for new bezier placement.
+    let residual = dot(dC_raw * 0.5, dC_raw * 0.5) * Ts[bezier_count];
+    let px_idx = global_id.y * dims.x + global_id.x;
+    let FP_LOSS = 10000.0;
+    atomicAdd(&pixel_loss[px_idx], i32(residual * FP_LOSS));
 }

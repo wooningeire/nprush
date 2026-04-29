@@ -6,7 +6,7 @@ import { GpuRunner } from "./GpuRunner.svelte.ts";
 import { loadGlb } from "$/gpu/loadGlb";
 import artelorianUrl from "$/assets/artelorian.glb?url";
 import groundUrl from "$/assets/ground.glb?url";
-import hdrUrl from "$/assets/quarry_cloudy_2k.hdr?url";
+import hdrUrl from "$/assets/lakeside_sunrise_2k.hdr?url";
 import brushUrl from "$/assets/brush.png?url";
 import { loadHdrTexture } from "$/gpu/loadHdrTexture";
 import { loadTexture } from "$/gpu/loadTexture";
@@ -15,14 +15,14 @@ export class ViewerState {
     width = $state(300);
     height = $state(150);
     edgeBeziersEnabled = $state(false);
-    baseColorBeziersEnabled = $state(false);
-    colorBeziersEnabled = $state(false);
+    baseColorBeziersEnabled = $state(true);
+    colorBeziersEnabled = $state(true);
     splatTrainingPaused = $state(false);
     edgeBezierTrainingPaused = $state(false);
     baseColorBezierTrainingPaused = $state(false);
     colorBezierTrainingPaused = $state(false);
     posterizationEnabled = $state(false);
-    compareBlurred = $state(false);
+    compareBlurred = $state(true);
     shadingMode = $state<'normals' | 'shaded'>('normals');
     blurRadius = $state(16);
     

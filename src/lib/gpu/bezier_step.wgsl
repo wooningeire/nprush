@@ -61,6 +61,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     }
 
     var b = beziers.items[bezier_id];
+
+    // Skip dead beziers entirely — don't apply Adam updates, which could
+    // accidentally revive a killed curve via stale gradient momentum.
+    if (b.color.a < 0.005) {
+        // Still drain any stale gradients so they don't accumulate.
+        for (var lp = 0u; lp < 18u; lp++) {
+            atomicExchange(&grads.data[bezier_id * 18u + lp], 0);
+        }
+        return;
+    }
+
     let base_idx = bezier_id * 18u;
     let t = current_t + 1.0;
     var pos_grad_norm2 = 0.0;

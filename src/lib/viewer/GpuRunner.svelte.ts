@@ -242,6 +242,11 @@ export class GpuRunner {
             $effect(() => this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.baseColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.colorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
+            $effect(() => {
+                this.edgeLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+                this.baseColorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+                this.colorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+            });
             $effect(() => this.bezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.baseColorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.colorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));

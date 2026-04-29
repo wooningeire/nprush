@@ -1,12 +1,18 @@
 import backwardModuleSrc from "./bezier_backward.wgsl?raw";
 import stepModuleSrc from "./bezier_step.wgsl?raw";
 import adcModuleSrc from "./bezier_adc.wgsl?raw";
+import type { Mat4 } from "wgpu-matrix";
 
 // Each cubic bezier is 14 optimizable parameters but stored with 16-float
 // stride (4 vec4f) so the WGSL struct lays out cleanly without per-field
 // padding. Mirrors the splat manager's 11-params/12-floats layout.
 const PARAMS_PER_BEZIER = 18;
 const FLOATS_PER_BEZIER = 20;
+
+// Optim resolution — must match GpuRunner's OPTIM_SHORT logic.
+// We use the square short-side; the actual pixel count is written at runtime.
+// The pixel_loss buffer is sized to the worst-case square (OPTIM_SHORT²).
+const PIXEL_LOSS_MAX = 512 * 512; // generous upper bound
 
 export class GpuBezierOptimizerManager {
     private readonly device: GPUDevice;
@@ -19,6 +25,7 @@ export class GpuBezierOptimizerManager {
     readonly adamBuffer: GPUBuffer;
     readonly adcBuffer: GPUBuffer;
     readonly bezierUniformsBuffer: GPUBuffer;
+    private readonly pixelLossBuffer: GPUBuffer;
 
     private readonly backwardPipeline: GPUComputePipeline;
     private readonly stepPipeline: GPUComputePipeline;
@@ -27,6 +34,7 @@ export class GpuBezierOptimizerManager {
     private readonly backwardBindGroupLayout: GPUBindGroupLayout;
     private readonly stepBindGroup: GPUBindGroup;
     private readonly adcBindGroup: GPUBindGroup;
+    private readonly adcBindGroupLayout: GPUBindGroupLayout;
 
     private backwardBindGroup: GPUBindGroup | null = null;
     private stepCount: number = 0;
@@ -115,18 +123,33 @@ export class GpuBezierOptimizerManager {
 
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier VP uniforms buffer",
-            size: 96, // mat4x4f(64) + mode(4) + max_width(4) + prune_alpha(4) + prune_width(4) + bg_penalty(4) + pad(12)
+            size: 160, // mat4x4f(64) + mode(4) + max_width(4) + prune_alpha(4) + prune_width(4) + bg_penalty(4) + pad(12) + vp_inv(64)
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        this.pixelLossBuffer = device.createBuffer({
+            label: "bezier pixel loss buffer",
+            size: PIXEL_LOSS_MAX * 4, // one i32 per pixel
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
         // NUM_BEZIERS_PLUS_ONE / NUM_BEZIERS_MINUS_ONE must come before
         // NUM_BEZIERS for the same substring reason as the splat shaders.
-        const inject = (src: string) => src
+        // OPTIM_WIDTH/HEIGHT are injected at dispatch time when dims are known;
+        // PIXEL_LOSS_SIZE = OPTIM_WIDTH * OPTIM_HEIGHT is also injected then.
+        // For the shader module we use placeholder values that get replaced
+        // via a separate per-dispatch inject — here we bake in the max size
+        // so the buffer declaration compiles. The actual dims are written via
+        // writeOptimDims() before the first dispatch.
+        const inject = (src: string, ow = 256, oh = 256) => src
             .replace(/NUM_BEZIERS_PLUS_ONE/g, `${numBeziers + 1}u`)
             .replace(/NUM_BEZIERS_MINUS_ONE/g, `${numBeziers - 1}u`)
             .replace(/NUM_BEZIERS_DIV_32/g, `${Math.ceil(numBeziers / 32)}u`)
             .replace(/NUM_BEZIERS/g, `${numBeziers}u`)
-            .replace(/NUM_BEZIER_PARAMS/g, `${this.numParams}u`);
+            .replace(/NUM_BEZIER_PARAMS/g, `${this.numParams}u`)
+            .replace(/PIXEL_LOSS_SIZE/g, `${PIXEL_LOSS_MAX}u`)
+            .replace(/OPTIM_WIDTH/g, `${ow}u`)
+            .replace(/OPTIM_HEIGHT/g, `${oh}u`);
 
         this.backwardBindGroupLayout = device.createBindGroupLayout({
             entries: [
@@ -139,6 +162,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 6, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
+                { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
             ],
         });
         const backwardModule = device.createShaderModule({
@@ -186,11 +210,13 @@ export class GpuBezierOptimizerManager {
         });
 
         // ADC pipeline: clones/splits high-gradient curves into dead slots.
-        const adcBindGroupLayout = device.createBindGroupLayout({
+        this.adcBindGroupLayout = device.createBindGroupLayout({
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
             ],
         });
         const adcModule = device.createShaderModule({
@@ -201,16 +227,18 @@ export class GpuBezierOptimizerManager {
             for (const m of info.messages) console.warn(`[bezier_adc] ${m.type}: ${m.message} (line ${m.lineNum})`);
         });
         this.adcPipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [adcBindGroupLayout] }),
+            layout: device.createPipelineLayout({ bindGroupLayouts: [this.adcBindGroupLayout] }),
             compute: { module: adcModule, entryPoint: "main" },
         });
 
         this.adcBindGroup = device.createBindGroup({
-            layout: adcBindGroupLayout,
+            layout: this.adcBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
                 { binding: 1, resource: { buffer: this.adamBuffer } },
                 { binding: 2, resource: { buffer: this.adcBuffer } },
+                { binding: 3, resource: { buffer: this.pixelLossBuffer } },
+                { binding: 4, resource: { buffer: this.bezierUniformsBuffer } },
             ],
         });
     }
@@ -219,6 +247,17 @@ export class GpuBezierOptimizerManager {
         this.device.queue.writeBuffer(
             this.bezierUniformsBuffer,
             0,
+            (mat as Float32Array).buffer,
+            (mat as Float32Array).byteOffset,
+            (mat as Float32Array).byteLength
+        );
+    }
+
+    writeVPInvMatrix(mat: Mat4) {
+        // vp_inv is at offset 96 in BezierUniforms
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            96,
             (mat as Float32Array).buffer,
             (mat as Float32Array).byteOffset,
             (mat as Float32Array).byteLength
@@ -295,6 +334,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 6, resource: bgDepthTextureView },
                 { binding: 7, resource: { buffer: this.adcBuffer } },
                 { binding: 8, resource: normalTextureView },
+                { binding: 9, resource: { buffer: this.pixelLossBuffer } },
             ],
         });
     }
