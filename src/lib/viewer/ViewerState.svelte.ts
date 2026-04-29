@@ -6,8 +6,8 @@ import { GpuRunner } from "./GpuRunner.svelte.ts";
 import { loadGlb } from "$/gpu/loadGlb";
 import artelorianUrl from "$/assets/artelorian.glb?url";
 import groundUrl from "$/assets/ground.glb?url";
-import matcapUrl from "$/assets/qwantani_moon_noon_puresky_2k.png?url";
-import { loadTexture } from "$/gpu/loadTexture";
+import hdrUrl from "$/assets/quarry_cloudy_2k.hdr?url";
+import { loadHdrTexture } from "$/gpu/loadHdrTexture";
 
 export class ViewerState {
     width = $state(300);
@@ -51,7 +51,7 @@ export class ViewerState {
             ]);
             if (!gpu) return;
 
-            const matcapTexture = await loadTexture(gpu.device, matcapUrl);
+            const envTexture = await loadHdrTexture(gpu.device, hdrUrl);
 
             const gpuRunner = new GpuRunner({
                 device: gpu.device,
@@ -61,7 +61,7 @@ export class ViewerState {
                 viewerState: state,
                 mesh,
                 groundMesh,
-                matcapTexture,
+                matcapTexture: envTexture,
                 numSplats,
             });
             state.runner = gpuRunner;

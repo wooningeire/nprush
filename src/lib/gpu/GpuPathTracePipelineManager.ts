@@ -11,6 +11,7 @@ export class GpuPathTracePipelineManager {
     private vertexBuffer:  GPUBuffer | null = null;
     private bvhNodeBuffer: GPUBuffer | null = null;
     private bvhTriBuffer:  GPUBuffer | null = null;
+    private numTris = 0;
 
     private accumBuffer:   GPUBuffer | null = null;
     private accumWidth  = 0;
@@ -135,6 +136,7 @@ export class GpuPathTracePipelineManager {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this.device.queue.writeBuffer(this.bvhTriBuffer, 0, bvh.triIndices);
+        this.numTris = bvh.triIndices.length / 3; // store reordered tri count
 
         this.ptBindGroup = null;
     }
@@ -213,7 +215,7 @@ export class GpuPathTracePipelineManager {
 
         this.device.queue.writeBuffer(
             this.ptUniformsBuffer, 64,
-            new Uint32Array([this.frameCount, 0, this.accumWidth, this.accumHeight])
+            new Uint32Array([this.frameCount, this.numTris, this.accumWidth, this.accumHeight])
         );
         this.frameCount++;
 

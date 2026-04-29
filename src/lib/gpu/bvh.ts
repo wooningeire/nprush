@@ -58,9 +58,10 @@ function triAABB(verts: Float32Array, i0: number, i1: number, i2: number): AABB 
     const ax = verts[i0*S], ay = verts[i0*S+1], az = verts[i0*S+2];
     const bx = verts[i1*S], by = verts[i1*S+1], bz = verts[i1*S+2];
     const cx = verts[i2*S], cy = verts[i2*S+1], cz = verts[i2*S+2];
+    const EPS = 1e-4;
     return {
-        min: [Math.min(ax,bx,cx), Math.min(ay,by,cy), Math.min(az,bz,cz)],
-        max: [Math.max(ax,bx,cx), Math.max(ay,by,cy), Math.max(az,bz,cz)],
+        min: [Math.min(ax,bx,cx)-EPS, Math.min(ay,by,cy)-EPS, Math.min(az,bz,cz)-EPS],
+        max: [Math.max(ax,bx,cx)+EPS, Math.max(ay,by,cy)+EPS, Math.max(az,bz,cz)+EPS],
     };
 }
 

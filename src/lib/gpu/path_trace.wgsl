@@ -68,10 +68,12 @@ fn intersect_tri(ro: vec3f, rd: vec3f, i0: u32, i1: u32, i2: u32, t_max: f32) ->
     let f = 1.0 / a;
     let s = ro - v0.pos;
     let u = f * dot(s, h);
-    if (u < 0.0 || u > 1.0) { return res; }
+    // Small epsilon on barycentric bounds to avoid gaps at shared edges
+    let EPS = 1e-5;
+    if (u < -EPS || u > 1.0 + EPS) { return res; }
     let q = cross(s, e1);
     let v = f * dot(rd, q);
-    if (v < 0.0 || u + v > 1.0) { return res; }
+    if (v < -EPS || u + v > 1.0 + EPS) { return res; }
     let t = f * dot(e2, q);
     if (t < 1e-4 || t >= t_max) { return res; }
     let w = 1.0 - u - v;
@@ -84,39 +86,42 @@ fn intersect_tri(ro: vec3f, rd: vec3f, i0: u32, i1: u32, i2: u32, t_max: f32) ->
 
 // ── AABB slab test ────────────────────────────────────────────────────────────
 fn aabb_hit(ro: vec3f, inv_rd: vec3f, node_base: u32, t_max: f32) -> bool {
-    let mn = vec3f(bvh_nodes[node_base],   bvh_nodes[node_base+1u], bvh_nodes[node_base+2u]);
-    let mx = vec3f(bvh_nodes[node_base+4u],bvh_nodes[node_base+5u], bvh_nodes[node_base+6u]);
+    let mn = vec3f(bvh_nodes[node_base],    bvh_nodes[node_base+1u], bvh_nodes[node_base+2u]);
+    let mx = vec3f(bvh_nodes[node_base+4u], bvh_nodes[node_base+5u], bvh_nodes[node_base+6u]);
+    // Use min/max to handle ±Inf from zero ray components correctly
     let t0 = (mn - ro) * inv_rd;
     let t1 = (mx - ro) * inv_rd;
-    let tmin = max(max(min(t0.x,t1.x), min(t0.y,t1.y)), min(t0.z,t1.z));
-    let tmax = min(min(max(t0.x,t1.x), max(t0.y,t1.y)), max(t0.z,t1.z));
-    return tmax >= max(tmin, 0.0) && tmin < t_max;
+    let tmin = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
+    let tmax = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), max(t0.z, t1.z));
+    // tmax < 0: box behind ray; tmin > tmax: miss; tmin >= t_max: farther than best hit
+    return tmax >= 0.0 && tmax >= tmin && tmin < t_max;
 }
 
 // ── BVH traversal ─────────────────────────────────────────────────────────────
+// Iterative stackless-style traversal using an explicit u32 stack.
 fn scene_hit(ro: vec3f, rd: vec3f) -> Hit {
-    let inv_rd = vec3f(1.0) / rd;
     var best: Hit; best.hit = false; best.t = 1e30;
+    let inv_rd = vec3f(1.0 / rd.x, 1.0 / rd.y, 1.0 / rd.z);
 
-    var stack: array<u32, 64>;
-    var sp: u32 = 0u;
-    stack[sp] = 0u; sp++;
+    var stack: array<u32, MAX_STACK>;
+    var stack_top: u32 = 0u;
+    stack[stack_top] = 0u;
+    stack_top += 1u;
 
-    while (sp > 0u) {
-        sp--;
-        let node_idx = stack[sp];
-        let nb = node_idx * 8u;
+    while (stack_top > 0u) {
+        stack_top -= 1u;
+        let node_idx = stack[stack_top];
+        let node_base = node_idx * 8u; // 8 f32 per node
 
-        if (!aabb_hit(ro, inv_rd, nb, best.t)) { continue; }
+        if (!aabb_hit(ro, inv_rd, node_base, best.t)) { continue; }
 
-        let data1 = bitcast<u32>(bvh_nodes[nb + 7u]);
-
-        if ((data1 & LEAF_FLAG) != 0u) {
-            // Leaf: test triangles
-            let tri_start = bitcast<u32>(bvh_nodes[nb + 3u]);
-            let tri_count = data1 & ~LEAF_FLAG;
-            for (var ti = 0u; ti < tri_count; ti++) {
-                let base = (tri_start + ti) * 3u;
+        let data1_bits = bitcast<u32>(bvh_nodes[node_base + 7u]);
+        if ((data1_bits & LEAF_FLAG) != 0u) {
+            // Leaf node — test all triangles
+            let first = bitcast<u32>(bvh_nodes[node_base + 3u]);
+            let count = data1_bits & ~LEAF_FLAG;
+            for (var k = 0u; k < count; k++) {
+                let base = (first + k) * 3u;
                 let i0 = bvh_tris[base];
                 let i1 = bvh_tris[base + 1u];
                 let i2 = bvh_tris[base + 2u];
@@ -124,12 +129,16 @@ fn scene_hit(ro: vec3f, rd: vec3f) -> Hit {
                 if (h.hit) { best = h; }
             }
         } else {
-            // Internal: push children
-            let left  = bitcast<u32>(bvh_nodes[nb + 3u]);
-            let right = data1;
-            if (sp + 1u < MAX_STACK) {
-                stack[sp] = left;  sp++;
-                stack[sp] = right; sp++;
+            // Internal node — push both children (right first so left is popped first)
+            let left  = bitcast<u32>(bvh_nodes[node_base + 3u]);
+            let right = bitcast<u32>(bvh_nodes[node_base + 7u]);
+            if (stack_top + 1u < MAX_STACK) {
+                stack[stack_top] = right;
+                stack_top += 1u;
+            }
+            if (stack_top < MAX_STACK) {
+                stack[stack_top] = left;
+                stack_top += 1u;
             }
         }
     }
@@ -140,9 +149,10 @@ fn scene_hit(ro: vec3f, rd: vec3f) -> Hit {
 const PI: f32 = 3.14159265358979;
 
 fn sample_env(dir: vec3f) -> vec3f {
-    let u = atan2(dir.z, dir.x) / (2.0 * PI) + 0.5;
-    let v = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / PI;
-    return textureSampleLevel(env_tex, env_sampler, vec2f(u, v), 0.0).rgb;
+    // Z-up equirectangular, matching envmap.wgsl
+    let u = atan2(dir.y, dir.x) / (2.0 * PI) + 0.5;
+    let v = 0.5 - asin(clamp(dir.z, -1.0, 1.0)) / PI;
+    return textureSampleLevel(env_tex, env_sampler, vec2f(u, v), 0.0).rgb * 4;
 }
 
 // ── Cosine-weighted hemisphere ────────────────────────────────────────────────
@@ -190,7 +200,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
         }
         let n = select(hit.norm, -hit.norm, dot(hit.norm, ray_d) > 0.0);
         throughput *= hit.color; // diffuse: albedo (cos/pi and pdf cancel)
-        ray_o = ray_o + ray_d * hit.t + n * 1e-4;
+        ray_o = ray_o + ray_d * hit.t + n * 5e-4;
         ray_d = cosine_hemisphere(n, &seed);
     }
 
