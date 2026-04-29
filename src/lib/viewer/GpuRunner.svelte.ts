@@ -230,7 +230,8 @@ export class GpuRunner {
                 this.viewerState.edgeBeziersEnabled,
                 this.viewerState.baseColorBeziersEnabled,
                 this.viewerState.colorBeziersEnabled,
-                this.viewerState.compareBlurred
+                this.viewerState.compareBlurred,
+                this.viewerState.posterizationEnabled
             ));
             $effect(() => this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat, this.viewerState.compareBlurred));
             $effect(() => this.splatForwardManager.writeVPMatrix(this.camera.viewProjMat));

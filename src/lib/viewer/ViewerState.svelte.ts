@@ -19,8 +19,8 @@ export class ViewerState {
     edgeBezierTrainingPaused = $state(false);
     baseColorBezierTrainingPaused = $state(false);
     colorBezierTrainingPaused = $state(false);
+    posterizationEnabled = $state(false);
     compareBlurred = $state(false);
-    blurRadius = $state(8);
     shadingMode = $state<'normals' | 'shaded'>('normals');
     
     runner = $state<GpuRunner | null>(null);

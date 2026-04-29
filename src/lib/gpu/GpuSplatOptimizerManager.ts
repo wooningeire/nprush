@@ -313,11 +313,11 @@ export class GpuSplatOptimizerManager {
         });
     }
 
-    writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, blurEnabled: boolean) {
+    writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, blurEnabled: boolean, posterizationEnabled: boolean) {
         this.device.queue.writeBuffer(
             this.renderUniformsBuffer,
             0,
-            new Float32Array([edgeEnabled ? 1 : 0, baseColorEnabled ? 1 : 0, colorEnabled ? 1 : 0, blurEnabled ? 1 : 0])
+            new Float32Array([edgeEnabled ? 1 : 0, baseColorEnabled ? 1 : 0, colorEnabled ? 1 : 0, blurEnabled ? 1 : 0, posterizationEnabled ? 1 : 0])
         );
     }
 

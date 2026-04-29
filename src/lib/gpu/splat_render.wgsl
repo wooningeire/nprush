@@ -12,6 +12,7 @@ struct RenderUniforms {
     base_color_beziers_enabled: f32,
     color_beziers_enabled: f32,
     blur_enabled: f32,
+    posterization_enabled: f32,
 }
 @group(0) @binding(7) var<uniform> uniforms: RenderUniforms;
 
@@ -245,9 +246,11 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     composite = select(composite, mix(composite, vec3f(1.0), edge_a), uniforms.edge_beziers_enabled > 0.5);
 
     // Painterly color quantization: partial posterization to mimic limited palette
-    let levels = 10.0;
-    let quantized = floor(composite * levels + 0.5) / levels;
-    composite = mix(composite, quantized, 0.5);
+    if (uniforms.posterization_enabled > 0.5) {
+        let levels = 10.0;
+        let quantized = floor(composite * levels + 0.5) / levels;
+        composite = mix(composite, quantized, 0.5);
+    }
 
     return vec4f(composite, 1.0);
 }
