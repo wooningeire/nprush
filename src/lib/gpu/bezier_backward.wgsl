@@ -213,7 +213,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             prev = curr;
         }
         let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
-        let pressure = smoothstep(0.0, 0.5, t) * smoothstep(1.0, 0.5, t);
+        let dt = t - 0.5;
+        let pressure = 1.0 - 4.0 * dt * dt;
         let local_width = width * pressure;
         let local_softness = softness * pressure;
         let local_opacity = opacity * pressure;
@@ -292,7 +293,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let d = max(length(d_vec), 1e-6);
 
         let t_pixel = (f32(k - 1u) + u_clamped) / f32(N_SEG);
-        let pressure = smoothstep(0.0, 0.5, t_pixel) * smoothstep(1.0, 0.5, t_pixel);
+        let dt_pixel = t_pixel - 0.5;
+        let pressure = 1.0 - 4.0 * dt_pixel * dt_pixel;
         let local_width = width * pressure;
         let local_softness = softness * pressure;
         let local_opacity = opacity * pressure;

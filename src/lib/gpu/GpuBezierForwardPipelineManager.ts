@@ -115,7 +115,7 @@ export class GpuBezierForwardPipelineManager {
         });
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.bindGroup);
-        pass.draw(34, this.numBeziers);
+        pass.draw(4, this.numBeziers);
         pass.end();
     }
 }

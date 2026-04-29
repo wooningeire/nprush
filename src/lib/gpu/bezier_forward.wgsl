@@ -19,15 +19,9 @@ struct ForwardUniforms {
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
 @group(0) @binding(1) var<uniform> uniforms: ForwardUniforms;
 
-struct VsOut {
-    @builtin(position) pos: vec4f,
-    @location(0) color: vec4f,
-    @location(1) dist: f32,
-    @location(2) width: f32,
-    @location(3) softness: f32,
-}
+const N_SEG: u32 = 16u;
 
-fn bezier_at(p0: vec3f, p1: vec3f, p2: vec3f, p3: vec3f, t: f32) -> vec3f {
+fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
     let omt = 1.0 - t;
     return omt*omt*omt * p0
          + 3.0 * omt*omt * t * p1
@@ -35,11 +29,17 @@ fn bezier_at(p0: vec3f, p1: vec3f, p2: vec3f, p3: vec3f, t: f32) -> vec3f {
          + t*t*t * p3;
 }
 
-fn bezier_derivative_at(p0: vec3f, p1: vec3f, p2: vec3f, p3: vec3f, t: f32) -> vec3f {
-    let omt = 1.0 - t;
-    return 3.0 * omt*omt * (p1 - p0)
-         + 6.0 * omt * t * (p2 - p1)
-         + 3.0 * t*t * (p3 - p2);
+fn project_to_screen(vp: mat4x4f, pos3: vec3f, aspect: f32) -> vec3f {
+    // Returns (x_aspect_corrected, y_ndc, w)
+    let clip = vp * vec4f(pos3, 1.0);
+    return vec3f(clip.x / clip.w * aspect, clip.y / clip.w, clip.w);
+}
+
+struct VsOut {
+    @builtin(position) pos: vec4f,
+    @location(0) @interpolate(flat) bezier_idx: u32,
+    // Bounding box in aspect-corrected screen space, passed to fragment
+    @location(1) p_screen: vec2f,
 }
 
 @vertex
@@ -48,63 +48,109 @@ fn vs_main(
     @builtin(vertex_index) vi: u32
 ) -> VsOut {
     let b = beziers.items[ii];
-    let num_segments = 16u;
-    let seg_idx = vi / 2u;
-    let side = f32(vi % 2u) * 2.0 - 1.0; // -1 or 1
-    
-    let t = f32(seg_idx) / f32(num_segments);
-    let pressure = smoothstep(0.0, 0.5, t) * smoothstep(1.0, 0.5, t);
-    
-    let p3 = bezier_at(b.p0.xyz, b.p1.xyz, b.p2.xyz, b.p3.xyz, t);
-    let dp3 = bezier_derivative_at(b.p0.xyz, b.p1.xyz, b.p2.xyz, b.p3.xyz, t);
-    
-    let proj = uniforms.vp * vec4f(p3, 1.0);
-    
-    // Simple culling
-    if (proj.w <= 0.0) {
-        return VsOut(vec4f(0.0), vec4f(0.0), 0.0, 0.0, 0.0);
-    }
-    
-    let proj_next = uniforms.vp * vec4f(p3 + dp3 * 0.001, 1.0);
-    
-    // NDC positions
-    let screen_p = proj.xy / proj.w;
-    let screen_p_next = proj_next.xy / proj_next.w;
-    
     let aspect = uniforms.dims.x / uniforms.dims.y;
-    
-    // Calculate tangent and normal in aspect-corrected space
-    var tangent = vec2f(screen_p_next.x - screen_p.x, (screen_p_next.y - screen_p.y) / aspect);
-    let tangent_len = length(tangent);
-    tangent = select(vec2f(1.0, 0.0), normalize(tangent), tangent_len >= 1e-6);
-    
-    // Normal in NDC space (undo aspect correction)
-    let normal_ndc = vec2f(-tangent.y * aspect, tangent.x);
-    
-    let width = max(b.p0.w, 0.0001) * pressure;
-    let softness = max(b.p1.w, 0.0001) * pressure;
-    let total_radius = width + softness;
-    
-    let offset_pos = screen_p + normal_ndc * side * total_radius;
-    
+
+    let proj0 = project_to_screen(uniforms.vp, b.p0.xyz, aspect);
+    let proj1 = project_to_screen(uniforms.vp, b.p1.xyz, aspect);
+    let proj2 = project_to_screen(uniforms.vp, b.p2.xyz, aspect);
+    let proj3 = project_to_screen(uniforms.vp, b.p3.xyz, aspect);
+
+    // Cull if any control point is behind camera
+    if (proj0.z < 0.0 || proj1.z < 0.0 || proj2.z < 0.0 || proj3.z < 0.0) {
+        var out: VsOut;
+        out.pos = vec4f(0.0, 0.0, 0.0, -1.0); // degenerate
+        out.bezier_idx = ii;
+        out.p_screen = vec2f(0.0);
+        return out;
+    }
+
+    let p0 = proj0.xy;
+    let p1 = proj1.xy;
+    let p2 = proj2.xy;
+    let p3 = proj3.xy;
+
+    let width = max(b.p0.w, 0.0001);
+    let softness = max(b.p1.w, 0.0001);
+    let pad = width + softness;
+
+    // Tight AABB around the bezier hull + padding
+    let min_p = min(min(p0, p1), min(p2, p3)) - vec2f(pad);
+    let max_p = max(max(p0, p1), max(p2, p3)) + vec2f(pad);
+
+    // Emit a quad (triangle-strip: 4 verts) covering the AABB
+    // vi: 0=(min_x,max_y), 1=(min_x,min_y), 2=(max_x,max_y), 3=(max_x,min_y)
+    let corners = array<vec2f, 4>(
+        vec2f(min_p.x, max_p.y),
+        vec2f(min_p.x, min_p.y),
+        vec2f(max_p.x, max_p.y),
+        vec2f(max_p.x, min_p.y),
+    );
+    let c = corners[vi];
+
+    // Convert from aspect-corrected NDC back to standard NDC for clip space
+    let ndc = vec2f(c.x / aspect, c.y);
+
     var out: VsOut;
-    out.pos = vec4f(offset_pos * proj.w, proj.z, proj.w);
-    out.color = vec4f(b.color.rgb, b.color.a * pressure);
-    out.dist = side * total_radius;
-    out.width = width;
-    out.softness = softness;
+    out.pos = vec4f(ndc, 0.0, 1.0);
+    out.bezier_idx = ii;
+    out.p_screen = c; // aspect-corrected screen position of this fragment
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4f {
-    let dist = abs(in.dist);
-    let inner = in.width - in.softness;
-    let outer = in.width + in.softness;
-    let a_geom = 1.0 - smoothstep(inner, outer, dist);
-    let a = clamp(a_geom * in.color.a, 0.0, 0.999);
-    
+    let ii = in.bezier_idx;
+    let b = beziers.items[ii];
+    let aspect = uniforms.dims.x / uniforms.dims.y;
+
+    let proj0 = project_to_screen(uniforms.vp, b.p0.xyz, aspect);
+    let proj1 = project_to_screen(uniforms.vp, b.p1.xyz, aspect);
+    let proj2 = project_to_screen(uniforms.vp, b.p2.xyz, aspect);
+    let proj3 = project_to_screen(uniforms.vp, b.p3.xyz, aspect);
+
+    let p0 = proj0.xy;
+    let p1 = proj1.xy;
+    let p2 = proj2.xy;
+    let p3 = proj3.xy;
+
+    let p = in.p_screen;
+
+    // Walk segments to find closest point — identical to backward pass
+    var min_d = 1e9;
+    var min_k = 1u;
+    var min_u = 0.0;
+    var prev = p0;
+    for (var k = 1u; k <= N_SEG; k++) {
+        let curr = bezier_at(p0, p1, p2, p3, f32(k) / f32(N_SEG));
+        let seg = curr - prev;
+        let len2 = max(dot(seg, seg), 1e-8);
+        let u = clamp(dot(p - prev, seg) / len2, 0.0, 1.0);
+        let proj_pt = prev + u * seg;
+        let d = length(p - proj_pt);
+        if (d < min_d) {
+            min_d = d;
+            min_k = k;
+            min_u = u;
+        }
+        prev = curr;
+    }
+
+    let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
+    let dt = t - 0.5;
+    let pressure = 1.0 - 4.0 * dt * dt;
+
+    let width = max(b.p0.w, 0.0001);
+    let softness = max(b.p1.w, 0.0001);
+    let local_width = width * pressure;
+    let local_softness = softness * pressure;
+    let local_opacity = b.color.a * pressure;
+
+    let inner = local_width - local_softness;
+    let outer = local_width + local_softness;
+    let a_geom = 1.0 - smoothstep(inner, outer, min_d);
+    let a = clamp(a_geom * local_opacity, 0.0, 0.999);
+
     if (a < 0.001) { discard; }
-    
-    return vec4f(in.color.rgb * a, a);
+
+    return vec4f(b.color.rgb * a, a);
 }
