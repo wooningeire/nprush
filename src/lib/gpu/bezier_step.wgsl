@@ -167,10 +167,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     b.color.a = select(b.color.a, 0.0, b.color.a < alpha_thresh || b.p0.w <= width_thresh);
 
     // Kill beziers whose bounding hull is entirely outside the view frustum.
-    // Project all four control points; if every point is outside the same NDC
-    // half-space (all left, all right, all above, or all below) the curve
-    // cannot intersect the screen and will never receive a gradient.
-    if (b.color.a > 0.0) {
+    // Skipped when no_kill is set (fine color layer) — those curves are allowed
+    // to drift temporarily and will be pulled back by the loss gradient.
+    if (b.color.a > 0.0 && adam.no_kill < 0.5) {
         let c0 = uniforms.vp * vec4f(b.p0.xyz, 1.0);
         let c1 = uniforms.vp * vec4f(b.p1.xyz, 1.0);
         let c2 = uniforms.vp * vec4f(b.p2.xyz, 1.0);

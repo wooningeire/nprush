@@ -158,61 +158,60 @@ fn main() {
     }
 
     // --- Pass 2: seed new beziers at the highest-loss uncovered pixels ---
-    // Single linear scan: collect the top-revive_count pixels by loss.
-    // We keep a small sorted-insert buffer; for the typical revive_count
-    // (tens to low hundreds) this is fast enough in a single-threaded workgroup.
     // Fill ALL remaining dead slots so population stays at capacity.
-    let revive_count = dead_count;
+    // Cap at 64 spawns per ADC cycle to keep GPU time bounded.
+    let max_spawns = min(dead_count, 64u);
 
-    if (revive_count > 0u) {
-        // One-pass scan: find the single best pixel, spawn there, zero it, repeat.
-        // Cap at revive_count iterations; each iteration is O(PIXEL_LOSS_SIZE).
-        // To keep GPU time bounded, limit to at most 64 spawns per ADC cycle.
-        let max_spawns = min(revive_count, 64u);
+    for (var pass = 0u; pass < max_spawns; pass = pass + 1u) {
+        if (dead_count == 0u) { break; }
 
-        for (var pass = 0u; pass < max_spawns; pass = pass + 1u) {
-            if (dead_count == 0u) { break; }
-
-            // Find highest-loss pixel
-            var best_px = 0u;
-            var best_val = 0;
-            for (var px = 0u; px < PIXEL_LOSS_SIZE; px = px + 1u) {
-                let v = atomicLoad(&pixel_loss[px]);
-                if (v > best_val) {
-                    best_val = v;
-                    best_px = px;
-                }
+        // Find highest-loss pixel in one linear scan
+        var best_px = 0u;
+        var best_val = 0;
+        for (var px = 0u; px < PIXEL_LOSS_SIZE; px = px + 1u) {
+            let v = atomicLoad(&pixel_loss[px]);
+            if (v > best_val) {
+                best_val = v;
+                best_px = px;
             }
-            // No meaningful loss anywhere — stop early
-            if (best_val <= 0) { break; }
+        }
 
-            // Claim this pixel
+        // If no loss signal, fall back to a random onscreen pixel so dead slots
+        // always get filled (important for fine layers with near-zero residual).
+        var spawn_px = best_px;
+        if (best_val <= 0) {
+            let seed_fb = f32(pass) * 1234.5678 + adam.t * 0.1;
+            let rx = u32(fract(sin(seed_fb * 12.9898) * 43758.5453) * f32(OPTIM_WIDTH));
+            let ry = u32(fract(sin(seed_fb * 78.233)  * 43758.5453) * f32(OPTIM_HEIGHT));
+            spawn_px = ry * OPTIM_WIDTH + rx;
+        } else {
+            // Claim this pixel so the next pass finds a different peak
             atomicStore(&pixel_loss[best_px], 0);
+        }
 
-            dead_count = dead_count - 1u;
-            let slot = dead_indices[dead_count];
+        dead_count = dead_count - 1u;
+        let slot = dead_indices[dead_count];
 
-            let spawn_depth = 0.5;
-            let center = pixel_to_world(best_px, spawn_depth);
+        let spawn_depth = 0.5;
+        let center = pixel_to_world(spawn_px, spawn_depth);
 
-            let seed = f32(best_px) * 1.61803 + f32(pass) * 2.71828;
-            let angle = fract(sin(seed * 127.1) * 43758.5453) * 6.28318;
-            let tx = cos(angle) * 0.025;
-            let tz = sin(angle) * 0.025;
-            let tangent = vec3f(tx, 0.0, tz);
+        let seed = f32(spawn_px) * 1.61803 + f32(pass) * 2.71828;
+        let angle = fract(sin(seed * 127.1) * 43758.5453) * 6.28318;
+        let tx = cos(angle) * 0.025;
+        let tz = sin(angle) * 0.025;
+        let tangent = vec3f(tx, 0.0, tz);
 
-            var nb: Bezier;
-            nb.p0 = vec4f(center - tangent,        0.015);
-            nb.p1 = vec4f(center - tangent * 0.33, 0.005);
-            nb.p2 = vec4f(center + tangent * 0.33, 0.0);
-            nb.p3 = vec4f(center + tangent,        0.0);
-            nb.color = vec4f(0.5, 0.5, 0.5, 0.5);
+        var nb: Bezier;
+        nb.p0 = vec4f(center - tangent,        0.015);
+        nb.p1 = vec4f(center - tangent * 0.33, 0.005);
+        nb.p2 = vec4f(center + tangent * 0.33, 0.0);
+        nb.p3 = vec4f(center + tangent,        0.0);
+        nb.color = vec4f(0.5, 0.5, 0.5, 0.5);
 
-            beziers.items[slot] = nb;
-            for (var p = 0u; p < 18u; p = p + 1u) {
-                adam.m[slot * 18u + p] = 0.0;
-                adam.v[slot * 18u + p] = 0.0;
-            }
+        beziers.items[slot] = nb;
+        for (var p = 0u; p < 18u; p = p + 1u) {
+            adam.m[slot * 18u + p] = 0.0;
+            adam.v[slot * 18u + p] = 0.0;
         }
     }
 
