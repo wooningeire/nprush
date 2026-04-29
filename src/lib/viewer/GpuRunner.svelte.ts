@@ -8,6 +8,7 @@ import { GpuBezierForwardPipelineManager } from "$/gpu/GpuBezierForwardPipelineM
 import { GpuBlurPipelineManager } from "$/gpu/GpuBlurPipelineManager";
 import { GpuDepthAwareBlurPipelineManager } from "$/gpu/GpuDepthAwareBlurPipelineManager";
 import { GpuEnvmapPipelineManager } from "$/gpu/GpuEnvmapPipelineManager";
+import { GpuPathTracePipelineManager } from "$/gpu/GpuPathTracePipelineManager";
 import type { MeshData } from "$/gpu/loadGlb";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 
@@ -42,6 +43,7 @@ export class GpuRunner {
     private readonly matcapTexture: GPUTexture;
     private readonly matcapTextureView: GPUTextureView;
     private readonly envmapPipelineManager: GpuEnvmapPipelineManager;
+    readonly pathTracePipelineManager: GpuPathTracePipelineManager;
 
     // Full-res textures (sized to the visible main panel area: half-width x height-minus-strip).
     // These match the camera projection aspect so the rendered model has the same pixel
@@ -153,6 +155,15 @@ export class GpuRunner {
             envTexture: matcapTexture,
         });
 
+        this.pathTracePipelineManager = new GpuPathTracePipelineManager({
+            device,
+            envTexture: matcapTexture,
+        });
+        // Upload scene geometry for path tracing
+        const ptMeshes: MeshData[] = [mesh];
+        if (groundMesh) ptMeshes.push(groundMesh);
+        this.pathTracePipelineManager.setMeshes(ptMeshes);
+
         // The color-layer instance owns the visualization render pipeline, which
         // composites both layers. We tell it the edge layer's bezier count via
         // numBeziers so its render shader sizes the bezier loop correctly.
@@ -209,6 +220,11 @@ export class GpuRunner {
             $effect(() => this.uniformsManager.writeViewProjMat(this.camera.viewProjMat));
             $effect(() => this.uniformsManager.writeViewMat(this.camera.viewMat));
             $effect(() => this.uniformsManager.writeInvViewProjMat(this.camera.viewProjInvMat));
+            $effect(() => {
+                // Write invViewProjMat to path tracer and reset accumulation on camera change
+                this.pathTracePipelineManager.writeInvViewProjMat(this.camera.viewProjInvMat as Float32Array);
+                this.pathTracePipelineManager.reset();
+            });
             $effect(() => this.uniformsManager.writeShadingMode(this.viewerState.shadingMode));
             $effect(() => this.splatOptimizerManager.writeRenderUniforms(
                 this.viewerState.edgeBeziersEnabled,
@@ -255,6 +271,9 @@ export class GpuRunner {
         if (ow === this.optimWidth && oh === this.optimHeight) return;
         this.optimWidth = ow;
         this.optimHeight = oh;
+
+        // Resize path tracer output to match optim resolution
+        this.pathTracePipelineManager.setOutputSize(ow, oh);
 
         if (this.optimTexture) this.optimTexture.destroy();
         if (this.optimDepthTexture) this.optimDepthTexture.destroy();
@@ -579,6 +598,15 @@ export class GpuRunner {
             this.meshRenderPipelineManager.addDraw(optimPassEncoder, this.matcapTextureView);
             optimPassEncoder.end();
 
+            // 1b.5 Path trace pass — accumulates one sample per pixel into the PT output texture.
+            // The PT output is used as the target for the splat/bezier optimizers instead of
+            // the rasterized mesh render, giving a more physically-based training signal.
+            this.pathTracePipelineManager.dispatch(commandEncoder);
+
+            // Use path trace output as the optimization target if available, else fall back to raster.
+            const ptView = this.pathTracePipelineManager.outputTextureView;
+            const optimTargetView = ptView ?? this.optimTextureView!;
+
             // 1c. Run separable blur on targets if enabled
             if (this.viewerState.compareBlurred) {
                 this.blurManager.blur(
@@ -626,7 +654,7 @@ export class GpuRunner {
 
             // 3. Dispatch Splat Optimizer Compute Passes (uses optim-res texture + edge map)
             this.splatOptimizerManager.setBackwardTarget(
-                this.viewerState.compareBlurred ? this.optimBlurredTextureView! : this.optimTextureView!,
+                this.viewerState.compareBlurred ? this.optimBlurredTextureView! : optimTargetView,
                 this.viewerState.compareBlurred ? this.optimBlurredDepthTextureView! : this.optimDepthTextureView!,
                 this.optimWidth,
                 this.optimHeight
@@ -680,7 +708,7 @@ export class GpuRunner {
             if (this.viewerState.colorBeziersEnabled) {
                 // Background is now splats OR splats+base (if base was enabled)
                 this.colorLayerBezierManager.setBackwardTarget(
-                    this.optimTextureView!,
+                    optimTargetView,
                     this.optimDepthTextureView!,
                     this.optimSplatTextureView!,
                     this.optimSplatDepthTextureView!,
