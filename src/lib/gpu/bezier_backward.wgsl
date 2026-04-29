@@ -377,20 +377,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let REG_SOFT = 5.0;
         dSoft += select(0.0, REG_SOFT * 2.0 * softness, is_fine);
 
-        // 2. Direction regularization: align tangent with direction of least color change.
-        //    loss = REG_DIR * (tangent_ndc · grad_color)^2
-        //    where tangent_ndc is the bezier tangent at t_pixel in aspect-corrected screen space,
-        //    and grad_color is the image gradient of targetTex at this pixel.
-        //
-        //    Tangent = normalize(curr_pt - prev_pt) in aspect-corrected space.
-        //    grad_color via central differences on targetTex.
-        //
-        //    d_loss/d_tangent = REG_DIR * 2 * (t·g) * g
-        //    d_tangent/d_control_points flows through the bezier derivative.
+        // 2. Direction regularization: align with direction of least/most color change.
+        //    Tangent variant (commented out): loss = REG_DIR * (tangent · grad_color)^2
+        //    Bitangent variant (active): loss = REG_DIR * (bitangent · grad_color)^2
+        //    Bitangent = perp(tangent), so this pushes the curve to run *across* color
+        //    gradients (i.e. along isocurves) rather than along them.
         let REG_DIR = 0.5;
         if (is_fine && len2 > 1e-10) {
-            // Tangent in aspect-corrected screen space (already normalized by len)
             let tangent = seg / sqrt(len2); // seg = curr_pt - prev_pt
+            // Bitangent: 90° CCW rotation of tangent in screen space
+            //let bitangent = vec2f(-tangent.y, tangent.x);
 
             // Color gradient via central differences (1-pixel step in NDC)
             let px = vec2i(global_id.xy);
@@ -403,33 +399,45 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             let cl = dot(textureLoad(targetTex, px_l, 0).rgb, vec3f(0.333));
             let cu = dot(textureLoad(targetTex, px_u, 0).rgb, vec3f(0.333));
             let cd = dot(textureLoad(targetTex, px_d, 0).rgb, vec3f(0.333));
-            // grad in aspect-corrected screen space: x scaled by aspect, y flipped
             let grad_x = (cr - cl) * 0.5 * aspect;
-            let grad_y = -(cu - cd) * 0.5; // y flipped (image y vs NDC y)
+            let grad_y = -(cu - cd) * 0.5;
             let grad_color = vec2f(grad_x, grad_y);
 
+            // --- Tangent influence (commented out) ---
             // loss = REG_DIR * (tangent · grad_color)^2
-            let tg = dot(tangent, grad_color);
+            // let dir_vec = tangent;
+
+            // --- Bitangent influence (active) ---
+            // loss = REG_DIR * (bitangent · grad_color)^2
+            // Penalises the bitangent aligning with the color gradient,
+            // which pushes the tangent to align with the gradient instead —
+            // i.e. the curve runs across isocurves (perpendicular to flat regions).
+            let dir_vec = tangent;
+
+            let tg = dot(dir_vec, grad_color);
             let d_loss_dir = REG_DIR * 2.0 * tg;
 
-            // d_loss/d_tangent = d_loss_dir * grad_color
-            // d_tangent/d_seg: tangent = seg / |seg|
-            //   d_tangent_i/d_seg_j = (delta_ij - tangent_i*tangent_j) / |seg|
-            let d_tangent = d_loss_dir * grad_color;
-            let inv_len = 1.0 / sqrt(len2);
-            let d_seg = (d_tangent - tangent * dot(d_tangent, tangent)) * inv_len;
+            // d_loss/d_dir_vec = d_loss_dir * grad_color
+            // For bitangent = (-ty, tx): d_bitangent/d_tangent = [[ 0,-1],[1, 0]]
+            // d_loss/d_tangent = d_loss/d_bitangent * d_bitangent/d_tangent
+            //   = d_loss_dir * grad_color * [[0,1],[-1,0]]
+            //   = d_loss_dir * vec2f(grad_color.y, -grad_color.x)
+            // For tangent variant just use: d_loss_dir * grad_color directly.
+            let d_tangent_vec = d_loss_dir * vec2f(grad_color.y, -grad_color.x); // bitangent chain rule
+            // let d_tangent_vec = d_loss_dir * grad_color; // tangent variant
 
-            // seg = curr_pt - prev_pt, so d_curr_pt += d_seg, d_prev_pt -= d_seg
+            // d_tangent/d_seg: tangent = seg / |seg|
+            let inv_len = 1.0 / sqrt(len2);
+            let d_seg = (d_tangent_vec - tangent * dot(d_tangent_vec, tangent)) * inv_len;
+
             let dPrevPt_dir = -d_seg;
             let dCurrPt_dir =  d_seg;
 
-            // Accumulate into 2D control point gradients via Bernstein weights
             let dP0_dir = B_prev.x * dPrevPt_dir + B_curr.x * dCurrPt_dir;
             let dP1_dir = B_prev.y * dPrevPt_dir + B_curr.y * dCurrPt_dir;
             let dP2_dir = B_prev.z * dPrevPt_dir + B_curr.z * dCurrPt_dir;
             let dP3_dir = B_prev.w * dPrevPt_dir + B_curr.w * dCurrPt_dir;
 
-            // Backproject to 3D and add to existing position gradients
             let dP0_dir3 = backproject_gradient(uniforms.vp, b.p0.xyz, aspect, dP0_dir);
             let dP1_dir3 = backproject_gradient(uniforms.vp, b.p1.xyz, aspect, dP1_dir);
             let dP2_dir3 = backproject_gradient(uniforms.vp, b.p2.xyz, aspect, dP2_dir);

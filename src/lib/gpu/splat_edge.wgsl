@@ -37,7 +37,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     // strong silhouette transitions to 1. Smoothstep keeps a thin soft edge
     // (~one pixel wide) so anything optimizing an MSE against this image
     // still has a usable gradient at the boundary instead of a hard step.
-    let thresholded = smoothstep(0.05, 0.15, edge);
+    let thresholded = smoothstep(0.01, 0.06, edge);
 
     textureStore(edgeTex, p, vec4f(thresholded, thresholded, thresholded, 1.0));
 }
