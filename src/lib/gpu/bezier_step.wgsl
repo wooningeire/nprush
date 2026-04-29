@@ -155,5 +155,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let width_thresh = select(0.001, uniforms.prune_width_thresh, uniforms.prune_width_thresh > 0.0);
     b.color.a = select(b.color.a, 0.0, b.color.a < alpha_thresh || b.p0.w <= width_thresh);
 
+    // Kill beziers whose bounding hull is entirely outside the view frustum.
+    // Project all four control points; if every point is outside the same NDC
+    // half-space (all left, all right, all above, or all below) the curve
+    // cannot intersect the screen and will never receive a gradient.
+    if (b.color.a > 0.0) {
+        let c0 = uniforms.vp * vec4f(b.p0.xyz, 1.0);
+        let c1 = uniforms.vp * vec4f(b.p1.xyz, 1.0);
+        let c2 = uniforms.vp * vec4f(b.p2.xyz, 1.0);
+        let c3 = uniforms.vp * vec4f(b.p3.xyz, 1.0);
+        // Use a small margin so curves near the edge aren't killed prematurely.
+        let margin = 1.2;
+        let all_left  = c0.x < -margin*c0.w && c1.x < -margin*c1.w && c2.x < -margin*c2.w && c3.x < -margin*c3.w;
+        let all_right = c0.x >  margin*c0.w && c1.x >  margin*c1.w && c2.x >  margin*c2.w && c3.x >  margin*c3.w;
+        let all_below = c0.y < -margin*c0.w && c1.y < -margin*c1.w && c2.y < -margin*c2.w && c3.y < -margin*c3.w;
+        let all_above = c0.y >  margin*c0.w && c1.y >  margin*c1.w && c2.y >  margin*c2.w && c3.y >  margin*c3.w;
+        let all_behind = c0.w < 0.0 && c1.w < 0.0 && c2.w < 0.0 && c3.w < 0.0;
+        let offscreen = all_left || all_right || all_below || all_above || all_behind;
+        b.color.a = select(b.color.a, 0.0, offscreen);
+    }
+
     beziers.items[bezier_id] = b;
 }
