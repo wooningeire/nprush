@@ -269,7 +269,7 @@ export class GpuRunner {
                 // but background penalty enabled to kill off-model curves.
                 this.colorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.colorLayerBezierManager.writeNoKill(true);
-                this.colorLayerBezierManager.writeBgPenalty(3.0);
+                this.colorLayerBezierManager.writeBgPenalty(0.0);
                 // Base color layer: no background penalty (blurred target bleeds into bg).
                 // Enable no_kill so broad strokes aren't pruned before they settle —
                 // the ADC stuck+loss kill was the main source of base-layer jitter.
