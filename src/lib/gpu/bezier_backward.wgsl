@@ -436,96 +436,88 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let REG_SOFT = 5.0;
         dSoft += select(0.0, REG_SOFT * 2.0 * softness, is_fine);
 
-        // 2. Direction regularization: align with direction of least/most color change.
-        //    Tangent variant (commented out): loss = REG_DIR * (tangent · grad_color)^2
-        //    Bitangent variant (active): loss = REG_DIR * (bitangent · grad_color)^2
-        //    Bitangent = perp(tangent), so this pushes the curve to run *across* color
-        //    gradients (i.e. along isocurves) rather than along them.
-        let REG_DIR = 0.5;
+        // 2. Direction regularization: align tangent with the local flow field.
+        //    Flow field = normalized combination of color and normal gradients.
+        //    Normal gradient is weighted 2x — it gives cleaner directional signal
+        //    on 3D surfaces than color alone.
+        //    loss = REG_DIR * (1 - (tangent · flow_dir)^2)
+        //    which is minimised when tangent is parallel to flow_dir.
+        const REG_DIR: f32 = 1.5;
         if (is_fine && len2 > 1e-10) {
             let tangent = seg / sqrt(len2); // seg = curr_pt - prev_pt
-            // Bitangent: 90° CCW rotation of tangent in screen space
-            //let bitangent = vec2f(-tangent.y, tangent.x);
 
-            // Color gradient via central differences (1-pixel step in NDC)
+            // Color gradient via 2-pixel central differences for a smoother field
             let px = vec2i(global_id.xy);
             let px_dims = vec2i(dims);
-            let px_r = clamp(px + vec2i(1, 0), vec2i(0), px_dims - 1);
-            let px_l = clamp(px - vec2i(1, 0), vec2i(0), px_dims - 1);
-            let px_u = clamp(px + vec2i(0, 1), vec2i(0), px_dims - 1);
-            let px_d = clamp(px - vec2i(0, 1), vec2i(0), px_dims - 1);
+            let px_r = clamp(px + vec2i(2, 0), vec2i(0), px_dims - 1);
+            let px_l = clamp(px - vec2i(2, 0), vec2i(0), px_dims - 1);
+            let px_u = clamp(px + vec2i(0, 2), vec2i(0), px_dims - 1);
+            let px_d = clamp(px - vec2i(0, 2), vec2i(0), px_dims - 1);
             let cr = dot(textureLoad(targetTex, px_r, 0).rgb, vec3f(0.333));
             let cl = dot(textureLoad(targetTex, px_l, 0).rgb, vec3f(0.333));
             let cu = dot(textureLoad(targetTex, px_u, 0).rgb, vec3f(0.333));
             let cd = dot(textureLoad(targetTex, px_d, 0).rgb, vec3f(0.333));
-            let grad_x = (cr - cl) * 0.5 * aspect;
-            let grad_y = -(cu - cd) * 0.5;
+            let grad_x = (cr - cl) * 0.25 * aspect; // 1/(2*step=4)
+            let grad_y = -(cu - cd) * 0.25;
             let grad_color = vec2f(grad_x, grad_y);
 
-            // Normal gradient via central differences
+            // Normal gradient via 2-pixel central differences (weighted 2x)
             let nr_scalar = dot(textureLoad(normalTex, px_r, 0).rgb, vec3f(0.333));
             let nl_scalar = dot(textureLoad(normalTex, px_l, 0).rgb, vec3f(0.333));
             let nu_scalar = dot(textureLoad(normalTex, px_u, 0).rgb, vec3f(0.333));
             let nd_scalar = dot(textureLoad(normalTex, px_d, 0).rgb, vec3f(0.333));
-            let grad_norm_x = (nr_scalar - nl_scalar) * 0.5 * aspect;
-            let grad_norm_y = -(nu_scalar - nd_scalar) * 0.5;
+            let grad_norm_x = (nr_scalar - nl_scalar) * 0.25 * aspect;
+            let grad_norm_y = -(nu_scalar - nd_scalar) * 0.25;
             let grad_normal = vec2f(grad_norm_x, grad_norm_y);
 
-            // Flow vector combines color and normal gradients equally
-            let flow_vec = grad_color + grad_normal;
+            // Flow vector: normals weighted 2x for stronger surface-following signal.
+            // Normalize so REG_DIR strength is independent of gradient magnitude.
+            let flow_raw = grad_color + 2.0 * grad_normal;
+            let flow_len = length(flow_raw);
+            // Only apply when there's a meaningful gradient; skip flat regions.
+            if (flow_len > 1e-4) {
+                let flow_dir = flow_raw / flow_len;
 
-            // --- Tangent influence (commented out) ---
-            // loss = REG_DIR * (tangent · flow_vec)^2
-            // let dir_vec = tangent;
+                // Penalise tangent aligning with flow_dir (i.e. crossing color/normal
+                // boundaries). Minimised when tangent is orthogonal to flow_dir —
+                // the stroke runs *along* isocurves, parallel to the surface flow.
+                // loss = REG_DIR * (tangent · flow_dir)^2
+                let tg = dot(tangent, flow_dir);
+                let d_loss_dir = REG_DIR * 2.0 * tg;
 
-            // --- Bitangent influence (active) ---
-            // loss = REG_DIR * (bitangent · flow_vec)^2
-            // Penalises the bitangent aligning with the flow vector,
-            // which pushes the tangent to align with the flow instead —
-            // i.e. the curve runs across isocurves (perpendicular to flat regions).
-            let dir_vec = tangent;
+                // d_loss/d_tangent = d_loss_dir * flow_dir
+                let d_tangent_vec = d_loss_dir * flow_dir;
 
-            let tg = dot(dir_vec, flow_vec);
-            let d_loss_dir = REG_DIR * 2.0 * tg;
+                // d_tangent/d_seg: tangent = seg / |seg|
+                let inv_len = 1.0 / sqrt(len2);
+                let d_seg = (d_tangent_vec - tangent * dot(d_tangent_vec, tangent)) * inv_len;
 
-            // d_loss/d_dir_vec = d_loss_dir * flow_vec
-            // For bitangent = (-ty, tx): d_bitangent/d_tangent = [[ 0,-1],[1, 0]]
-            // d_loss/d_tangent = d_loss/d_bitangent * d_bitangent/d_tangent
-            //   = d_loss_dir * flow_vec * [[0,1],[-1,0]]
-            //   = d_loss_dir * vec2f(flow_vec.y, -flow_vec.x)
-            // For tangent variant just use: d_loss_dir * flow_vec directly.
-            let d_tangent_vec = d_loss_dir * vec2f(flow_vec.y, -flow_vec.x); // bitangent chain rule
-            // let d_tangent_vec = d_loss_dir * flow_vec; // tangent variant
+                let dPrevPt_dir = -d_seg;
+                let dCurrPt_dir =  d_seg;
 
-            // d_tangent/d_seg: tangent = seg / |seg|
-            let inv_len = 1.0 / sqrt(len2);
-            let d_seg = (d_tangent_vec - tangent * dot(d_tangent_vec, tangent)) * inv_len;
+                let dP0_dir = B_prev.x * dPrevPt_dir + B_curr.x * dCurrPt_dir;
+                let dP1_dir = B_prev.y * dPrevPt_dir + B_curr.y * dCurrPt_dir;
+                let dP2_dir = B_prev.z * dPrevPt_dir + B_curr.z * dCurrPt_dir;
+                let dP3_dir = B_prev.w * dPrevPt_dir + B_curr.w * dCurrPt_dir;
 
-            let dPrevPt_dir = -d_seg;
-            let dCurrPt_dir =  d_seg;
+                let dP0_dir3 = backproject_gradient(uniforms.vp, b.p0.xyz, aspect, dP0_dir);
+                let dP1_dir3 = backproject_gradient(uniforms.vp, b.p1.xyz, aspect, dP1_dir);
+                let dP2_dir3 = backproject_gradient(uniforms.vp, b.p2.xyz, aspect, dP2_dir);
+                let dP3_dir3 = backproject_gradient(uniforms.vp, b.p3.xyz, aspect, dP3_dir);
 
-            let dP0_dir = B_prev.x * dPrevPt_dir + B_curr.x * dCurrPt_dir;
-            let dP1_dir = B_prev.y * dPrevPt_dir + B_curr.y * dCurrPt_dir;
-            let dP2_dir = B_prev.z * dPrevPt_dir + B_curr.z * dCurrPt_dir;
-            let dP3_dir = B_prev.w * dPrevPt_dir + B_curr.w * dCurrPt_dir;
-
-            let dP0_dir3 = backproject_gradient(uniforms.vp, b.p0.xyz, aspect, dP0_dir);
-            let dP1_dir3 = backproject_gradient(uniforms.vp, b.p1.xyz, aspect, dP1_dir);
-            let dP2_dir3 = backproject_gradient(uniforms.vp, b.p2.xyz, aspect, dP2_dir);
-            let dP3_dir3 = backproject_gradient(uniforms.vp, b.p3.xyz, aspect, dP3_dir);
-
-            atomicAdd(&grads.data[base + 0u], i32(dP0_dir3.x * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 1u], i32(dP0_dir3.y * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 2u], i32(dP0_dir3.z * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 3u], i32(dP1_dir3.x * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 4u], i32(dP1_dir3.y * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 5u], i32(dP1_dir3.z * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 6u], i32(dP2_dir3.x * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 7u], i32(dP2_dir3.y * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 8u], i32(dP2_dir3.z * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 9u], i32(dP3_dir3.x * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 10u], i32(dP3_dir3.y * FP_SCALE_POS));
-            atomicAdd(&grads.data[base + 11u], i32(dP3_dir3.z * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 0u], i32(dP0_dir3.x * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 1u], i32(dP0_dir3.y * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 2u], i32(dP0_dir3.z * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 3u], i32(dP1_dir3.x * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 4u], i32(dP1_dir3.y * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 5u], i32(dP1_dir3.z * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 6u], i32(dP2_dir3.x * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 7u], i32(dP2_dir3.y * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 8u], i32(dP2_dir3.z * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 9u], i32(dP3_dir3.x * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 10u], i32(dP3_dir3.y * FP_SCALE_POS));
+                atomicAdd(&grads.data[base + 11u], i32(dP3_dir3.z * FP_SCALE_POS));
+            }
         }
 
 
