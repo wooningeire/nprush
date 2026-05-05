@@ -44,10 +44,6 @@ const {
         Pause Splat Training
     </label>
     <label>
-        <input type="checkbox" bind:checked={viewerState.posterizationEnabled} />
-        Posterization
-    </label>
-    <label>
         <input type="checkbox" bind:checked={viewerState.compareBlurred} />
         Compare Blurred
     </label>

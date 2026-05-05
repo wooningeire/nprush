@@ -23,7 +23,6 @@ export class ViewerState {
     edgeBezierTrainingPaused = $state(false);
     baseColorBezierTrainingPaused = $state(false);
     colorBezierTrainingPaused = $state(false);
-    posterizationEnabled = $state(false);
     compareBlurred = $state(true);
     shadingMode = $state<'normals' | 'shaded'>('normals');
     blurRadius = $state(16);
