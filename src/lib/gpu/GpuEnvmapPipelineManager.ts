@@ -31,6 +31,7 @@ export class GpuEnvmapPipelineManager {
         });
 
         const bindGroupLayout = device.createBindGroupLayout({
+            label: "envmap bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
                 { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
@@ -40,7 +41,10 @@ export class GpuEnvmapPipelineManager {
 
         this.pipeline = device.createRenderPipeline({
             label: "envmap pipeline",
-            layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
+            layout: device.createPipelineLayout({ 
+                label: "envmap pipeline layout",
+                bindGroupLayouts: [bindGroupLayout] 
+            }),
             vertex: { module, entryPoint: "vert" },
             fragment: {
                 module,
@@ -61,11 +65,16 @@ export class GpuEnvmapPipelineManager {
         });
 
         this.bindGroup = device.createBindGroup({
+            label: "envmap bind group",
             layout: bindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: uniformsManager.uniformsBuffer } },
-                { binding: 1, resource: envTexture.createView() },
-                { binding: 2, resource: device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "repeat", addressModeV: "clamp-to-edge" }) },
+                { binding: 1, resource: envTexture.createView({ label: "envmap texture view" }) },
+                { binding: 2, resource: device.createSampler({ 
+                    label: "envmap sampler",
+                    magFilter: "linear", minFilter: "linear", 
+                    addressModeU: "repeat", addressModeV: "clamp-to-edge" 
+                }) },
             ],
         });
     }

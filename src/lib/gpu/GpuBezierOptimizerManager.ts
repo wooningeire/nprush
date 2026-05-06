@@ -153,6 +153,7 @@ export class GpuBezierOptimizerManager {
             .replace(/OPTIM_HEIGHT/g, `${oh}u`);
 
         this.backwardBindGroupLayout = device.createBindGroupLayout({
+            label: "bezier backward bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
@@ -174,11 +175,16 @@ export class GpuBezierOptimizerManager {
             for (const m of info.messages) console.warn(`[bezier_backward] ${m.type}: ${m.message} (line ${m.lineNum})`);
         });
         this.backwardPipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.backwardBindGroupLayout] }),
+            label: "bezier backward pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "bezier backward pipeline layout",
+                bindGroupLayouts: [this.backwardBindGroupLayout] 
+            }),
             compute: { module: backwardModule, entryPoint: "main" },
         });
 
         const stepBindGroupLayout = device.createBindGroupLayout({
+            label: "bezier step bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
@@ -195,11 +201,16 @@ export class GpuBezierOptimizerManager {
             for (const m of info.messages) console.warn(`[bezier_step] ${m.type}: ${m.message} (line ${m.lineNum})`);
         });
         this.stepPipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [stepBindGroupLayout] }),
+            label: "bezier step pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "bezier step pipeline layout",
+                bindGroupLayouts: [stepBindGroupLayout] 
+            }),
             compute: { module: stepModule, entryPoint: "main" },
         });
 
         this.stepBindGroup = device.createBindGroup({
+            label: "bezier step bind group",
             layout: stepBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
@@ -212,6 +223,7 @@ export class GpuBezierOptimizerManager {
 
         // ADC pipeline: clones/splits high-gradient curves into dead slots.
         this.adcBindGroupLayout = device.createBindGroupLayout({
+            label: "bezier adc bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
@@ -228,11 +240,16 @@ export class GpuBezierOptimizerManager {
             for (const m of info.messages) console.warn(`[bezier_adc] ${m.type}: ${m.message} (line ${m.lineNum})`);
         });
         this.adcPipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.adcBindGroupLayout] }),
+            label: "bezier adc pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "bezier adc pipeline layout",
+                bindGroupLayouts: [this.adcBindGroupLayout] 
+            }),
             compute: { module: adcModule, entryPoint: "main" },
         });
 
         this.adcBindGroup = device.createBindGroup({
+            label: "bezier adc bind group",
             layout: this.adcBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
@@ -328,6 +345,7 @@ export class GpuBezierOptimizerManager {
         this.dims = { width, height };
 
         this.backwardBindGroup = this.device.createBindGroup({
+            label: "bezier backward bind group",
             layout: this.backwardBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
@@ -356,7 +374,9 @@ export class GpuBezierOptimizerManager {
             new Float32Array([pixelCount])
         );
 
-        const pass = commandEncoder.beginComputePass();
+        const pass = commandEncoder.beginComputePass({
+            label: "bezier backward and step pass",
+        });
 
         pass.setPipeline(this.backwardPipeline);
         pass.setBindGroup(0, this.backwardBindGroup);

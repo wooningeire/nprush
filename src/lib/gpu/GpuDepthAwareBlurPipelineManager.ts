@@ -10,11 +10,13 @@ export class GpuDepthAwareBlurPipelineManager {
         this.device = device;
 
         this.paramsBuffer = device.createBuffer({
+            label: "depth aware blur params buffer",
             size: 32,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
         this.bindGroupLayout = device.createBindGroupLayout({
+            label: "depth aware blur bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
@@ -24,9 +26,13 @@ export class GpuDepthAwareBlurPipelineManager {
         });
 
         this.pipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] }),
+            label: "depth aware blur compute pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "depth aware blur pipeline layout",
+                bindGroupLayouts: [this.bindGroupLayout] 
+            }),
             compute: {
-                module: device.createShaderModule({ code: depthAwareBlurModuleSrc }),
+                module: device.createShaderModule({ label: "depth aware blur shader", code: depthAwareBlurModuleSrc }),
                 entryPoint: "main",
             },
         });
@@ -44,6 +50,7 @@ export class GpuDepthAwareBlurPipelineManager {
         this.device.queue.writeBuffer(this.paramsBuffer, 0, new Int32Array([radius]));
 
         const bindGroup = this.device.createBindGroup({
+            label: "depth aware blur bind group",
             layout: this.bindGroupLayout,
             entries: [
                 { binding: 0, resource: colorView },
@@ -53,7 +60,9 @@ export class GpuDepthAwareBlurPipelineManager {
             ],
         });
 
-        const pass = commandEncoder.beginComputePass();
+        const pass = commandEncoder.beginComputePass({
+            label: "depth aware blur pass",
+        });
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, bindGroup);
         pass.dispatchWorkgroups(Math.ceil(width / 16), Math.ceil(height / 16));

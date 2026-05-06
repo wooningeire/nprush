@@ -28,11 +28,13 @@ export class GpuSplatForwardPipelineManager {
 
         // VP matrix (64 bytes) + dims (8 bytes) + pad (8 bytes) = 80 bytes
         this.uniformsBuffer = device.createBuffer({
+            label: "splat forward uniforms buffer",
             size: 80,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
         this.bindGroupLayout = device.createBindGroupLayout({
+            label: "splat forward bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
                 { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
@@ -47,7 +49,10 @@ export class GpuSplatForwardPipelineManager {
 
         this.pipeline = device.createRenderPipeline({
             label: "splat forward render pipeline",
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] }),
+            layout: device.createPipelineLayout({ 
+                label: "splat forward pipeline layout",
+                bindGroupLayouts: [this.bindGroupLayout] 
+            }),
             vertex: { module, entryPoint: "vert" },
             fragment: {
                 module,
@@ -73,6 +78,7 @@ export class GpuSplatForwardPipelineManager {
         });
 
         this.bindGroup = this.device.createBindGroup({
+            label: "splat forward bind group",
             layout: this.bindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.splatBuffer } },

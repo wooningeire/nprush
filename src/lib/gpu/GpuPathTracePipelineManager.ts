@@ -60,6 +60,7 @@ export class GpuPathTracePipelineManager {
 
         // binding 2 = bvh_nodes, binding 3 = bvh_tris (was raw indices)
         this.ptBindGroupLayout = device.createBindGroupLayout({
+            label: "path trace bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // vertices
@@ -71,6 +72,7 @@ export class GpuPathTracePipelineManager {
             ],
         });
         this.resolveBindGroupLayout = device.createBindGroupLayout({
+            label: "pt resolve bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm" } },
@@ -79,11 +81,19 @@ export class GpuPathTracePipelineManager {
         });
 
         this.ptPipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.ptBindGroupLayout] }),
+            label: "path trace pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "path trace pipeline layout",
+                bindGroupLayouts: [this.ptBindGroupLayout] 
+            }),
             compute: { module: ptModule, entryPoint: "main" },
         });
         this.resolvePipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.resolveBindGroupLayout] }),
+            label: "pt resolve pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "pt resolve pipeline layout",
+                bindGroupLayouts: [this.resolveBindGroupLayout] 
+            }),
             compute: { module: resolveModule, entryPoint: "main" },
         });
     }
@@ -157,7 +167,7 @@ export class GpuPathTracePipelineManager {
             label: "pt output", size: [width, height], format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
-        this.outputTextureView = this.outputTexture.createView();
+        this.outputTextureView = this.outputTexture.createView({ label: "pt output view" });
 
         this.device.queue.writeBuffer(this.resolveUniformsBuffer, 0, new Uint32Array([width, height, 0, 0]));
         this.ptBindGroup = this.resolveBindGroup = null;
@@ -182,6 +192,7 @@ export class GpuPathTracePipelineManager {
             !this.accumBuffer || !this.outputTextureView) return;
 
         this.ptBindGroup = this.device.createBindGroup({
+            label: "path trace bind group",
             layout: this.ptBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.ptUniformsBuffer } },
@@ -189,14 +200,16 @@ export class GpuPathTracePipelineManager {
                 { binding: 2, resource: { buffer: this.bvhNodeBuffer } },
                 { binding: 3, resource: { buffer: this.bvhTriBuffer } },
                 { binding: 4, resource: { buffer: this.accumBuffer } },
-                { binding: 5, resource: this.envTexture.createView() },
+                { binding: 5, resource: this.envTexture.createView({ label: "pt env texture view" }) },
                 { binding: 6, resource: this.device.createSampler({
+                    label: "pt sampler",
                     magFilter: "linear", minFilter: "linear",
                     addressModeU: "repeat", addressModeV: "clamp-to-edge",
                 })},
             ],
         });
         this.resolveBindGroup = this.device.createBindGroup({
+            label: "pt resolve bind group",
             layout: this.resolveBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.accumBuffer } },

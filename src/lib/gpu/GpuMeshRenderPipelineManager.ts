@@ -222,6 +222,7 @@ export class GpuMeshRenderPipelineManager {
         });
 
         const pbrSampler = this.device.createSampler({
+            label: "mesh pbr sampler",
             magFilter: "linear",
             minFilter: "linear",
             mipmapFilter: "linear",
@@ -234,10 +235,10 @@ export class GpuMeshRenderPipelineManager {
             layout: pbrBgl,
             entries: [
                 { binding: 0, resource: { buffer: this.uniformsManager.uniformsBuffer } },
-                { binding: 1, resource: matcapTexture.createView() },
-                { binding: 2, resource: this.device.createSampler({ magFilter: "linear", minFilter: "linear" }) },
-                { binding: 3, resource: albedoTexture.createView() },
-                { binding: 4, resource: normalTexture.createView() },
+                { binding: 1, resource: matcapTexture.createView({ label: "pbr matcap view" }) },
+                { binding: 2, resource: this.device.createSampler({ label: "pbr matcap sampler", magFilter: "linear", minFilter: "linear" }) },
+                { binding: 3, resource: albedoTexture.createView({ label: "pbr albedo view" }) },
+                { binding: 4, resource: normalTexture.createView({ label: "pbr normal view" }) },
                 { binding: 5, resource: pbrSampler },
             ],
         });
@@ -245,11 +246,12 @@ export class GpuMeshRenderPipelineManager {
 
     addDraw(renderPassEncoder: GPURenderPassEncoder, matcapTextureView: GPUTextureView) {
         const bindGroup = this.device.createBindGroup({
+            label: "mesh matcap bind group",
             layout: this.renderPipeline.getBindGroupLayout(0),
             entries: [
                 { binding: 0, resource: { buffer: this.uniformsManager.uniformsBuffer } },
                 { binding: 1, resource: matcapTextureView },
-                { binding: 2, resource: this.device.createSampler({ magFilter: "linear", minFilter: "linear" }) },
+                { binding: 2, resource: this.device.createSampler({ label: "mesh matcap sampler", magFilter: "linear", minFilter: "linear" }) },
             ],
         });
 

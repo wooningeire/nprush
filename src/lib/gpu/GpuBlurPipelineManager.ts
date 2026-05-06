@@ -11,15 +11,18 @@ export class GpuBlurPipelineManager {
         this.device = device;
 
         this.hParamsBuffer = device.createBuffer({
+            label: "blur horizontal params buffer",
             size: 48,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         this.vParamsBuffer = device.createBuffer({
+            label: "blur vertical params buffer",
             size: 48,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
         this.bindGroupLayout = device.createBindGroupLayout({
+            label: "blur bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm" } },
@@ -28,9 +31,13 @@ export class GpuBlurPipelineManager {
         });
 
         this.pipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] }),
+            label: "blur compute pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "blur pipeline layout",
+                bindGroupLayouts: [this.bindGroupLayout] 
+            }),
             compute: {
-                module: device.createShaderModule({ code: blurModuleSrc }),
+                module: device.createShaderModule({ label: "blur shader", code: blurModuleSrc }),
                 entryPoint: "main",
             },
         });
@@ -53,6 +60,7 @@ export class GpuBlurPipelineManager {
         this.device.queue.writeBuffer(this.hParamsBuffer, 16, new Float32Array([sigma]));
         
         const hBindGroup = this.device.createBindGroup({
+            label: "blur horizontal bind group",
             layout: this.bindGroupLayout,
             entries: [
                 { binding: 0, resource: srcView },
@@ -67,6 +75,7 @@ export class GpuBlurPipelineManager {
         this.device.queue.writeBuffer(this.vParamsBuffer, 16, new Float32Array([sigma]));
         
         const vBindGroup = this.device.createBindGroup({
+            label: "blur vertical bind group",
             layout: this.bindGroupLayout,
             entries: [
                 { binding: 0, resource: tempView },
@@ -75,7 +84,9 @@ export class GpuBlurPipelineManager {
             ],
         });
 
-        const pass = commandEncoder.beginComputePass();
+        const pass = commandEncoder.beginComputePass({
+            label: "blur pass",
+        });
         pass.setPipeline(this.pipeline);
         
         pass.setBindGroup(0, hBindGroup);

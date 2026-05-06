@@ -132,6 +132,7 @@ export class GpuSplatOptimizerManager {
 
         // Backward Pipeline — now has 5 bindings (splats, grads, target, edge, VP uniform)
         this.backwardBindGroupLayout = device.createBindGroupLayout({
+            label: "splat backward bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
@@ -145,12 +146,17 @@ export class GpuSplatOptimizerManager {
             for (const msg of info.messages) console.warn(`[splat_backward] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
         this.backwardPipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.backwardBindGroupLayout] }),
+            label: "splat backward pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "splat backward pipeline layout",
+                bindGroupLayouts: [this.backwardBindGroupLayout] 
+            }),
             compute: { module: backwardModule, entryPoint: "main" },
         });
 
         // Step Pipeline
         this.stepBindGroupLayout = device.createBindGroupLayout({
+            label: "splat step bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
@@ -163,11 +169,16 @@ export class GpuSplatOptimizerManager {
             for (const msg of info.messages) console.warn(`[splat_step] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
         this.stepPipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.stepBindGroupLayout] }),
+            label: "splat step pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "splat step pipeline layout",
+                bindGroupLayouts: [this.stepBindGroupLayout] 
+            }),
             compute: { module: stepModule, entryPoint: "main" },
         });
 
         this.stepBindGroup = device.createBindGroup({
+            label: "splat step bind group",
             layout: this.stepBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.splatBuffer } },
@@ -179,6 +190,7 @@ export class GpuSplatOptimizerManager {
 
         // ADC Pipeline
         const adcBindGroupLayout = device.createBindGroupLayout({
+            label: "splat adc bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
@@ -190,11 +202,16 @@ export class GpuSplatOptimizerManager {
             for (const msg of info.messages) console.warn(`[splat_adc] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
         this.adcPipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [adcBindGroupLayout] }),
+            label: "splat adc pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "splat adc pipeline layout",
+                bindGroupLayouts: [adcBindGroupLayout] 
+            }),
             compute: { module: adcModule, entryPoint: "main" },
         });
 
         this.adcBindGroup = device.createBindGroup({
+            label: "splat adc bind group",
             layout: adcBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.splatBuffer } },
@@ -205,6 +222,7 @@ export class GpuSplatOptimizerManager {
 
         // Edge Detection Pipeline
         this.edgeBindGroupLayout = device.createBindGroupLayout({
+            label: "splat edge bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm" } },
@@ -215,7 +233,11 @@ export class GpuSplatOptimizerManager {
             for (const msg of info.messages) console.warn(`[splat_edge] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
         this.edgePipeline = device.createComputePipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.edgeBindGroupLayout] }),
+            label: "splat edge pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "splat edge pipeline layout",
+                bindGroupLayouts: [this.edgeBindGroupLayout] 
+            }),
             compute: { module: edgeModule, entryPoint: "main" },
         });
 
@@ -225,6 +247,7 @@ export class GpuSplatOptimizerManager {
         });
         
         this.renderBindGroupLayout = device.createBindGroupLayout({
+            label: "splat render bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
                 { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
@@ -240,7 +263,10 @@ export class GpuSplatOptimizerManager {
 
         this.renderPipeline = device.createRenderPipeline({
             label: "splat render pipeline",
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.renderBindGroupLayout] }),
+            layout: device.createPipelineLayout({ 
+                label: "splat render pipeline layout",
+                bindGroupLayouts: [this.renderBindGroupLayout] 
+            }),
             vertex: { module: renderModule, entryPoint: "vert" },
             fragment: { module: renderModule, entryPoint: "frag", targets: [{ format }] },
             primitive: { topology: "triangle-list" },
@@ -273,6 +299,7 @@ export class GpuSplatOptimizerManager {
         this.dims = { width, height };
         
         this.backwardBindGroup = this.device.createBindGroup({
+            label: "splat backward bind group",
             layout: this.backwardBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.splatBuffer } },
@@ -286,6 +313,7 @@ export class GpuSplatOptimizerManager {
 
     setEdgeTarget(depthTextureView: GPUTextureView, edgeTextureView: GPUTextureView) {
         this.edgeBindGroup = this.device.createBindGroup({
+            label: "splat edge bind group",
             layout: this.edgeBindGroupLayout,
             entries: [
                 { binding: 0, resource: depthTextureView },
@@ -305,6 +333,7 @@ export class GpuSplatOptimizerManager {
         ptTextureView: GPUTextureView,
     ) {
         this.renderBindGroup = this.device.createBindGroup({
+            label: "splat render bind group",
             layout: this.renderBindGroupLayout,
             entries: [
                 { binding: 0, resource: targetTextureView },
@@ -331,7 +360,9 @@ export class GpuSplatOptimizerManager {
     dispatch(commandEncoder: GPUCommandEncoder) {
         if (!this.backwardBindGroup) return;
 
-        const pass = commandEncoder.beginComputePass();
+        const pass = commandEncoder.beginComputePass({
+            label: "splat backward and step pass",
+        });
         
         pass.setPipeline(this.backwardPipeline);
         pass.setBindGroup(0, this.backwardBindGroup);
@@ -354,7 +385,9 @@ export class GpuSplatOptimizerManager {
     dispatchEdge(commandEncoder: GPUCommandEncoder, width: number, height: number) {
         if (!this.edgeBindGroup) return;
         
-        const pass = commandEncoder.beginComputePass();
+        const pass = commandEncoder.beginComputePass({
+            label: "splat edge pass",
+        });
         pass.setPipeline(this.edgePipeline);
         pass.setBindGroup(0, this.edgeBindGroup);
         pass.dispatchWorkgroups(Math.ceil(width / 16), Math.ceil(height / 16));

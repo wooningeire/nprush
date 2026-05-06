@@ -45,6 +45,7 @@ export class GpuBezierForwardPipelineManager {
         });
 
         this.bindGroupLayout = device.createBindGroupLayout({
+            label: "bezier forward bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
                 { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
@@ -60,7 +61,11 @@ export class GpuBezierForwardPipelineManager {
         });
 
         this.pipeline = device.createRenderPipeline({
-            layout: device.createPipelineLayout({ bindGroupLayouts: [this.bindGroupLayout] }),
+            label: "bezier forward render pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "bezier forward pipeline layout",
+                bindGroupLayouts: [this.bindGroupLayout] 
+            }),
             vertex: {
                 module,
                 entryPoint: "vs_main",
@@ -108,6 +113,7 @@ export class GpuBezierForwardPipelineManager {
         }
 
         this.bindGroup = this.device.createBindGroup({
+            label: "bezier forward bind group",
             layout: this.bindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },

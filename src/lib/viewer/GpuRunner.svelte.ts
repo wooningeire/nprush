@@ -314,7 +314,7 @@ export class GpuRunner {
         this.optimTextureView = this.optimTexture.createView();
 
         this.optimDepthTexture = this.device.createTexture({
-            label: "optimization depth texture",
+            label: "optimization depth visualization",
             size: [ow, oh],
             format: this.format,
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
@@ -330,7 +330,7 @@ export class GpuRunner {
         this.optimZTextureView = this.optimZTexture.createView();
 
         this.optimEdgeTexture = this.device.createTexture({
-            label: "optimization edge texture",
+            label: "optimization edge map",
             size: [ow, oh],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -378,7 +378,7 @@ export class GpuRunner {
         this.optimBlurredDepthTextureView = this.optimBlurredDepthTexture.createView();
 
         this.optimTempTexture = this.device.createTexture({
-            label: "optimization temp blur target",
+            label: "optimization blur temp",
             size: [ow, oh],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -387,6 +387,7 @@ export class GpuRunner {
 
         if (!this.dummyTexture) {
             this.dummyTexture = this.device.createTexture({
+                label: "dummy 1x1 texture",
                 size: [1, 1],
                 format: "rgba8unorm",
                 usage: GPUTextureUsage.TEXTURE_BINDING,
@@ -461,6 +462,7 @@ export class GpuRunner {
                 this.fullHeight = fullH;
 
                 this.targetTexture = this.device.createTexture({
+                    label: "full-res target texture",
                     size: [fullW, fullH],
                     format: this.format,
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
@@ -468,6 +470,7 @@ export class GpuRunner {
                 this.targetTextureView = this.targetTexture.createView();
 
                 this.targetDepthTexture = this.device.createTexture({
+                    label: "full-res depth visualization",
                     size: [fullW, fullH],
                     format: this.format,
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
@@ -483,6 +486,7 @@ export class GpuRunner {
                 this.targetZTextureView = this.targetZTexture.createView();
 
                 this.fullEdgeTexture = this.device.createTexture({
+                    label: "full-res edge map",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -490,7 +494,7 @@ export class GpuRunner {
                 this.fullEdgeTextureView = this.fullEdgeTexture.createView();
 
                 this.fullSplatTexture = this.device.createTexture({
-                    label: "full splat view",
+                    label: "full-res splat view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
@@ -498,7 +502,7 @@ export class GpuRunner {
                 this.fullSplatTextureView = this.fullSplatTexture.createView();
 
                 this.fullSplatDepthTexture = this.device.createTexture({
-                    label: "full splat depth view",
+                    label: "full-res splat depth",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
@@ -506,7 +510,7 @@ export class GpuRunner {
                 this.fullSplatDepthTextureView = this.fullSplatDepthTexture.createView();
 
                 this.fullBezierTexture = this.device.createTexture({
-                    label: "full bezier view",
+                    label: "full-res bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -514,7 +518,7 @@ export class GpuRunner {
                 this.fullBezierTextureView = this.fullBezierTexture.createView();
 
                 this.fullBaseColorBezierTexture = this.device.createTexture({
-                    label: "full base color bezier view",
+                    label: "full-res base color bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -522,7 +526,7 @@ export class GpuRunner {
                 this.fullBaseColorBezierTextureView = this.fullBaseColorBezierTexture.createView();
 
                 this.fullColorBezierTexture = this.device.createTexture({
-                    label: "full color bezier view",
+                    label: "full-res color bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -530,7 +534,7 @@ export class GpuRunner {
                 this.fullColorBezierTextureView = this.fullColorBezierTexture.createView();
 
                 this.targetBlurredTexture = this.device.createTexture({
-                    label: "full blurred target",
+                    label: "full-res blurred target",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -538,7 +542,7 @@ export class GpuRunner {
                 this.targetBlurredTextureView = this.targetBlurredTexture.createView();
 
                 this.targetTempTexture = this.device.createTexture({
-                    label: "full temp blur target",
+                    label: "full-res blur temp",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -568,7 +572,7 @@ export class GpuRunner {
             }
 
             const commandEncoder = this.device.createCommandEncoder({
-                label: "loop command encoder",
+                label: "runner loop command encoder",
             });
 
             // 1a. Render the model into the full-res target + depth textures (for visualization).
