@@ -57,6 +57,14 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
     
     let clip_center = uniforms.vp * vec4f(pos3, 1.0);
     let w = clip_center.w;
+    
+    // Collapse quad for splats behind the camera or too close to near plane
+    if (w < 0.1) {
+        var o_clip: VsOut;
+        o_clip.pos = vec4f(0.0, 0.0, 2.0, 1.0); // Clip it
+        return o_clip;
+    }
+    
     let clip_xy = vec2f(clip_center.x, clip_center.y);
     let aspect = uniforms.dims.x / uniforms.dims.y;
     
