@@ -39,7 +39,7 @@ fn main() {
         adc.grad_accum[i] = 0.0;
 
         if (grad_accum > TAU_POS) {
-            let scale_norm = length(vec2f(s.pos_sx.w, s.sy_shape.x));
+            let scale_norm = length(vec3f(s.pos_sx.w, s.sy_shape.x, s.sy_shape.w));
 
             var found_dead = false;
             var new_idx = 0u;
@@ -60,8 +60,10 @@ fn main() {
                     let split_factor = 0.625;
                     s.pos_sx.w *= split_factor;
                     s.sy_shape.x *= split_factor;
+                    s.sy_shape.w *= split_factor;
                     new_s.pos_sx.w *= split_factor;
                     new_s.sy_shape.x *= split_factor;
+                    new_s.sy_shape.w *= split_factor;
                     s.pos_sx.x -= s.pos_sx.w * 0.05;
                     new_s.pos_sx.x += s.pos_sx.w * 0.05;
                 } else {
@@ -73,11 +75,11 @@ fn main() {
                 splats.splats[i] = s;
                 splats.splats[new_idx] = new_s;
 
-                for (var p = 0u; p < 15u; p++) {
-                    adam.m[i * 15u + p] = 0.0;
-                    adam.v[i * 15u + p] = 0.0;
-                    adam.m[new_idx * 15u + p] = 0.0;
-                    adam.v[new_idx * 15u + p] = 0.0;
+                for (var p = 0u; p < 16u; p++) {
+                    adam.m[i * 16u + p] = 0.0;
+                    adam.v[i * 16u + p] = 0.0;
+                    adam.m[new_idx * 16u + p] = 0.0;
+                    adam.v[new_idx * 16u + p] = 0.0;
                 }
             }
         }

@@ -78,10 +78,12 @@ struct ProjectedSplat {
     screen: vec2f,
     sp: vec2f,
     r: f32,
-    m00: f32, m01: f32, m10: f32, m11: f32,
-    inv_det: f32,
+    m0x: f32, m0y: f32,
+    m1x: f32, m1y: f32,
+    m2x: f32, m2y: f32,
     ax_screen: vec2f,
     ay_screen: vec2f,
+    az_screen: vec2f,
     d: vec2f,
     w: f32,
     clip_xy: vec2f,
@@ -97,19 +99,37 @@ fn eval_splat(s: Splat, p: vec2f, aspect: f32) -> ProjectedSplat {
     let q = s.quat;
     let sx = max(s.pos_sx.w, 0.0001);
     let sy = max(s.sy_shape.x, 0.0001);
+    let sz = max(s.sy_shape.w, 0.0001);
     let ax_w = quat_rotate(q, vec3f(1.0, 0.0, 0.0));
     let ay_w = quat_rotate(q, vec3f(0.0, 1.0, 0.0));
+    let az_w = quat_rotate(q, vec3f(0.0, 0.0, 1.0));
     ps.ax_screen = project_axis(splat_uniforms.vp, ax_w, ps.clip_xy, ps.w, aspect);
     ps.ay_screen = project_axis(splat_uniforms.vp, ay_w, ps.clip_xy, ps.w, aspect);
-    ps.m00 = ps.ax_screen.x * sx; ps.m10 = ps.ax_screen.y * sx;
-    ps.m01 = ps.ay_screen.x * sy; ps.m11 = ps.ay_screen.y * sy;
-    let det = ps.m00 * ps.m11 - ps.m01 * ps.m10;
-    ps.inv_det = select(1.0 / det, 0.0, abs(det) < 1e-10);
+    ps.az_screen = project_axis(splat_uniforms.vp, az_w, ps.clip_xy, ps.w, aspect);
+    ps.m0x = ps.ax_screen.x * sx; ps.m0y = ps.ax_screen.y * sx;
+    ps.m1x = ps.ay_screen.x * sy; ps.m1y = ps.ay_screen.y * sy;
+    ps.m2x = ps.az_screen.x * sz; ps.m2y = ps.az_screen.y * sz;
+    var cov00 = ps.m0x*ps.m0x + ps.m1x*ps.m1x + ps.m2x*ps.m2x;
+    var cov01 = ps.m0x*ps.m0y + ps.m1x*ps.m1y + ps.m2x*ps.m2y;
+    var cov11 = ps.m0y*ps.m0y + ps.m1y*ps.m1y + ps.m2y*ps.m2y;
+    
+    // Low-pass filter (0.3px) to prevent aliasing
+    let filter_std = 0.3 * (2.0 / f32(textureDimensions(targetTex).y));
+    let filter2 = filter_std * filter_std;
+    cov00 += filter2;
+    cov11 += filter2;
+    
+    let det = cov00 * cov11 - cov01 * cov01;
+    let inv_det = select(1.0 / det, 0.0, abs(det) < 1e-10);
+    let A = cov11 * inv_det;
+    let B = -cov01 * inv_det;
+    let C = cov00 * inv_det;
     ps.sp = vec2f(
-        ( ps.m11 * ps.d.x - ps.m01 * ps.d.y) * ps.inv_det,
-        (-ps.m10 * ps.d.x + ps.m00 * ps.d.y) * ps.inv_det
+        A * ps.d.x + B * ps.d.y,
+        B * ps.d.x + C * ps.d.y
     );
-    ps.r = max(length(ps.sp), 0.0001);
+    let r2 = ps.d.x * ps.sp.x + ps.d.y * ps.sp.y;
+    ps.r = sqrt(max(r2, 0.0001));
     return ps;
 }
 
@@ -139,17 +159,32 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         if (proj.z < 0.0) { continue; }
         let sx = max(s.pos_sx.w, 0.0001);
         let sy = max(s.sy_shape.x, 0.0001);
+        let sz = max(s.sy_shape.w, 0.0001);
         let safe_sb = max(s.sy_shape.z, 0.0001);
         let R = pow(15.0 / safe_sb, 1.0 / s.sy_shape.y);
         let q = s.quat;
         let ax_w = quat_rotate(q, vec3f(1.0, 0.0, 0.0));
         let ay_w = quat_rotate(q, vec3f(0.0, 1.0, 0.0));
+        let az_w = quat_rotate(q, vec3f(0.0, 0.0, 1.0));
         let clip = splat_uniforms.vp * vec4f(s.pos_sx.xyz, 1.0);
         let w = clip.w;
         let clip_xy = vec2f(clip.x, clip.y);
         let ax_s = project_axis(splat_uniforms.vp, ax_w, clip_xy, w, aspect);
         let ay_s = project_axis(splat_uniforms.vp, ay_w, clip_xy, w, aspect);
-        let max_r = R * max(length(ax_s) * sx, length(ay_s) * sy);
+        let az_s = project_axis(splat_uniforms.vp, az_w, clip_xy, w, aspect);
+        
+        let m0x = ax_s.x * sx; let m0y = ax_s.y * sx;
+        let m1x = ay_s.x * sy; let m1y = ay_s.y * sy;
+        let m2x = az_s.x * sz; let m2y = az_s.y * sz;
+        var cov00 = m0x*m0x + m1x*m1x + m2x*m2x;
+        var cov11 = m0y*m0y + m1y*m1y + m2y*m2y;
+        
+        let filter_std = 0.3 * (2.0 / f32(dims.y));
+        let filter2 = filter_std * filter_std;
+        cov00 += filter2;
+        cov11 += filter2;
+        
+        let max_r = R * sqrt(max(max(cov00, cov11), 1e-9));
         let sc = proj.xy;
         let smin = sc - vec2f(max_r);
         let smax = sc + vec2f(max_r);
@@ -245,6 +280,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let d_depth = dD * T_prev * a;
         let sx = max(s.pos_sx.w, 0.0001);
         let sy = max(s.sy_shape.x, 0.0001);
+        let sz = max(s.sy_shape.w, 0.0001);
         let shape_a = s.sy_shape.y;
         let shape_b = s.sy_shape.z;
         let power = -shape_b * pow(ps.r, shape_a);
@@ -253,10 +289,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         var d_screen = vec2f(0.0);
         var d_sx = 0.0;
         var d_sy = 0.0;
+        var d_sz = 0.0;
         var d_shape_a = 0.0;
         var d_shape_b = 0.0;
         var d_ax_screen = vec2f(0.0);
         var d_ay_screen = vec2f(0.0);
+        var d_az_screen = vec2f(0.0);
 
         let above_floor = power > -15.0;
         let a_un = select(0.0, exp(power), above_floor);
@@ -267,50 +305,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         d_shape_a = select(0.0, d_power * (-shape_b * r_pow_a * log(ps.r)), above_floor);
         d_shape_b = select(0.0, d_power * (-r_pow_a), above_floor);
         let d_sp_raw = d_power * (-shape_b * shape_a * r_pow_a_m2) * ps.sp;
-        let d_sp = select(vec2f(0.0), d_sp_raw, above_floor);
-
-        // d_sp -> d_d via M_inv^T
-        let d_d = vec2f(
-            d_sp.x * ps.m11 * ps.inv_det + d_sp.y * (-ps.m10) * ps.inv_det,
-            d_sp.x * (-ps.m01) * ps.inv_det + d_sp.y * ps.m00 * ps.inv_det
-        );
+        let d_d = select(vec2f(0.0), d_sp_raw, above_floor);
         d_screen = -d_d;
 
-        // d_sp -> d_M_scaled columns via inverse derivative
-        // sp = M_inv * d, so d_M_ij = -(M_inv^T * d_sp)_i * (M_inv * d)_... 
-        // Actually: d(M_inv)/d(M_kl) = -M_inv[:,k] * M_inv[l,:] 
-        // d_loss/d_M_kl = -sum_ij d_sp_i * M_inv_ik * sp_j  where j indexes d
-        // Wait: sp = M_inv * d. d_loss/d_M_inv_ij = d_sp_i * d_j
-        // d_loss/d_M_kl = -sum_ij (M_inv^T)_ki * d_sp_i * d_j * (M_inv^T)_lj
-        // = -(M_inv^T * d_sp)_k * (M_inv^T * d)_l... no
-        // sp = M_inv * d. Let me use: d_M = -M_inv^T * outer(d_sp, d) * M_inv^T... 
-        // Actually simpler: sp_i = sum_j (M_inv)_ij * d_j
-        // d_loss/d_M_kl = sum_i d_sp_i * d(M_inv_ij)/d(M_kl) * d_j
-        // d(M_inv)/d(M_kl) => (M * M_inv = I) => dM * M_inv + M * dM_inv = 0
-        //   dM_inv = -M_inv * dM * M_inv
-        // d(M_inv)_ij / d(M_kl) = -sum_m (M_inv)_im * delta_mk * (M_inv)_lj
-        //                        = -(M_inv)_ik * (M_inv)_lj
-        // So: d_loss/d_M_kl = -sum_ij d_sp_i * (M_inv)_ik * (M_inv)_lj * d_j
-        //                   = -(M_inv^T * d_sp)_k * (M_inv^T * d)_l... 
-        // Wait: sum_i (M_inv)_ik * d_sp_i = (M_inv^T * d_sp)_k, and
-        //        sum_j (M_inv)_lj * d_j = sp_l (since sp = M_inv * d)
-        // Hmm no: sum_j (M_inv)_lj * d_j = (M_inv * d)_l = sp_l
-        // So d_loss/d_M_kl = -(M_inv^T * d_sp)_k * sp_l
-        let minvT_dsp = vec2f(
-            d_sp.x * ps.m11 * ps.inv_det + d_sp.y * (-ps.m10) * ps.inv_det,
-            d_sp.x * (-ps.m01) * ps.inv_det + d_sp.y * ps.m00 * ps.inv_det
-        );
-        // d_M = -outer(minvT_dsp, sp)
-        // M = [[m00, m01], [m10, m11]] = [[ax_screen.x*sx, ay_screen.x*sy], [ax_screen.y*sx, ay_screen.y*sy]]
-        let d_m00 = -minvT_dsp.x * ps.sp.x;
-        let d_m01 = -minvT_dsp.x * ps.sp.y;
-        let d_m10 = -minvT_dsp.y * ps.sp.x;
-        let d_m11 = -minvT_dsp.y * ps.sp.y;
-        // m00 = ax_screen.x * sx => d_ax_screen.x += d_m00 * sx, d_sx += d_m00 * ax_screen.x
-        d_ax_screen = vec2f(d_m00 * sx, d_m10 * sx);
-        d_ay_screen = vec2f(d_m01 * sy, d_m11 * sy);
-        d_sx = d_m00 * ps.ax_screen.x + d_m10 * ps.ax_screen.y;
-        d_sy = d_m01 * ps.ay_screen.x + d_m11 * ps.ay_screen.y;
+        let sp_dot_m0 = ps.sp.x * ps.m0x + ps.sp.y * ps.m0y;
+        let sp_dot_m1 = ps.sp.x * ps.m1x + ps.sp.y * ps.m1y;
+        let sp_dot_m2 = ps.sp.x * ps.m2x + ps.sp.y * ps.m2y;
+        
+        let d_m0 = -sp_dot_m0 * d_d;
+        let d_m1 = -sp_dot_m1 * d_d;
+        let d_m2 = -sp_dot_m2 * d_d;
+        
+        d_ax_screen = vec2f(d_m0.x * sx, d_m0.y * sx);
+        d_ay_screen = vec2f(d_m1.x * sy, d_m1.y * sy);
+        d_az_screen = vec2f(d_m2.x * sz, d_m2.y * sz);
+        
+        d_sx = dot(d_m0, ps.ax_screen);
+        d_sy = dot(d_m1, ps.ay_screen);
+        d_sz = dot(d_m2, ps.az_screen);
 
         // Project d_screen back to d_pos (3D)
         // screen = (clip.x/w * aspect, clip.y/w) where clip = VP * (pos,1), w = clip.w
@@ -358,6 +370,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         // d_ax_world_j = d_ax_screen.x * aspect*(VP[j][0]*w - clip.x*VP[j][3])/(w*w) + d_ax_screen.y * (VP[j][1]*w - clip.y*VP[j][3])/(w*w)
         var d_ax_world = vec3f(0.0);
         var d_ay_world = vec3f(0.0);
+        var d_az_world = vec3f(0.0);
         for (var ax2 = 0u; ax2 < 3u; ax2++) {
             let vp_0j2 = splat_uniforms.vp[ax2][0];
             let vp_1j2 = splat_uniforms.vp[ax2][1];
@@ -366,6 +379,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             let j1 = (vp_1j2 * w - ps.clip_xy.y * vp_3j2) / w2;
             d_ax_world[ax2] = d_ax_screen.x * j0 + d_ax_screen.y * j1;
             d_ay_world[ax2] = d_ay_screen.x * j0 + d_ay_screen.y * j1;
+            d_az_world[ax2] = d_az_screen.x * j0 + d_az_screen.y * j1;
         }
 
         // d_quat from d_ax_world and d_ay_world
@@ -395,17 +409,21 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         // d_qw from ay: d_ay_world.x * (-2*qz) + d_ay_world.z * 2*qx2
         let d_qw_ax = d_ax_world.y * 2.0*qz - d_ax_world.z * 2.0*qy;
         let d_qw_ay = -d_ay_world.x * 2.0*qz + d_ay_world.z * 2.0*qx2;
+        let d_qw_az = d_az_world.x * 2.0*qy - d_az_world.y * 2.0*qx2;
         let d_qx_ax = d_ax_world.y * 2.0*qy + d_ax_world.z * 2.0*qz;
         let d_qx_ay = d_ay_world.x * 2.0*qy - d_ay_world.y * 4.0*qx2 + d_ay_world.z * 2.0*qw;
+        let d_qx_az = d_az_world.x * 2.0*qz - d_az_world.y * 2.0*qw - d_az_world.z * 4.0*qx2;
         let d_qy_ax = -d_ax_world.x * 4.0*qy + d_ax_world.y * 2.0*qx2 + d_ax_world.z * (-2.0*qw);
         let d_qy_ay = d_ay_world.x * 2.0*qx2 + d_ay_world.z * 2.0*qz;
+        let d_qy_az = d_az_world.x * 2.0*qw + d_az_world.y * 2.0*qz - d_az_world.z * 4.0*qy;
         let d_qz_ax = -d_ax_world.x * 4.0*qz + d_ax_world.y * 2.0*qw + d_ax_world.z * 2.0*qx2;
         let d_qz_ay = -d_ay_world.x * 2.0*qw - d_ay_world.y * 4.0*qz + d_ay_world.z * 2.0*qy;
+        let d_qz_az = d_az_world.x * 2.0*qx2 + d_az_world.y * 2.0*qy;
 
-        let d_qw_total = d_qw_ax + d_qw_ay;
-        let d_qx_total = d_qx_ax + d_qx_ay;
-        let d_qy_total = d_qy_ax + d_qy_ay;
-        let d_qz_total = d_qz_ax + d_qz_ay;
+        let d_qw_total = d_qw_ax + d_qw_ay + d_qw_az;
+        let d_qx_total = d_qx_ax + d_qx_ay + d_qx_az;
+        let d_qy_total = d_qy_ax + d_qy_ay + d_qy_az;
+        let d_qz_total = d_qz_ax + d_qz_ay + d_qz_az;
 
         // Shape regularization: push toward flat-topped profile (gouache-like)
         // shape_a=6 → flat plateau, shape_b=0.3 → wide coverage before falloff
@@ -418,7 +436,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let FP_SCALE_POS = 10000.0;
         let FP_SCALE_COL = 100000.0;
 
-        let base_idx = i * 15u;
+        let base_idx = i * 16u;
         atomicAdd(&grads.data[base_idx + 0u], i32(d_pos.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 1u], i32(d_pos.y * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 2u], i32(d_pos.z * FP_SCALE_POS));
@@ -434,5 +452,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         atomicAdd(&grads.data[base_idx + 12u], i32(d_sy * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 13u], i32(d_shape_a * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 14u], i32(d_shape_b * FP_SCALE_POS));
+        atomicAdd(&grads.data[base_idx + 15u], i32(d_sz * FP_SCALE_POS));
     }
 }

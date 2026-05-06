@@ -52,7 +52,7 @@ export class GpuSplatOptimizerManager {
     }) {
         this.device = device;
         this.numSplats = numSplats;
-        this.numParams = numSplats * 15;
+        this.numParams = numSplats * 16;
         
         // Init Buffers — 4 × vec4f = 16 floats per splat
         const splatData = new Float32Array(this.numSplats * 16);
@@ -81,7 +81,7 @@ export class GpuSplatOptimizerManager {
             splatData[o + 12] = 0.1 + Math.random() * 0.15; // sy
             splatData[o + 13] = 2.0;  // shape_a
             splatData[o + 14] = 0.5;  // shape_b
-            splatData[o + 15] = 0.0;  // pad
+            splatData[o + 15] = 0.1 + Math.random() * 0.15; // sz
         }
 
         this.splatBuffer = device.createBuffer({
