@@ -11,19 +11,21 @@ import { GpuEnvmapPipelineManager } from "$/gpu/GpuEnvmapPipelineManager";
 import { GpuPathTracePipelineManager } from "$/gpu/GpuPathTracePipelineManager";
 import type { MeshData } from "$/gpu/loadGlb";
 import { STRIP_HEIGHT_FRAC } from "$/util";
+import type { ViewerState } from "./ViewerState.svelte.ts";
+import { GPU_CONSTANTS } from "$/gpu/constants";
 
-const OPTIM_SHORT = 256;
+const OPTIM_SHORT = GPU_CONSTANTS.OPTIM_SHORT;
 
 // The edge layer is now cubic bezier curves. A handful is enough since each
 // curve is a 1D primitive that natively traces a contour.
-const NUM_EDGE_LAYER_BEZIERS = 4096;
+const NUM_EDGE_LAYER_BEZIERS = GPU_CONSTANTS.NUM_EDGE_LAYER_BEZIERS;
 
 export class GpuRunner {
     private readonly device: GPUDevice;
     private readonly context: GPUCanvasContext;
     private readonly format: GPUTextureFormat;
     private readonly camera: Camera;
-    private readonly viewerState: any; // Using any to avoid circular dependency if needed, but ViewerState should be fine
+    private readonly viewerState: ViewerState;
 
     readonly uniformsManager: GpuUniformsBufferManager;
     readonly meshRenderPipelineManager: GpuMeshRenderPipelineManager;
@@ -123,7 +125,7 @@ export class GpuRunner {
         brushTexture,
         groundAlbedoTexture,
         groundNormalTexture,
-        numSplats = 512,
+        numSplats = GPU_CONSTANTS.NUM_GAUSSIAN_SPLATS,
     }: {
         device: GPUDevice,
         context: GPUCanvasContext,

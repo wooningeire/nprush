@@ -40,6 +40,11 @@ export const GPU_CONSTANTS = {
     SPLAT_EDGE_THRESHOLD_MIN: 0.02,
     SPLAT_EDGE_THRESHOLD_MAX: 0.06,
     
+    // Runner / Optimization config
+    OPTIM_SHORT: 256,
+    NUM_GAUSSIAN_SPLATS: 128,
+    NUM_EDGE_LAYER_BEZIERS: 2048,
+    
     // Mesh Splatting
     MESH_SPLAT_MAX_COUNT: 4096,
     

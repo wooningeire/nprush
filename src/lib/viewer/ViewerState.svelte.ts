@@ -3,6 +3,7 @@ import { Camera } from "./Camera.svelte.ts";
 import { CameraOrbit } from "./CameraOrbit.svelte.ts";
 import { requestGpu } from "$/gpu/requestGpu";
 import { GpuRunner } from "./GpuRunner.svelte.ts";
+import { GPU_CONSTANTS } from "$/gpu/constants";
 import { loadGlb } from "$/gpu/loadGlb";
 import artelorianUrl from "$/assets/artelorian.glb?url";
 import groundUrl from "$/assets/ground.glb?url";
@@ -82,7 +83,7 @@ export class ViewerState {
 
     static mount({
         canvasPromise,
-        numSplats = 512,
+        numSplats = GPU_CONSTANTS.NUM_GAUSSIAN_SPLATS,
     }: {
         canvasPromise: Promise<HTMLCanvasElement>,
         numSplats?: number,
