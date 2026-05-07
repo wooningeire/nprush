@@ -61,6 +61,9 @@ fn frag(in: VsOut) -> EnvmapOut {
     var out: EnvmapOut;
     out.color = vec4f(reinhard(color * 4.0), 1.0);
     out.depth = vec4f(1.0, 1.0, 1.0, 1.0); // max depth for background
-    out.normal = vec4f(0.5, 0.5, 0.5, 1.0); // neutral normal for background
+    
+    // Output view-space normals for the background to keep the normal-aware blur happy.
+    let vn = normalize((uniforms.viewMat * vec4f(dir, 0.0)).xyz);
+    out.normal = vec4f(vn * 0.5 + 0.5, 1.0);
     return out;
 }
