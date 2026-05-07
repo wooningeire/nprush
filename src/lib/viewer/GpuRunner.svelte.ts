@@ -308,6 +308,74 @@ export class GpuRunner {
         });
     }
 
+    /**
+     * Captures a single clean composited frame (splats + bezier layers, no debug UI)
+     * at the current camera angle.  The returned ImageData has dimensions
+     * [fullW × fullH] matching the right-half panel.
+     *
+     * The promise resolves on the next rAF tick after the GPU readback completes.
+     */
+    captureTurntableFrame(): Promise<ImageData> {
+        return new Promise((resolve, reject) => {
+            this.turntableFrameRequest = { resolve, reject };
+        });
+    }
+
+    private turntableFrameRequest: {
+        resolve: (img: ImageData) => void;
+        reject: (err: Error) => void;
+    } | null = null;
+
+    private async readTextureToImageData(
+        texture: GPUTexture,
+        width: number,
+        height: number,
+    ): Promise<ImageData> {
+        const bytesPerPixel = 4;
+        const unpaddedBytesPerRow = width * bytesPerPixel;
+        const paddedBytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+
+        const buffer = this.device.createBuffer({
+            label: "texture readback buffer",
+            size: paddedBytesPerRow * height,
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+        });
+
+        const enc = this.device.createCommandEncoder({ label: "texture readback encoder" });
+        enc.copyTextureToBuffer(
+            { texture },
+            { buffer, bytesPerRow: paddedBytesPerRow },
+            [width, height],
+        );
+        this.device.queue.submit([enc.finish()]);
+
+        await buffer.mapAsync(GPUMapMode.READ);
+        const raw = new Uint8Array(buffer.getMappedRange().slice(0));
+        buffer.unmap();
+        buffer.destroy();
+
+        const imageData = new ImageData(width, height);
+        const isBgra = texture.format === "bgra8unorm";
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const src = y * paddedBytesPerRow + x * bytesPerPixel;
+                const dst = (y * width + x) * 4;
+                if (isBgra) {
+                    imageData.data[dst + 0] = raw[src + 2];
+                    imageData.data[dst + 1] = raw[src + 1];
+                    imageData.data[dst + 2] = raw[src + 0];
+                    imageData.data[dst + 3] = raw[src + 3];
+                } else {
+                    imageData.data[dst + 0] = raw[src + 0];
+                    imageData.data[dst + 1] = raw[src + 1];
+                    imageData.data[dst + 2] = raw[src + 2];
+                    imageData.data[dst + 3] = raw[src + 3];
+                }
+            }
+        }
+        return imageData;
+    }
+
     private rebuildOptimTextures(panelAspect: number) {
         // Size optim textures to match the visible panel aspect ratio so the model
         // rendered into them has matching pixel proportions for the gradient pass.
@@ -542,7 +610,7 @@ export class GpuRunner {
                     label: "full-res splat view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
                 });
                 this.fullSplatTextureView = this.fullSplatTexture.createView();
 
@@ -558,7 +626,7 @@ export class GpuRunner {
                     label: "full-res bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
                 });
                 this.fullBezierTextureView = this.fullBezierTexture.createView();
 
@@ -566,7 +634,7 @@ export class GpuRunner {
                     label: "full-res base color bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
                 });
                 this.fullBaseColorBezierTextureView = this.fullBaseColorBezierTexture.createView();
 
@@ -574,7 +642,7 @@ export class GpuRunner {
                     label: "full-res color bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
                 });
                 this.fullColorBezierTextureView = this.fullColorBezierTexture.createView();
 
@@ -927,6 +995,76 @@ export class GpuRunner {
                         else reject(new Error("Failed to create blob"));
                     }, "image/png");
                 }).catch(reject);
+            }
+
+            // Turntable frame capture — read back composited layers
+            if (this.turntableFrameRequest) {
+                const { resolve, reject } = this.turntableFrameRequest;
+                this.turntableFrameRequest = null;
+
+                (async () => {
+                    try {
+                        const w = this.fullWidth;
+                        const h = this.fullHeight;
+                        if (!w || !h || !this.fullSplatTexture) {
+                            reject(new Error("Textures not ready"));
+                            return;
+                        }
+
+                        // Read back the layers we need
+                        const splat = await this.readTextureToImageData(this.fullSplatTexture!, w, h);
+                        const baseColorBezier = this.viewerState.baseColorBeziersEnabled && this.fullBaseColorBezierTexture
+                            ? await this.readTextureToImageData(this.fullBaseColorBezierTexture, w, h)
+                            : null;
+                        const colorBezier = this.viewerState.colorBeziersEnabled && this.fullColorBezierTexture
+                            ? await this.readTextureToImageData(this.fullColorBezierTexture, w, h)
+                            : null;
+                        const edgeBezier = this.viewerState.edgeBeziersEnabled && this.fullBezierTexture
+                            ? await this.readTextureToImageData(this.fullBezierTexture, w, h)
+                            : null;
+
+                        // Composite: same logic as splat_render.wgsl right-half
+                        const result = new ImageData(w, h);
+                        for (let i = 0; i < w * h; i++) {
+                            const o = i * 4;
+                            let r = splat.data[o] / 255;
+                            let g = splat.data[o + 1] / 255;
+                            let b = splat.data[o + 2] / 255;
+
+                            // Base color bezier: premultiplied alpha over
+                            if (baseColorBezier) {
+                                const ba = baseColorBezier.data[o + 3] / 255;
+                                r = r * (1 - ba) + baseColorBezier.data[o] / 255;
+                                g = g * (1 - ba) + baseColorBezier.data[o + 1] / 255;
+                                b = b * (1 - ba) + baseColorBezier.data[o + 2] / 255;
+                            }
+
+                            // Color bezier: premultiplied alpha over
+                            if (colorBezier) {
+                                const ca = colorBezier.data[o + 3] / 255;
+                                r = r * (1 - ca) + colorBezier.data[o] / 255;
+                                g = g * (1 - ca) + colorBezier.data[o + 1] / 255;
+                                b = b * (1 - ca) + colorBezier.data[o + 2] / 255;
+                            }
+
+                            // Edge bezier: grayscale mix toward white
+                            if (edgeBezier) {
+                                const e = Math.min(1, edgeBezier.data[o] / 255);
+                                r = r + (1 - r) * e;
+                                g = g + (1 - g) * e;
+                                b = b + (1 - b) * e;
+                            }
+
+                            result.data[o] = Math.min(255, Math.round(r * 255));
+                            result.data[o + 1] = Math.min(255, Math.round(g * 255));
+                            result.data[o + 2] = Math.min(255, Math.round(b * 255));
+                            result.data[o + 3] = 255;
+                        }
+                        resolve(result);
+                    } catch (e) {
+                        reject(e as Error);
+                    }
+                })();
             }
 
             handle = requestAnimationFrame(loop);

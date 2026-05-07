@@ -60,14 +60,66 @@ const {
         </div>
     {/if}
 
+    <div class="separator"></div>
 
-    <button 
-        class="render-btn" 
+    <button
+        class="render-btn"
         onclick={() => viewerState.takeScreenshot()}
-        disabled={viewerState.isCapturing}
+        disabled={viewerState.isCapturing || viewerState.isTurntableRendering}
     >
-        Render to File
+        {#if viewerState.isCapturing}
+            <div class="spinner"></div>
+            Rendering…
+        {:else}
+            📷 Render to File
+        {/if}
     </button>
+
+    <div class="separator"></div>
+
+    <div class="turntable-section">
+        <div class="section-title">Turntable Animation</div>
+
+        <div class="slider-group">
+            <label>
+                Frames: {viewerState.turntableFrameCount}
+                <input type="range" min="12" max="360" step="12" bind:value={viewerState.turntableFrameCount}
+                    disabled={viewerState.isTurntableRendering} />
+            </label>
+        </div>
+
+        <div class="slider-group">
+            <label>
+                Steps/frame: {viewerState.turntableStepsPerFrame}
+                <input type="range" min="1" max="200" step="1" bind:value={viewerState.turntableStepsPerFrame}
+                    disabled={viewerState.isTurntableRendering} />
+            </label>
+        </div>
+
+        {#if viewerState.isTurntableRendering}
+            <div class="progress-container">
+                <div class="progress-bar" style:width="{viewerState.turntableProgress * 100}%"></div>
+            </div>
+            <div class="progress-label">
+                {Math.round(viewerState.turntableProgress * 100)}%
+                — Frame {Math.round(viewerState.turntableProgress * viewerState.turntableFrameCount)}/{viewerState.turntableFrameCount}
+            </div>
+            <button
+                class="render-btn cancel"
+                onclick={() => viewerState.cancelTurntable()}
+            >
+                ✕ Cancel
+            </button>
+        {:else}
+            <button
+                class="render-btn turntable"
+                onclick={() => viewerState.renderTurntable()}
+                disabled={viewerState.isCapturing}
+            >
+                🎬 Render Turntable
+            </button>
+        {/if}
+    </div>
 </div>
 
 <style lang="scss">
@@ -101,6 +153,130 @@ const {
 
         input {
             cursor: pointer;
+        }
+
+        .separator {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.15);
+            margin: 0.5rem 0;
+        }
+
+        .render-btn {
+            margin-top: 0.25rem;
+            width: 100%;
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+            color: white;
+            border: none;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            box-shadow: 0 3px 10px rgba(99, 102, 241, 0.3);
+
+            &:hover:not(:disabled) {
+                transform: translateY(-1px);
+                box-shadow: 0 5px 14px rgba(99, 102, 241, 0.4);
+                filter: brightness(1.1);
+            }
+
+            &:active:not(:disabled) {
+                transform: translateY(0);
+            }
+
+            &:disabled {
+                background: #444;
+                box-shadow: none;
+                cursor: not-allowed;
+                opacity: 0.7;
+            }
+
+            &.turntable {
+                background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+                box-shadow: 0 3px 10px rgba(16, 185, 129, 0.3);
+
+                &:hover:not(:disabled) {
+                    box-shadow: 0 5px 14px rgba(16, 185, 129, 0.4);
+                }
+            }
+
+            &.cancel {
+                background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
+                box-shadow: 0 3px 10px rgba(239, 68, 68, 0.3);
+
+                &:hover:not(:disabled) {
+                    box-shadow: 0 5px 14px rgba(239, 68, 68, 0.4);
+                }
+            }
+        }
+
+        .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .turntable-section {
+            .section-title {
+                font-size: 0.75rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.06em;
+                color: rgba(255, 255, 255, 0.5);
+                margin-bottom: 0.35rem;
+            }
+        }
+
+        .slider-group {
+            margin-bottom: 0.25rem;
+
+            label {
+                font-size: 0.8rem;
+                color: rgba(255, 255, 255, 0.7);
+                display: flex;
+                flex-direction: column;
+                gap: 0.15rem;
+            }
+
+            input[type="range"] {
+                width: 100%;
+                accent-color: #a855f7;
+            }
+        }
+
+        .progress-container {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 0.4rem 0;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #10b981, #34d399);
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+
+        .progress-label {
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.6);
+            text-align: center;
+            margin-bottom: 0.25rem;
         }
     }
 </style>

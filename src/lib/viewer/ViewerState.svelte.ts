@@ -100,6 +100,147 @@ export class ViewerState {
         }
     }
 
+    // --- Turntable Animation ---
+    turntableFrameCount = $state(120);
+    turntableStepsPerFrame = $state(50);
+    turntableProgress = $state(0);
+    isTurntableRendering = $state(false);
+    turntableCanceled = false;
+
+    cancelTurntable() {
+        this.turntableCanceled = true;
+    }
+
+    /**
+     * Render a turntable animation:
+     * 1. Save current camera state
+     * 2. For each frame, set camera longitude, run N training steps, capture composited frame
+     * 3. Encode all frames into a WebM video via MediaRecorder
+     * 4. Download the video
+     * 5. Restore camera state
+     */
+    async renderTurntable() {
+        if (!this.runner || this.isTurntableRendering) return;
+
+        this.isTurntableRendering = true;
+        this.turntableCanceled = false;
+        this.turntableProgress = 0;
+
+        // Save original camera state
+        const origLong = this.orbit.long;
+        const origLat = this.orbit.lat;
+        const origRadius = this.orbit.radius;
+
+        const totalFrames = this.turntableFrameCount;
+        const stepsPerFrame = this.turntableStepsPerFrame;
+
+        // We'll collect frames first, then encode
+        const frames: ImageData[] = [];
+
+        try {
+            for (let frame = 0; frame < totalFrames; frame++) {
+                if (this.turntableCanceled) break;
+
+                // Set camera to the turntable angle for this frame
+                const t = frame / totalFrames;
+                this.orbit.long = origLong + t * Math.PI * 2;
+
+                // Run N training steps at this camera angle by waiting for rAF ticks.
+                // Each rAF tick runs one optimization step in the loop.
+                for (let step = 0; step < stepsPerFrame; step++) {
+                    if (this.turntableCanceled) break;
+                    await new Promise<void>(r => requestAnimationFrame(() => r()));
+                }
+
+                if (this.turntableCanceled) break;
+
+                // Capture the composited frame
+                const imageData = await this.runner.captureTurntableFrame();
+                frames.push(imageData);
+                this.turntableProgress = (frame + 1) / totalFrames;
+            }
+
+            if (!this.turntableCanceled && frames.length > 0) {
+                // Encode frames into a WebM video using canvas + MediaRecorder
+                await this.encodeFramesToVideo(frames);
+            }
+        } catch (e) {
+            console.error("Turntable render failed", e);
+        } finally {
+            // Restore camera
+            this.orbit.long = origLong;
+            this.orbit.lat = origLat;
+            this.orbit.radius = origRadius;
+            this.isTurntableRendering = false;
+            this.turntableProgress = 0;
+        }
+    }
+
+    private async encodeFramesToVideo(frames: ImageData[]) {
+        if (frames.length === 0) return;
+
+        const w = frames[0].width;
+        const h = frames[0].height;
+        const fps = 30;
+        const frameDuration = 1000 / fps;
+
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d")!;
+
+        const stream = canvas.captureStream(fps); 
+        
+        const mimeType = [
+            "video/webm;codecs=vp9",
+            "video/webm;codecs=vp8",
+            "video/webm",
+            "video/mp4",
+        ].find(t => MediaRecorder.isTypeSupported(t)) || "video/webm";
+
+        const recorder = new MediaRecorder(stream, {
+            mimeType,
+            videoBitsPerSecond: 8_000_000,
+        });
+
+        const chunks: Blob[] = [];
+        recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) chunks.push(e.data);
+        };
+
+        const done = new Promise<void>((resolve, reject) => {
+            recorder.onstop = () => resolve();
+            recorder.onerror = (e) => reject(e);
+        });
+
+        recorder.start();
+        
+        // Let the recorder "warm up"
+        await new Promise(r => setTimeout(r, 100));
+
+        for (const frame of frames) {
+            ctx.putImageData(frame, 0, 0);
+            // With fixed FPS captureStream, the recorder pulls from the canvas automatically.
+            // We just need to wait long enough for it to see the frame.
+            await new Promise(r => setTimeout(r, frameDuration));
+        }
+
+        // Small trailing buffer
+        await new Promise(r => setTimeout(r, 100));
+
+        recorder.stop();
+        await done;
+
+        const blob = new Blob(chunks, { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const extension = mimeType.includes("mp4") ? "mp4" : "webm";
+        a.download = `nprush-turntable-${Date.now()}.${extension}`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
     static mount({
         canvasPromise,
         numSplats = GPU_CONSTANTS.NUM_GAUSSIAN_SPLATS,
