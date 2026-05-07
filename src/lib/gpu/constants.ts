@@ -39,6 +39,14 @@ export const GPU_CONSTANTS = {
     SPLAT_RENDER_NUM_PANELS: 6.0,
     SPLAT_EDGE_THRESHOLD_MIN: 0.02,
     SPLAT_EDGE_THRESHOLD_MAX: 0.06,
+    
+    // Mesh Splatting
+    MESH_SPLAT_MAX_COUNT: 4096,
+    
+    // Depth Aware Blur
+    BLUR_SIGMA_S: 10.0,
+    BLUR_SIGMA_C: 0.1,
+    BLUR_SIGMA_D: 0.005,
 };
 
 /**

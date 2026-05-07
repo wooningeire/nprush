@@ -43,7 +43,7 @@ struct MeshUniforms {
     numSplats: f32,
 }
 
-@group(0) @binding(7) var<storage, read>       textureSplats: array<MeshSplat>;
+@group(0) @binding(7) var<storage, read>       textureSplats: array<MeshSplat, {@MESH_SPLAT_MAX_COUNT}>;
 @group(0) @binding(8) var<uniform>             meshUniforms:  MeshUniforms;
 
 // ── RNG ───────────────────────────────────────────────────────────────────────

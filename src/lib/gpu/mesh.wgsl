@@ -42,7 +42,7 @@ struct MeshUniforms {
     numSplats: f32,
 }
 
-@group(1) @binding(0) var<storage, read> textureSplats: array<MeshSplat>;
+@group(1) @binding(0) var<storage, read> textureSplats: array<MeshSplat, {@MESH_SPLAT_MAX_COUNT}>;
 @group(1) @binding(1) var<uniform> meshUniforms: MeshUniforms;
 
 // Near/far for depth remapping. Objects closer than DEPTH_NEAR get full

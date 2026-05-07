@@ -20,9 +20,9 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     var sum_col = vec3f(0.0);
     var sum_w = 0.0;
     
-    let sigma_s = 10.0; // Spatial sigma
-    let sigma_c = 0.1;  // Color sigma
-    let sigma_d = 0.005; // Depth sigma (sharpened from 0.5)
+    let sigma_s = f32({@BLUR_SIGMA_S}); // Spatial sigma
+    let sigma_c = f32({@BLUR_SIGMA_C}); // Color sigma
+    let sigma_d = f32({@BLUR_SIGMA_D}); // Depth sigma
     
     let radius = params.radius;
     
