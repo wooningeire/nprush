@@ -1,7 +1,6 @@
 struct Uniforms {
     viewProjMat: mat4x4f,
     viewMat: mat4x4f,
-    shadingMode: f32,
 }
 fn reinhard(c: vec3f) -> vec3f { return c / (c + 1.0); }
 
@@ -61,7 +60,7 @@ fn frag(in: VertexOutput) -> FragOutput {
     // Tint the matcap by the material base color (linear multiply).
     let tinted_matcap = matcap_color * in.color.rgb;
 
-    let final_color = select(tinted_matcap, normals_color, uniforms.shadingMode < 0.5);
+    let final_color = normals_color;
     out.color = vec4f(reinhard(final_color * 4.0), 1.0);
     out.depth = vec4f(in.viewDepth, in.viewDepth, in.viewDepth, 1.0);
     return out;
@@ -117,7 +116,7 @@ fn frag_pbr(in: VertexOutput) -> FragOutput {
     let lit = matcap_color * albedo;
 
     let normals_color = (worldNormal + 1.0) * 0.5;
-    let final_color = select(lit, normals_color, uniforms.shadingMode < 0.5);
+    let final_color = normals_color;
     out.color = vec4f(reinhard(final_color * 4.0), 1.0);
     out.depth = vec4f(in.viewDepth, in.viewDepth, in.viewDepth, 1.0);
     return out;

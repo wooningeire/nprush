@@ -5,12 +5,8 @@
 struct Uniforms {
     viewProjMat:    mat4x4f,  // offset   0, size 64
     viewMat:        mat4x4f,  // offset  64, size 64
-    shadingMode:    f32,      // offset 128, size  4
-    _pad0:          f32,      // offset 132
-    _pad1:          f32,      // offset 136
-    _pad2:          f32,      // offset 140
-    invViewProjMat: mat4x4f,  // offset 144, size 64
-    // total: 208 bytes
+    invViewProjMat: mat4x4f,  // offset 128, size 64
+    // total: 192 bytes
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;

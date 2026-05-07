@@ -240,7 +240,6 @@ export class GpuRunner {
                 this.pathTracePipelineManager.writeInvViewProjMat(this.camera.viewProjInvMat as Float32Array);
                 this.pathTracePipelineManager.reset();
             });
-            $effect(() => this.uniformsManager.writeShadingMode(this.viewerState.shadingMode));
             $effect(() => this.splatOptimizerManager.writeRenderUniforms(
                 this.viewerState.edgeBeziersEnabled,
                 this.viewerState.baseColorBeziersEnabled,
