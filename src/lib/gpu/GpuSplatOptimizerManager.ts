@@ -4,6 +4,7 @@ import renderModuleSrc from "./splat_render.wgsl?raw";
 import adcModuleSrc from "./splat_adc.wgsl?raw";
 import edgeModuleSrc from "./splat_edge.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
+import { GPU_CONSTANTS, injectWgslConstants } from "./constants";
 
 export class GpuSplatOptimizerManager {
     private readonly device: GPUDevice;
@@ -123,12 +124,16 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
-        const injectConstants = (src: string) => src
-            .replace(/NUM_SPLATS_PLUS_ONE/g, `${this.numSplats + 1}u`)
-            .replace(/NUM_SPLATS_MINUS_ONE/g, `${this.numSplats - 1}u`)
-            .replace(/NUM_SPLATS_DIV_32/g, `${Math.ceil(this.numSplats / 32)}u`)
-            .replace(/NUM_SPLATS/g, `${this.numSplats}u`)
-            .replace(/NUM_PARAMS/g, `${this.numParams}u`);
+        const injectConstants = (src: string) => {
+            return injectWgslConstants(src, {
+                ...GPU_CONSTANTS,
+                NUM_SPLATS: this.numSplats,
+                NUM_SPLATS_PLUS_ONE: this.numSplats + 1,
+                NUM_SPLATS_MINUS_ONE: this.numSplats - 1,
+                NUM_SPLATS_DIV_32: Math.ceil(this.numSplats / 32),
+                NUM_PARAMS: this.numParams,
+            });
+        };
 
         // Backward Pipeline — now has 5 bindings (splats, grads, target, edge, VP uniform)
         this.backwardBindGroupLayout = device.createBindGroupLayout({
@@ -228,7 +233,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm" } },
             ],
         });
-        const edgeModule = device.createShaderModule({ label: "splat edge", code: edgeModuleSrc });
+        const edgeModule = device.createShaderModule({ label: "splat edge", code: injectConstants(edgeModuleSrc) });
         edgeModule.getCompilationInfo().then(info => {
             for (const msg of info.messages) console.warn(`[splat_edge] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });

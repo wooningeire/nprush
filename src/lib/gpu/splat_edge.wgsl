@@ -38,7 +38,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     // the background (depth=1.0) is far from any mesh value, so true silhouette
     // edges produce large Sobel responses while smooth surface gradients stay
     // small. The raised lower bound eliminates contour-line artifacts.
-    let thresholded = smoothstep(0.02, 0.06, edge);
+    let thresholded = smoothstep({@SPLAT_EDGE_THRESHOLD_MIN}, {@SPLAT_EDGE_THRESHOLD_MAX}, edge);
 
     textureStore(edgeTex, p, vec4f(thresholded, thresholded, thresholded, 1.0));
 }

@@ -7,12 +7,12 @@ struct Bezier {
 }
 
 struct BezierArray {
-    items: array<Bezier, NUM_BEZIERS>,
+    items: array<Bezier, {@NUM_BEZIERS}u>,
 }
 
 struct AdamState {
-    m: array<f32, NUM_BEZIER_PARAMS>,
-    v: array<f32, NUM_BEZIER_PARAMS>,
+    m: array<f32, {@NUM_BEZIER_PARAMS}u>,
+    v: array<f32, {@NUM_BEZIER_PARAMS}u>,
     t: f32,
     pixel_count: f32,
     no_kill: f32, // 1.0 = disable loss-based killing in ADC
@@ -20,8 +20,8 @@ struct AdamState {
 }
 
 struct ADCArray {
-    grad_accum: array<f32, NUM_BEZIERS>,
-    loss_accum: array<f32, NUM_BEZIERS>,
+    grad_accum: array<f32, {@NUM_BEZIERS}u>,
+    loss_accum: array<f32, {@NUM_BEZIERS}u>,
 }
 
 struct BezierUniforms {
@@ -40,22 +40,22 @@ struct BezierUniforms {
 @group(0) @binding(0) var<storage, read_write> beziers: BezierArray;
 @group(0) @binding(1) var<storage, read_write> adam: AdamState;
 @group(0) @binding(2) var<storage, read_write> adc: ADCArray;
-@group(0) @binding(3) var<storage, read_write> pixel_loss: array<atomic<i32>, PIXEL_LOSS_SIZE>;
+@group(0) @binding(3) var<storage, read_write> pixel_loss: array<atomic<i32>, {@PIXEL_LOSS_SIZE}u>;
 @group(0) @binding(4) var<uniform> uniforms: BezierUniforms;
 
-var<workgroup> dead_indices: array<u32, NUM_BEZIERS>;
+var<workgroup> dead_indices: array<u32, {@NUM_BEZIERS}u>;
 
 // Reconstruct a world-space point from a pixel index, using the same reciprocal
 // depth encoding as mesh.wgsl. depth_enc = 1 - 0.1/w  =>  w = 0.1/(1-depth_enc).
 // We use depth_enc = 0.5 (mid-range) as a neutral spawn depth when no depth info
 // is available — the optimizer will pull the curve to the correct depth quickly.
 fn pixel_to_world(px_idx: u32, spawn_depth: f32) -> vec3f {
-    let px_x = px_idx % OPTIM_WIDTH;
-    let px_y = px_idx / OPTIM_WIDTH;
-    let uv = (vec2f(f32(px_x), f32(px_y)) + 0.5) / vec2f(f32(OPTIM_WIDTH), f32(OPTIM_HEIGHT));
+    let px_x = px_idx % {@OPTIM_WIDTH}u;
+    let px_y = px_idx / {@OPTIM_WIDTH}u;
+    let uv = (vec2f(f32(px_x), f32(px_y)) + 0.5) / vec2f(f32({@OPTIM_WIDTH}u), f32({@OPTIM_HEIGHT}u));
     // NDC: y flipped (texture y=0 is top, NDC y=1 is top)
     let ndc = vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    let aspect = f32(OPTIM_WIDTH) / f32(OPTIM_HEIGHT);
+    let aspect = f32({@OPTIM_WIDTH}u) / f32({@OPTIM_HEIGHT}u);
     // Recover w from reciprocal depth encoding
     let w = 0.1 / max(1.0 - spawn_depth, 1e-5);
     // Approximate z_clip ≈ w (valid for zFar=100 >> zNear=0.01)
@@ -65,7 +65,7 @@ fn pixel_to_world(px_idx: u32, spawn_depth: f32) -> vec3f {
 }
 
 fn check_offscreen(clip: vec4f) -> bool {
-    let m = 1.2;
+    let m = f32({@BEZIER_OFFSCREEN_MARGIN});
     if (clip.w < 0.0) { return true; }
     let ndc = clip.xy / max(clip.w, 1e-5);
     return abs(ndc.x) > m || abs(ndc.y) > m;
@@ -75,27 +75,24 @@ fn check_offscreen(clip: vec4f) -> bool {
 fn main() {
     var dead_count = 0u;
 
-    for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
-        if (beziers.items[i].color.a < 0.005) {
+    for (var i = 0u; i < {@NUM_BEZIERS}u; i = i + 1u) {
+        if (beziers.items[i].color.a < f32({@BEZIER_KILL_ALPHA_THRESH})) {
             dead_indices[dead_count] = i;
             dead_count = dead_count + 1u;
         }
     }
+    
+    let ADC_PERIOD = f32({@BEZIER_ADC_PERIOD});
+    let TAU_POS = f32({@BEZIER_TAU_POS});
+    let TAU_LOSS = f32({@BEZIER_TAU_LOSS});
+    let SPLIT_LEN_THRESHOLD = f32({@BEZIER_SPLIT_LEN_THRESHOLD});
 
-    let ADC_PERIOD = 50.0;
-    let TAU_POS = 0.0002;       // must be moving to clone
-    let TAU_LOSS = 0.001;       // kill if stuck AND contributing to loss
-    let SPLIT_LEN_THRESHOLD = 0.25;
-
-    // Do NOT reset adam.t here — resetting it spikes the Adam bias correction
-    // back to its initial high value, which causes a learning-rate surge every
-    // ADC cycle and is the primary source of post-ADC jitter.
-    // adam.t = 0.0;
+    // ... (adam.t comment) ...
 
     // --- Pass 1: Kill offscreen or stuck/high-loss curves ---
-    for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
+    for (var i = 0u; i < {@NUM_BEZIERS}u; i = i + 1u) {
         var b = beziers.items[i];
-        if (b.color.a < 0.005) { continue; }
+        if (b.color.a < f32({@BEZIER_KILL_ALPHA_THRESH})) { continue; }
 
         let grad_norm = adc.grad_accum[i] / ADC_PERIOD;
         let loss_norm = adc.loss_accum[i] / ADC_PERIOD;
@@ -122,9 +119,9 @@ fn main() {
     }
 
     // --- Pass 1.5: Split or clone high-gradient curves into dead slots ---
-    for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
+    for (var i = 0u; i < {@NUM_BEZIERS}u; i = i + 1u) {
         var b = beziers.items[i];
-        if (b.color.a < 0.005) { continue; }
+        if (b.color.a < f32({@BEZIER_KILL_ALPHA_THRESH})) { continue; }
 
         let grad_norm = adc.grad_accum[i] / ADC_PERIOD;
 
@@ -187,8 +184,8 @@ fn main() {
     // --- Pass 2: seed new beziers at the highest-loss uncovered pixels ---
     // Fill ALL remaining dead slots so population stays at capacity.
     // Cap at 512 spawns per ADC cycle to keep GPU time bounded while allowing rapid revival.
-    let max_spawns = min(dead_count, 512u);
-    let stride = max(1u, PIXEL_LOSS_SIZE / 4096u); // scan ~4096 pixels per pass to find local maxima efficiently
+    let max_spawns = min(dead_count, {@BEZIER_MAX_SPAWNS}u);
+    let stride = max(1u, {@PIXEL_LOSS_SIZE}u / 4096u); // scan ~4096 pixels per pass to find local maxima efficiently
 
     for (var spawn_i = 0u; spawn_i < max_spawns; spawn_i = spawn_i + 1u) {
         if (dead_count == 0u) { break; }
@@ -198,7 +195,7 @@ fn main() {
         var best_val = 0;
         let start_offset = (spawn_i * 997u) % stride;
         
-        for (var px = start_offset; px < PIXEL_LOSS_SIZE; px = px + stride) {
+        for (var px = start_offset; px < {@PIXEL_LOSS_SIZE}u; px = px + stride) {
             let v = atomicLoad(&pixel_loss[px]);
             if (v > best_val) {
                 best_val = v;
@@ -211,9 +208,9 @@ fn main() {
         var spawn_px = best_px;
         if (best_val <= 0) {
             let seed_fb = f32(spawn_i) * 1234.5678 + adam.t * 0.1;
-            let rx = u32(fract(sin(seed_fb * 12.9898) * 43758.5453) * f32(OPTIM_WIDTH));
-            let ry = u32(fract(sin(seed_fb * 78.233)  * 43758.5453) * f32(OPTIM_HEIGHT));
-            spawn_px = ry * OPTIM_WIDTH + rx;
+            let rx = u32(fract(sin(seed_fb * 12.9898) * 43758.5453) * f32({@OPTIM_WIDTH}));
+            let ry = u32(fract(sin(seed_fb * 78.233)  * 43758.5453) * f32({@OPTIM_HEIGHT}));
+            spawn_px = ry * {@OPTIM_WIDTH}u + rx;
         } else {
             // Claim this pixel so the next pass finds a different peak
             atomicStore(&pixel_loss[best_px], 0);
@@ -227,13 +224,13 @@ fn main() {
 
         let seed = f32(spawn_px) * 1.61803 + f32(spawn_i) * 2.71828;
         let angle = fract(sin(seed * 127.1) * 43758.5453) * 6.28318;
-        let tx = cos(angle) * 0.025;
-        let tz = sin(angle) * 0.025;
+        let tx = cos(angle) * f32({@BEZIER_SPAWN_TANGENT_LEN});
+        let tz = sin(angle) * f32({@BEZIER_SPAWN_TANGENT_LEN});
         let tangent = vec3f(tx, 0.0, tz);
 
         var nb: Bezier;
-        nb.p0 = vec4f(center - tangent,        0.015);
-        nb.p1 = vec4f(center - tangent * 0.33, 0.005);
+        nb.p0 = vec4f(center - tangent,        f32({@BEZIER_SPAWN_WIDTH}));
+        nb.p1 = vec4f(center - tangent * 0.33, f32({@BEZIER_SPAWN_SOFTNESS}));
         nb.p2 = vec4f(center + tangent * 0.33, 0.0);
         nb.p3 = vec4f(center + tangent,        0.0);
         nb.color = vec4f(0.5, 0.5, 0.5, 0.5);
@@ -246,10 +243,10 @@ fn main() {
     }
 
     // --- Pass 3: clone/split high-gradient live curves ---
-    for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
+    for (var i = 0u; i < {@NUM_BEZIERS}u; i = i + 1u) {
         if (dead_count == 0u) { break; } // Optimization: skip if no dead slots available
         var b = beziers.items[i];
-        if (b.color.a < 0.005) { continue; }
+        if (b.color.a < f32({@BEZIER_KILL_ALPHA_THRESH})) { continue; }
 
         let grad_norm = adc.grad_accum[i] / ADC_PERIOD;
         if (grad_norm <= TAU_POS) { continue; }
@@ -308,10 +305,10 @@ fn main() {
     }
 
     // Reset remaining pixel_loss and accumulators for the next ADC period
-    for (var px = 0u; px < PIXEL_LOSS_SIZE; px = px + 1u) {
+    for (var px = 0u; px < {@PIXEL_LOSS_SIZE}u; px = px + 1u) {
         atomicStore(&pixel_loss[px], 0);
     }
-    for (var i = 0u; i < NUM_BEZIERS; i = i + 1u) {
+    for (var i = 0u; i < {@NUM_BEZIERS}u; i = i + 1u) {
         adc.grad_accum[i] = 0.0;
         adc.loss_accum[i] = 0.0;
     }

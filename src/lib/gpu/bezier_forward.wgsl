@@ -7,7 +7,7 @@ struct Bezier {
 }
 
 struct BezierArray {
-    items: array<Bezier, NUM_BEZIERS>,
+    items: array<Bezier, {@NUM_BEZIERS}u>,
 }
 
 struct ForwardUniforms {
@@ -52,7 +52,7 @@ fn vs_main(
     // Draw back-to-front: mirror the gaussian approach where index 0 is drawn last
     // (front-most). The optimizer pushes active curves toward lower indices, so
     // reversing instance order gives an approximate depth sort for free.
-    let bezier_idx = NUM_BEZIERS - 1u - ii;
+    let bezier_idx = {@NUM_BEZIERS}u - 1u - ii;
     let b = beziers.items[bezier_idx];
     let aspect = uniforms.dims.x / uniforms.dims.y;
 

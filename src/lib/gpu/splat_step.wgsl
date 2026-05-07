@@ -6,22 +6,22 @@ struct Splat {
 }
 
 struct SplatArray {
-    splats: array<Splat, NUM_SPLATS>,
+    splats: array<Splat, {@NUM_SPLATS}u>,
 }
 
 struct GradArray {
-    data: array<atomic<i32>, NUM_PARAMS>,
+    data: array<atomic<i32>, {@NUM_PARAMS}u>,
 }
 
 struct AdamState {
-    m: array<f32, NUM_PARAMS>,
-    v: array<f32, NUM_PARAMS>,
+    m: array<f32, {@NUM_PARAMS}u>,
+    v: array<f32, {@NUM_PARAMS}u>,
     t: f32,
     pad: vec3f,
 }
 
 struct ADCArray {
-    grad_accum: array<f32, NUM_SPLATS>,
+    grad_accum: array<f32, {@NUM_SPLATS}u>,
 }
 
 @group(0) @binding(0) var<storage, read_write> splats: SplatArray;
@@ -35,7 +35,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let current_t = adam.t;
     workgroupBarrier();
     if (splat_id == 0u) { adam.t = current_t + 1.0; }
-    if (splat_id >= NUM_SPLATS) { return; }
+    if (splat_id >= {@NUM_SPLATS}u) { return; }
 
     var s = splats.splats[splat_id];
     let base_idx = splat_id * 16u;
@@ -59,9 +59,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
         let lr = lr_table[lp];
 
-        let beta1 = 0.9;
-        let beta2 = 0.999;
-        let epsilon = 1e-8;
+        let beta1 = {@ADAM_BETA1};
+        let beta2 = {@ADAM_BETA2};
+        let epsilon = {@ADAM_EPS};
         var m = adam.m[param_idx];
         var v = adam.v[param_idx];
         m = beta1 * m + (1.0 - beta1) * grad;
@@ -100,7 +100,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     adc.grad_accum[splat_id] += sqrt(pos_grad_norm2);
 
     let volume = s.pos_sx.w * s.sy_shape.x * s.sy_shape.w;
-    s.color.a = select(s.color.a, 0.0, s.color.a < 0.05 || volume < 0.0000001);
+    s.color.a = select(s.color.a, 0.0, s.color.a < f32({@SPLAT_OPACITY_KILL_THRESH}) || volume < f32({@SPLAT_VOLUME_KILL_THRESH}));
 
     splats.splats[splat_id] = s;
 }

@@ -7,16 +7,16 @@ struct Bezier {
 }
 
 struct BezierArray {
-    items: array<Bezier, NUM_BEZIERS>,
+    items: array<Bezier, {@NUM_BEZIERS}u>,
 }
 
 struct GradArray {
-    data: array<atomic<i32>, NUM_BEZIER_PARAMS>,
+    data: array<atomic<i32>, {@NUM_BEZIER_PARAMS}u>,
 }
 
 struct AdamState {
-    m: array<f32, NUM_BEZIER_PARAMS>,
-    v: array<f32, NUM_BEZIER_PARAMS>,
+    m: array<f32, {@NUM_BEZIER_PARAMS}u>,
+    v: array<f32, {@NUM_BEZIER_PARAMS}u>,
     t: f32,
     pixel_count: f32,
     no_kill: f32, // 1.0 = disable loss-based killing in ADC
@@ -24,7 +24,7 @@ struct AdamState {
 }
 
 struct ADCArray {
-    grad_accum: array<f32, NUM_BEZIERS>,
+    grad_accum: array<f32, {@NUM_BEZIERS}u>,
 }
 
 struct StepUniforms {
@@ -56,7 +56,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         adam.t = current_t + 1.0;
     }
     
-    if (bezier_id >= NUM_BEZIERS) {
+    if (bezier_id >= {@NUM_BEZIERS}u) {
         return;
     }
 
@@ -64,7 +64,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     // Skip dead beziers entirely — don't apply Adam updates, which could
     // accidentally revive a killed curve via stale gradient momentum.
-    if (b.color.a < 0.005) {
+    if (b.color.a < f32({@BEZIER_KILL_ALPHA_THRESH})) {
         // Still drain any stale gradients so they don't accumulate.
         for (var lp = 0u; lp < 18u; lp++) {
             atomicExchange(&grads.data[bezier_id * 18u + lp], 0);
@@ -108,9 +108,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
         let lr = lr_table[lp];
 
-        let beta1 = 0.9;
-        let beta2 = 0.999;
-        let epsilon = 1e-8;
+        let beta1 = {@ADAM_BETA1};
+        let beta2 = {@ADAM_BETA2};
+        let epsilon = {@ADAM_EPS};
         
         var m = adam.m[param_idx];
         var v = adam.v[param_idx];
@@ -162,8 +162,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     // Prune very thin or transparent beziers — thresholds are configurable
     // per layer so fine color beziers can use a lower kill threshold.
-    let alpha_thresh = select(0.001, uniforms.prune_alpha_thresh, uniforms.prune_alpha_thresh > 0.0);
-    let width_thresh = select(0.001, uniforms.prune_width_thresh, uniforms.prune_width_thresh > 0.0);
+    let alpha_thresh = select(f32({@BEZIER_PRUNE_ALPHA_DEFAULT}), uniforms.prune_alpha_thresh, uniforms.prune_alpha_thresh > 0.0);
+    let width_thresh = select(f32({@BEZIER_PRUNE_WIDTH_DEFAULT}), uniforms.prune_width_thresh, uniforms.prune_width_thresh > 0.0);
     b.color.a = select(b.color.a, 0.0, b.color.a < alpha_thresh || b.p0.w <= width_thresh);
 
     // Kill beziers whose bounding hull is entirely outside the view frustum.
@@ -175,7 +175,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let c2 = uniforms.vp * vec4f(b.p2.xyz, 1.0);
         let c3 = uniforms.vp * vec4f(b.p3.xyz, 1.0);
         // Use a small margin so curves near the edge aren't killed prematurely.
-        let margin = 1.2;
+        let margin = f32({@BEZIER_OFFSCREEN_MARGIN});
         let all_left  = c0.x < -margin*c0.w && c1.x < -margin*c1.w && c2.x < -margin*c2.w && c3.x < -margin*c3.w;
         let all_right = c0.x >  margin*c0.w && c1.x >  margin*c1.w && c2.x >  margin*c2.w && c3.x >  margin*c3.w;
         let all_below = c0.y < -margin*c0.w && c1.y < -margin*c1.w && c2.y < -margin*c2.w && c3.y < -margin*c3.w;

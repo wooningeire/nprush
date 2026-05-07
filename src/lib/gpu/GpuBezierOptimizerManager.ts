@@ -2,6 +2,7 @@ import backwardModuleSrc from "./bezier_backward.wgsl?raw";
 import stepModuleSrc from "./bezier_step.wgsl?raw";
 import adcModuleSrc from "./bezier_adc.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
+import { GPU_CONSTANTS, injectWgslConstants } from "./constants";
 
 // Each cubic bezier is 14 optimizable parameters but stored with 16-float
 // stride (4 vec4f) so the WGSL struct lays out cleanly without per-field
@@ -12,7 +13,7 @@ const FLOATS_PER_BEZIER = 20;
 // Optim resolution — must match GpuRunner's OPTIM_SHORT logic.
 // We use the square short-side; the actual pixel count is written at runtime.
 // The pixel_loss buffer is sized to the worst-case square (OPTIM_SHORT²).
-const PIXEL_LOSS_MAX = 512 * 512; // generous upper bound
+const PIXEL_LOSS_MAX = GPU_CONSTANTS.PIXEL_LOSS_MAX;
 
 export class GpuBezierOptimizerManager {
     private readonly device: GPUDevice;
@@ -142,15 +143,19 @@ export class GpuBezierOptimizerManager {
         // via a separate per-dispatch inject — here we bake in the max size
         // so the buffer declaration compiles. The actual dims are written via
         // writeOptimDims() before the first dispatch.
-        const inject = (src: string, ow = 256, oh = 256) => src
-            .replace(/NUM_BEZIERS_PLUS_ONE/g, `${numBeziers + 1}u`)
-            .replace(/NUM_BEZIERS_MINUS_ONE/g, `${numBeziers - 1}u`)
-            .replace(/NUM_BEZIERS_DIV_32/g, `${Math.ceil(numBeziers / 32)}u`)
-            .replace(/NUM_BEZIERS/g, `${numBeziers}u`)
-            .replace(/NUM_BEZIER_PARAMS/g, `${this.numParams}u`)
-            .replace(/PIXEL_LOSS_SIZE/g, `${PIXEL_LOSS_MAX}u`)
-            .replace(/OPTIM_WIDTH/g, `${ow}u`)
-            .replace(/OPTIM_HEIGHT/g, `${oh}u`);
+        const inject = (src: string, ow = 256, oh = 256) => {
+            return injectWgslConstants(src, {
+                ...GPU_CONSTANTS,
+                NUM_BEZIERS: this.numBeziers,
+                NUM_BEZIERS_PLUS_ONE: this.numBeziers + 1,
+                NUM_BEZIERS_MINUS_ONE: this.numBeziers - 1,
+                NUM_BEZIERS_DIV_32: Math.ceil(this.numBeziers / 32),
+                NUM_BEZIER_PARAMS: this.numParams,
+                PIXEL_LOSS_SIZE: PIXEL_LOSS_MAX,
+                OPTIM_WIDTH: ow,
+                OPTIM_HEIGHT: oh,
+            });
+        };
 
         this.backwardBindGroupLayout = device.createBindGroupLayout({
             label: "bezier backward bind group layout",

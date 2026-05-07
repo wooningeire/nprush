@@ -6,7 +6,7 @@ struct Splat {
 }
 
 struct SplatArray {
-    splats: array<Splat, NUM_SPLATS>,
+    splats: array<Splat, {@NUM_SPLATS}u>,
 }
 
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
@@ -41,7 +41,7 @@ fn project_axis(vp: mat4x4f, ax_world: vec3f, clip_xy: vec2f, w: f32, aspect: f3
 
 @vertex
 fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut {
-    let splat_idx = NUM_SPLATS - 1u - ii;
+    let splat_idx = {@NUM_SPLATS}u - 1u - ii;
     let s = splats.splats[splat_idx];
     
     let pos3 = s.pos_sx.xyz;

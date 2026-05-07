@@ -6,18 +6,18 @@ struct Splat {
 }
 
 struct SplatArray {
-    splats: array<Splat, NUM_SPLATS>,
+    splats: array<Splat, {@NUM_SPLATS}u>,
 }
 
 struct AdamState {
-    m: array<f32, NUM_PARAMS>,
-    v: array<f32, NUM_PARAMS>,
+    m: array<f32, {@NUM_PARAMS}u>,
+    v: array<f32, {@NUM_PARAMS}u>,
     t: f32,
     pad: vec3f,
 }
 
 struct ADCArray {
-    grad_accum: array<f32, NUM_SPLATS>,
+    grad_accum: array<f32, {@NUM_SPLATS}u>,
 }
 
 @group(0) @binding(0) var<storage, read_write> splats: SplatArray;
@@ -27,13 +27,13 @@ struct ADCArray {
 @compute @workgroup_size(1, 1, 1)
 fn main() {
     var next_dead_search = 0u;
-    let ADC_PERIOD = 25.0;
-    let TAU_POS = 0.00005;
+    let ADC_PERIOD = f32({@SPLAT_ADC_PERIOD});
+    let TAU_POS = f32({@SPLAT_GRAD_THRESH});
     let SPLIT_SCALE_THRESHOLD = 0.01;
 
-    for (var i = 0u; i < NUM_SPLATS; i++) {
+    for (var i = 0u; i < {@NUM_SPLATS}; i++) {
         var s = splats.splats[i];
-        if (s.color.a < 0.05) { continue; }
+        if (s.color.a < {@SPLAT_OPACITY_KILL_THRESH}) { continue; }
 
         let grad_accum = adc.grad_accum[i] / ADC_PERIOD;
         adc.grad_accum[i] = 0.0;
@@ -43,15 +43,15 @@ fn main() {
 
             var found_dead = false;
             var new_idx = 0u;
-            for (var d = next_dead_search; d < NUM_SPLATS; d++) {
-                if (splats.splats[d].color.a < 0.05) {
+            for (var d = next_dead_search; d < {@NUM_SPLATS}; d++) {
+                if (splats.splats[d].color.a < {@SPLAT_OPACITY_KILL_THRESH}) {
                     new_idx = d;
                     found_dead = true;
                     next_dead_search = d + 1u;
                     break;
                 }
             }
-            if (!found_dead) { next_dead_search = NUM_SPLATS; }
+            if (!found_dead) { next_dead_search = {@NUM_SPLATS}; }
 
             if (found_dead) {
                 var new_s = s;

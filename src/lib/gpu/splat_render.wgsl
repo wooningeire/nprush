@@ -36,8 +36,8 @@ fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
     return o;
 }
 
-const STRIP_HEIGHT: f32 = 0.18;
-const NUM_PANELS: f32 = 6.0;
+const STRIP_HEIGHT: f32 = {@SPLAT_RENDER_STRIP_HEIGHT};
+const NUM_PANELS: f32 = {@SPLAT_RENDER_NUM_PANELS};
 
 // Fit a source with given aspect into a panel with given aspect
 fn fitInPanel(panel_uv: vec2f, panel_aspect: f32, src_aspect: f32) -> vec2f {

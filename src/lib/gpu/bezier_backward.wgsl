@@ -10,11 +10,11 @@ struct Bezier {
 }
 
 struct BezierArray {
-    items: array<Bezier, NUM_BEZIERS>,
+    items: array<Bezier, {@NUM_BEZIERS}u>,
 }
 
 struct GradArray {
-    data: array<atomic<i32>, NUM_BEZIER_PARAMS>,
+    data: array<atomic<i32>, {@NUM_BEZIER_PARAMS}u>,
 }
 
 struct BezierUniforms {
@@ -32,8 +32,8 @@ struct BezierUniforms {
 }
 
 struct ADCArray {
-    grad_accum: array<f32, NUM_BEZIERS>,
-    loss_accum: array<f32, NUM_BEZIERS>,
+    grad_accum: array<f32, {@NUM_BEZIERS}u>,
+    loss_accum: array<f32, {@NUM_BEZIERS}u>,
 }
 
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
@@ -47,7 +47,7 @@ struct ADCArray {
 @group(0) @binding(8) var normalTex: texture_2d<f32>;
 // Per-pixel residual loss map: accumulated as fixed-point i32 (scale 10000).
 // ADC reads this to find high-loss regions and seeds new beziers there.
-@group(0) @binding(9) var<storage, read_write> pixel_loss: array<atomic<i32>, PIXEL_LOSS_SIZE>;
+@group(0) @binding(9) var<storage, read_write> pixel_loss: array<atomic<i32>, {@PIXEL_LOSS_SIZE}u>;
 
 const N_SEG: u32 = 16u;
 // Reciprocal depth near-plane constant — must match mesh.wgsl and splat_forward.wgsl.
@@ -87,8 +87,8 @@ fn backproject_gradient(vp: mat4x4f, pos3: vec3f, aspect: f32, dp2d: vec2f) -> v
     return dp3d;
 }
 
-const MAX_TILE_BEZIERS = 1024u;
-var<workgroup> tile_mask: array<atomic<u32>, NUM_BEZIERS_DIV_32>;
+const MAX_TILE_BEZIERS = {@BEZIER_MAX_TILE_BEZIERS}u;
+var<workgroup> tile_mask: array<atomic<u32>, {@NUM_BEZIERS_DIV_32}u>;
 var<workgroup> tile_beziers: array<u32, MAX_TILE_BEZIERS>;
 var<workgroup> tile_bezier_count: atomic<u32>;
 
@@ -108,7 +108,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     // --- 1. COOPERATIVE TILE BINNING ---
     let local_idx = local_id.y * 16u + local_id.x;
     
-    for (var i = local_idx; i < NUM_BEZIERS_DIV_32; i += 256u) {
+    for (var i = local_idx; i < {@NUM_BEZIERS_DIV_32}; i += 256u) {
         atomicStore(&tile_mask[i], 0u);
     }
     if (local_idx == 0u) {
@@ -123,9 +123,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let tile_min_p = vec2f(p00.x, p11.y);
     let tile_max_p = vec2f(p11.x, p00.y);
     
-    for (var bezier_id = local_idx; bezier_id < NUM_BEZIERS; bezier_id += 256u) {
+    for (var bezier_id = local_idx; bezier_id < {@NUM_BEZIERS}; bezier_id += 256u) {
         let b = beziers.items[bezier_id];
-        if (b.color.a < 0.005) { continue; }
+        if (b.color.a < {@BEZIER_KILL_ALPHA_THRESH}) { continue; }
         
         let width = max(b.p0.w, 0.001);
         let softness = max(b.p1.w, 0.001);
@@ -158,7 +158,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     
     if (local_idx == 0u) {
         var count = 0u;
-        for (var word_idx = 0u; word_idx < NUM_BEZIERS_DIV_32; word_idx++) {
+        for (var word_idx = 0u; word_idx < {@NUM_BEZIERS_DIV_32}; word_idx++) {
             var word = atomicLoad(&tile_mask[word_idx]);
             while (word != 0u) {
                 let bit_idx = countTrailingZeros(word);
@@ -319,8 +319,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     // the true background clear value.
     let is_background = step(0.995, tgt_depth);
 
-    let FP_SCALE_POS = 10000.0;
-    let FP_SCALE_COL = 100000.0;
+    let FP_SCALE_POS = f32({@BEZIER_FP_SCALE_POS});
+    let FP_SCALE_COL = f32({@BEZIER_FP_SCALE_COL});
 
     for (var j = 0u; j < bezier_count; j++) {
         let idx = bezier_count - 1u - j;

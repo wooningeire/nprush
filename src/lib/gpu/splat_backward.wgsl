@@ -6,11 +6,11 @@ struct Splat {
 }
 
 struct SplatArray {
-    splats: array<Splat, NUM_SPLATS>,
+    splats: array<Splat, {@NUM_SPLATS}u>,
 }
 
 struct GradArray {
-    data: array<atomic<i32>, NUM_PARAMS>,
+    data: array<atomic<i32>, {@NUM_PARAMS}u>,
 }
 
 struct SplatUniforms {
@@ -26,8 +26,8 @@ struct SplatUniforms {
 @group(0) @binding(3) var targetDepthTex: texture_2d<f32>;
 @group(0) @binding(4) var<uniform> splat_uniforms: SplatUniforms;
 
-const MAX_TILE_SPLATS = 1024u;
-var<workgroup> tile_mask: array<atomic<u32>, NUM_SPLATS_DIV_32>;
+const MAX_TILE_SPLATS = {@SPLAT_MAX_TILE_SPLATS}u;
+var<workgroup> tile_mask: array<atomic<u32>, {@NUM_SPLATS_DIV_32}u>;
 var<workgroup> tile_splats: array<u32, MAX_TILE_SPLATS>;
 var<workgroup> tile_splat_count: atomic<u32>;
 
@@ -139,7 +139,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let aspect = f32(dims.x) / f32(dims.y);
 
     let local_idx = local_id.y * 16u + local_id.x;
-    for (var i = local_idx; i < NUM_SPLATS_DIV_32; i += 256u) {
+    for (var i = local_idx; i < {@NUM_SPLATS_DIV_32}; i += 256u) {
         atomicStore(&tile_mask[i], 0u);
     }
     if (local_idx == 0u) { atomicStore(&tile_splat_count, 0u); }
@@ -152,7 +152,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let tile_min_p = vec2f(p00.x, p11.y);
     let tile_max_p = vec2f(p11.x, p00.y);
 
-    for (var splat_id = local_idx; splat_id < NUM_SPLATS; splat_id += 256u) {
+    for (var splat_id = local_idx; splat_id < {@NUM_SPLATS}u; splat_id += 256u) {
         let s = splats.splats[splat_id];
         if (s.color.a < 0.005) { continue; }
         let proj = project_center(splat_uniforms.vp, s.pos_sx.xyz, aspect);
@@ -198,7 +198,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
     if (local_idx == 0u) {
         var count = 0u;
-        for (var wi = 0u; wi < NUM_SPLATS_DIV_32; wi++) {
+        for (var wi = 0u; wi < {@NUM_SPLATS_DIV_32}; wi++) {
             var word = atomicLoad(&tile_mask[wi]);
             while (word != 0u) {
                 let bi = countTrailingZeros(word);
@@ -433,8 +433,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         d_shape_a += REG_SHAPE_STRENGTH * 2.0 * (shape_a - target_shape_a);
         d_shape_b += REG_SHAPE_STRENGTH * 2.0 * (shape_b - target_shape_b);
 
-        let FP_SCALE_POS = 10000.0;
-        let FP_SCALE_COL = 100000.0;
+        let FP_SCALE_POS = f32({@SPLAT_FP_SCALE_POS});
+        let FP_SCALE_COL = f32({@SPLAT_FP_SCALE_COL});
 
         let base_idx = i * 16u;
         atomicAdd(&grads.data[base_idx + 0u], i32(d_pos.x * FP_SCALE_POS));
