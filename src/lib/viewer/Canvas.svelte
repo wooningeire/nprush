@@ -1,5 +1,5 @@
 <script lang="ts">
-import {Draggable} from "@vaie/hui";
+import {Draggable, Hotkey} from "@vaie/hui";
 import type { ViewerState } from "./ViewerState.svelte";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 
@@ -24,14 +24,22 @@ const STRIP_LABELS = [
     "Color Beziers",
     "Blurred Target",
 ];
+
+let shiftHeld = $state(false);
 </script>
+
+<Hotkey
+    key="Shift"
+    onKeyDown={() => shiftHeld = true}
+    onKeyUp={() => shiftHeld = false}
+/>
 
 <section
     bind:clientWidth={null, clientWidth => viewerState.width = clientWidth!}
     bind:clientHeight={null, clientHeight => viewerState.height = clientHeight!}
 >
     <Draggable
-        onDown={({ pointerEvent }) => {
+        onDown={({ button, pointerEvent }) => {
             // if (pointerEvent.button === 2) {
             //     // Right click: Interact
             //     simulationState.onInteractionStart(pointerEvent.clientX, pointerEvent.clientY, canvas!);
@@ -39,20 +47,29 @@ const STRIP_LABELS = [
             //     // Left/Middle: Camera
             //     canvas?.requestPointerLock();
             // }
+
+            if (button === 1) {
+                pointerEvent.preventDefault();
+            }
         }}
 
         onDrag={async ({ movement, button, pointerEvent }) => {
             switch (button) {
-                case 0:
-                    viewerState.orbit.turn(movement);
-                    break;
-
                 case 1:
-                    viewerState.orbit.pan(movement);
+                    if (shiftHeld) {
+                        viewerState.orbit.pan(movement);
+                    } else {
+                        viewerState.orbit.turn(movement);
+                    }
+
+                    pointerEvent.preventDefault();
                     break;
                 
                 case 2:
                     // viewerState.onInteractionDrag(pointerEvent.clientX, pointerEvent.clientY, canvas!);
+                    break;
+
+                default:
                     break;
             }
 

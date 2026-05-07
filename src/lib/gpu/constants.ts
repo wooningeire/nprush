@@ -10,7 +10,7 @@ export const GPU_CONSTANTS = {
     PIXEL_LOSS_MAX: 512 * 512,
 
     // Bezier ADC & Optimization
-    BEZIER_ADC_PERIOD: 50,
+    BEZIER_ADC_PERIOD: 25,
     BEZIER_TAU_POS: 0.0002,      // must be moving to clone
     BEZIER_TAU_LOSS: 0.001,      // kill if stuck AND contributing to loss
     BEZIER_SPLIT_LEN_THRESHOLD: 0.25,
