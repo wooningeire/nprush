@@ -26,7 +26,7 @@ export class GpuMeshRenderPipelineManager {
     private meshUniformsBuffer: GPUBuffer;
     private splatsBgl: GPUBindGroupLayout;
     private splatsBindGroup: GPUBindGroup;
-    private numMeshSplats = 0;
+    public numMeshSplats = 0;
 
     private groundVertexBuffer: GPUBuffer | null = null;
     private groundIndexBuffer: GPUBuffer | null = null;

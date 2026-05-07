@@ -151,11 +151,6 @@ fn frag(v: VsOut) -> @location(0) vec4f {
         let raster_px = vec2i(vec2f(tx, main_uv_y) * dims);
         let raster = textureLoad(targetTex, clamp(raster_px, vec2i(0), vec2i(dims) - 1), 0);
         
-        // If mesh splats are enabled, prioritize the raster mesh view so we can see the painting.
-        if (uniforms.mesh_splats_enabled > 0.5) {
-            return raster;
-        }
-        
         return select(raster, pt_color, pt_color.a > 0.0);
     }
 

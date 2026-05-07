@@ -31,6 +31,21 @@ struct PTUniforms {
 @group(0) @binding(5) var                      env_tex:     texture_2d<f32>;
 @group(0) @binding(6) var                      env_sampler: sampler;
 
+struct MeshSplat {
+    pos: vec3f,
+    radius: f32,
+    color: vec3f,
+    hardness: f32,
+}
+
+struct MeshUniforms {
+    splatsEnabled: f32,
+    numSplats: f32,
+}
+
+@group(0) @binding(7) var<storage, read>       textureSplats: array<MeshSplat>;
+@group(0) @binding(8) var<uniform>             meshUniforms:  MeshUniforms;
+
 // ── RNG ───────────────────────────────────────────────────────────────────────
 fn pcg(v: u32) -> u32 {
     let s = v * 747796405u + 2891336453u;
@@ -254,7 +269,28 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             ray_o = ray_o + ray_d * hit.t + n * 5e-4;
             ray_d = reflect(ray_d, n);
         } else {
-            throughput *= hit.color.rgb; // diffuse: albedo (cos/pi and pdf cancel)
+            var albedo = hit.color.rgb;
+            
+            // Apply mesh texture splats if enabled
+            if (meshUniforms.splatsEnabled > 0.5) {
+                var splat_color = vec3f(0.0);
+                var total_weight = 0.0;
+                let num_splats = u32(meshUniforms.numSplats);
+                let world_pos = ray_o + ray_d * hit.t;
+                for (var i = 0u; i < num_splats; i++) {
+                    let s = textureSplats[i];
+                    let dist = length(world_pos - s.pos);
+                    let w = exp(-(dist * dist) / (s.radius * s.radius));
+                    splat_color += s.color * w;
+                    total_weight += w;
+                }
+                let blend_factor = saturate(total_weight);
+                if (blend_factor > 0.001) {
+                    albedo = mix(albedo, splat_color / total_weight, blend_factor);
+                }
+            }
+            
+            throughput *= albedo; // diffuse: albedo (cos/pi and pdf cancel)
             ray_o = ray_o + ray_d * hit.t + n * 5e-4;
             ray_d = cosine_hemisphere(n, &seed);
         }

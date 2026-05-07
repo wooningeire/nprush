@@ -43,7 +43,6 @@ export class ViewerState {
 
     onPaintDrag(x: number, y: number) {
         if (!this.meshBvh || !this.meshVerts || !this.runner || !this.meshSplatsEnabled) {
-            console.log("onPaintDrag skipped", { bvh: !!this.meshBvh, verts: !!this.meshVerts, runner: !!this.runner, enabled: this.meshSplatsEnabled });
             return;
         }
         
@@ -74,13 +73,10 @@ export class ViewerState {
         
         const hit = raycastBvh(this.meshBvh, this.meshVerts, origin, dir);
         if (hit) {
-            console.log("Splat Hit at:", hit.p);
             // Paint a splat with a random color and size
             const radius = 0.02 + Math.random() * 0.08;
             const color = [Math.random(), Math.random(), Math.random()] as [number, number, number];
             this.runner.meshRenderPipelineManager.addSplat(hit.p, radius, color);
-        } else {
-            console.log("No hit");
         }
     }
 

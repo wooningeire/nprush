@@ -240,6 +240,18 @@ export class GpuRunner {
                 this.pathTracePipelineManager.writeInvViewProjMat(this.camera.viewProjInvMat as Float32Array);
                 this.pathTracePipelineManager.reset();
             });
+            $effect(() => {
+                this.pathTracePipelineManager.setSplatResources(
+                    this.meshRenderPipelineManager.meshSplatsBuffer,
+                    this.meshRenderPipelineManager.meshUniformsBuffer
+                );
+            });
+            $effect(() => {
+                // Reset path tracer when mesh splats enabled state or count changes
+                this.viewerState.meshSplatsEnabled;
+                this.meshRenderPipelineManager.numMeshSplats;
+                this.pathTracePipelineManager.reset();
+            });
             $effect(() => this.meshRenderPipelineManager.writeMeshSplatsEnabled(this.viewerState.meshSplatsEnabled));
             $effect(() => this.splatOptimizerManager.writeRenderUniforms(
                 this.viewerState.edgeBeziersEnabled,

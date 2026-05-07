@@ -35,6 +35,9 @@ export class GpuPathTracePipelineManager {
     private frameCount = 0;
     private readonly envTexture: GPUTexture;
 
+    private splatBuffer:   GPUBuffer | null = null;
+    private splatUniforms: GPUBuffer | null = null;
+
     constructor({ device, envTexture }: { device: GPUDevice; envTexture: GPUTexture }) {
         this.device = device;
         this.envTexture = envTexture;
@@ -69,6 +72,8 @@ export class GpuPathTracePipelineManager {
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },           // accum
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 6, visibility: GPUShaderStage.COMPUTE, sampler: { type: "filtering" } },
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // textureSplats
+                { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },           // meshUniforms
             ],
         });
         this.resolveBindGroupLayout = device.createBindGroupLayout({
@@ -151,6 +156,12 @@ export class GpuPathTracePipelineManager {
         this.ptBindGroup = null;
     }
 
+    setSplatResources(splatBuffer: GPUBuffer, splatUniforms: GPUBuffer) {
+        this.splatBuffer = splatBuffer;
+        this.splatUniforms = splatUniforms;
+        this.ptBindGroup = null;
+    }
+
     setOutputSize(width: number, height: number) {
         if (width === this.accumWidth && height === this.accumHeight) return;
         this.accumWidth  = width;
@@ -206,6 +217,8 @@ export class GpuPathTracePipelineManager {
                     magFilter: "linear", minFilter: "linear",
                     addressModeU: "repeat", addressModeV: "clamp-to-edge",
                 })},
+                { binding: 7, resource: { buffer: this.splatBuffer! } },
+                { binding: 8, resource: { buffer: this.splatUniforms! } },
             ],
         });
         this.resolveBindGroup = this.device.createBindGroup({
