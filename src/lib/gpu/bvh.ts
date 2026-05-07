@@ -221,3 +221,110 @@ export function buildBvh(verts: Float32Array, indices: Uint32Array): BvhResult {
         triIndices: new Uint32Array(outTris),
     };
 }
+
+export function raycastBvh(
+    bvh: BvhResult,
+    verts: Float32Array,
+    origin: [number, number, number],
+    dir: [number, number, number]
+): { t: number, p: [number, number, number], n: [number, number, number] } | null {
+    const invDir = [1/dir[0], 1/dir[1], 1/dir[2]];
+    
+    let bestT = Infinity;
+    let hitP: [number, number, number] | null = null;
+    let hitN: [number, number, number] | null = null;
+
+    const nodesDv = new DataView(bvh.nodes);
+    const stack = new Int32Array(64);
+    let stackPtr = 0;
+    stack[stackPtr++] = 0;
+
+    const EPSILON = 1e-6;
+
+    while (stackPtr > 0) {
+        const nodeIdx = stack[--stackPtr];
+        const off = nodeIdx * 32;
+        
+        const minX = nodesDv.getFloat32(off + 0, true);
+        const minY = nodesDv.getFloat32(off + 4, true);
+        const minZ = nodesDv.getFloat32(off + 8, true);
+        const maxX = nodesDv.getFloat32(off + 16, true);
+        const maxY = nodesDv.getFloat32(off + 20, true);
+        const maxZ = nodesDv.getFloat32(off + 24, true);
+        
+        let t1 = (minX - origin[0]) * invDir[0];
+        let t2 = (maxX - origin[0]) * invDir[0];
+        let tmin = Math.min(t1, t2);
+        let tmax = Math.max(t1, t2);
+        
+        t1 = (minY - origin[1]) * invDir[1];
+        t2 = (maxY - origin[1]) * invDir[1];
+        tmin = Math.max(tmin, Math.min(t1, t2));
+        tmax = Math.min(tmax, Math.max(t1, t2));
+        
+        t1 = (minZ - origin[2]) * invDir[2];
+        t2 = (maxZ - origin[2]) * invDir[2];
+        tmin = Math.max(tmin, Math.min(t1, t2));
+        tmax = Math.min(tmax, Math.max(t1, t2));
+        
+        if (tmax < 0 || tmin > tmax || tmin > bestT) continue;
+        
+        const data0 = nodesDv.getUint32(off + 12, true);
+        const data1 = nodesDv.getUint32(off + 28, true);
+        const isLeaf = (data1 & LEAF_FLAG) !== 0;
+        
+        if (isLeaf) {
+            const count = data1 & ~LEAF_FLAG;
+            for (let i = 0; i < count; i++) {
+                const triIdx = data0 + i;
+                const i0 = bvh.triIndices[triIdx * 3] * 12;
+                const i1 = bvh.triIndices[triIdx * 3 + 1] * 12;
+                const i2 = bvh.triIndices[triIdx * 3 + 2] * 12;
+                
+                const v0x = verts[i0], v0y = verts[i0+1], v0z = verts[i0+2];
+                const v1x = verts[i1], v1y = verts[i1+1], v1z = verts[i1+2];
+                const v2x = verts[i2], v2y = verts[i2+1], v2z = verts[i2+2];
+                
+                const e1x = v1x - v0x, e1y = v1y - v0y, e1z = v1z - v0z;
+                const e2x = v2x - v0x, e2y = v2y - v0y, e2z = v2z - v0z;
+                
+                const hx = dir[1] * e2z - dir[2] * e2y;
+                const hy = dir[2] * e2x - dir[0] * e2z;
+                const hz = dir[0] * e2y - dir[1] * e2x;
+                
+                const a = e1x * hx + e1y * hy + e1z * hz;
+                if (a > -EPSILON && a < EPSILON) continue;
+                
+                const f = 1.0 / a;
+                const sx = origin[0] - v0x, sy = origin[1] - v0y, sz = origin[2] - v0z;
+                const u = f * (sx * hx + sy * hy + sz * hz);
+                if (u < 0.0 || u > 1.0) continue;
+                
+                const qx = sy * e1z - sz * e1y;
+                const qy = sz * e1x - sx * e1z;
+                const qz = sx * e1y - sy * e1x;
+                const v = f * (dir[0] * qx + dir[1] * qy + dir[2] * qz);
+                if (v < 0.0 || u + v > 1.0) continue;
+                
+                const t = f * (e2x * qx + e2y * qy + e2z * qz);
+                if (t > EPSILON && t < bestT) {
+                    bestT = t;
+                    hitP = [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
+                    const nx = e1y * e2z - e1z * e2y;
+                    const ny = e1z * e2x - e1x * e2z;
+                    const nz = e1x * e2y - e1y * e2x;
+                    const nl = Math.sqrt(nx*nx + ny*ny + nz*nz);
+                    hitN = [nx/nl, ny/nl, nz/nl];
+                }
+            }
+        } else {
+            // Push children (closer first?)
+            // We can just push both
+            stack[stackPtr++] = data0;
+            stack[stackPtr++] = data1;
+        }
+    }
+    
+    if (bestT < Infinity && hitP && hitN) return { t: bestT, p: hitP, n: hitN };
+    return null;
+}

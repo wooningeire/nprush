@@ -240,10 +240,12 @@ export class GpuRunner {
                 this.pathTracePipelineManager.writeInvViewProjMat(this.camera.viewProjInvMat as Float32Array);
                 this.pathTracePipelineManager.reset();
             });
+            $effect(() => this.meshRenderPipelineManager.writeMeshSplatsEnabled(this.viewerState.meshSplatsEnabled));
             $effect(() => this.splatOptimizerManager.writeRenderUniforms(
                 this.viewerState.edgeBeziersEnabled,
                 this.viewerState.baseColorBeziersEnabled,
-                this.viewerState.colorBeziersEnabled
+                this.viewerState.colorBeziersEnabled,
+                this.viewerState.meshSplatsEnabled
             ));
             $effect(() => this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat, this.camera.viewProjInvMat, this.viewerState.compareBlurred));
             $effect(() => this.splatForwardManager.writeVPMatrix(this.camera.viewProjMat));

@@ -40,15 +40,11 @@ let shiftHeld = $state(false);
 >
     <Draggable
         onDown={({ button, pointerEvent }) => {
-            // if (pointerEvent.button === 2) {
-            //     // Right click: Interact
-            //     simulationState.onInteractionStart(pointerEvent.clientX, pointerEvent.clientY, canvas!);
-            // } else {
-            //     // Left/Middle: Camera
-            //     canvas?.requestPointerLock();
-            // }
-
             if (button === 1) {
+                pointerEvent.preventDefault();
+            } else if (button === 0) {
+                const rect = canvas!.getBoundingClientRect();
+                viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top);
                 pointerEvent.preventDefault();
             }
         }}
@@ -64,6 +60,12 @@ let shiftHeld = $state(false);
 
                     pointerEvent.preventDefault();
                     break;
+                
+                case 0: {
+                    const rect = canvas!.getBoundingClientRect();
+                    viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top);
+                    break;
+                }
                 
                 case 2:
                     // viewerState.onInteractionDrag(pointerEvent.clientX, pointerEvent.clientY, canvas!);

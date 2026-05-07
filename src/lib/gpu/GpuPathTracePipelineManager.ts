@@ -123,7 +123,7 @@ export class GpuPathTracePipelineManager {
         console.time("bvh build");
         const bvh = buildBvh(allVerts, allIdx);
         console.timeEnd("bvh build");
-        console.log(`BVH: ${bvh.nodes.length / 8} nodes, ${bvh.triIndices.length / 3} tris`);
+        console.log(`BVH: ${bvh.nodes.byteLength / 32} nodes, ${bvh.triIndices.length / 3} tris`);
 
         if (this.vertexBuffer)  this.vertexBuffer.destroy();
         if (this.bvhNodeBuffer) this.bvhNodeBuffer.destroy();

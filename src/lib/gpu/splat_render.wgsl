@@ -11,7 +11,7 @@ struct RenderUniforms {
     edge_beziers_enabled: f32,
     base_color_beziers_enabled: f32,
     color_beziers_enabled: f32,
-    _pad: f32,
+    mesh_splats_enabled: f32,
 }
 @group(0) @binding(7) var<uniform> uniforms: RenderUniforms;
 
@@ -150,6 +150,12 @@ fn frag(v: VsOut) -> @location(0) vec4f {
         // Overlay target mesh render faintly if PT not yet accumulated (alpha channel = 0)
         let raster_px = vec2i(vec2f(tx, main_uv_y) * dims);
         let raster = textureLoad(targetTex, clamp(raster_px, vec2i(0), vec2i(dims) - 1), 0);
+        
+        // If mesh splats are enabled, prioritize the raster mesh view so we can see the painting.
+        if (uniforms.mesh_splats_enabled > 0.5) {
+            return raster;
+        }
+        
         return select(raster, pt_color, pt_color.a > 0.0);
     }
 

@@ -22,6 +22,12 @@ export class GpuMeshRenderPipelineManager {
     readonly indexBuffer: GPUBuffer;
     readonly indexCount: number;
 
+    private meshSplatsBuffer: GPUBuffer;
+    private meshUniformsBuffer: GPUBuffer;
+    private splatsBgl: GPUBindGroupLayout;
+    private splatsBindGroup: GPUBindGroup;
+    private numMeshSplats = 0;
+
     private groundVertexBuffer: GPUBuffer | null = null;
     private groundIndexBuffer: GPUBuffer | null = null;
     private groundIndexCount: number = 0;
@@ -79,9 +85,41 @@ export class GpuMeshRenderPipelineManager {
             ],
         });
 
+        this.splatsBgl = device.createBindGroupLayout({
+            label: "mesh splats bgl",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+            ],
+        });
+
+        this.numMeshSplats = 0;
+
+        const maxSplatsBytes = 4096 * 32; // 8 floats per splat
+        this.meshSplatsBuffer = device.createBuffer({
+            label: "mesh splats buffer",
+            size: maxSplatsBytes,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
+        this.meshUniformsBuffer = device.createBuffer({
+            label: "mesh splats uniform buffer",
+            size: 16,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        this.splatsBindGroup = device.createBindGroup({
+            label: "mesh splats bind group",
+            layout: this.splatsBgl,
+            entries: [
+                { binding: 0, resource: { buffer: this.meshSplatsBuffer } },
+                { binding: 1, resource: { buffer: this.meshUniformsBuffer } },
+            ],
+        });
+
         const pipelineLayout = device.createPipelineLayout({
             label: "mesh render pipeline layout",
-            bindGroupLayouts: [standardBgl],
+            bindGroupLayouts: [standardBgl, this.splatsBgl],
         });
 
         const fragmentTargets: GPUColorTargetState[] = [{ format }, { format }];
@@ -193,7 +231,7 @@ export class GpuMeshRenderPipelineManager {
 
         const pbrLayout = this.device.createPipelineLayout({
             label: "mesh pbr pipeline layout",
-            bindGroupLayouts: [pbrBgl],
+            bindGroupLayouts: [pbrBgl, this.splatsBgl],
         });
 
         this.pbrPipeline = this.device.createRenderPipeline({
@@ -244,6 +282,31 @@ export class GpuMeshRenderPipelineManager {
         });
     }
 
+    writeMeshSplatsEnabled(enabled: boolean) {
+        this.device.queue.writeBuffer(
+            this.meshUniformsBuffer,
+            0,
+            new Float32Array([enabled ? 1 : 0, this.numMeshSplats])
+        );
+    }
+
+    addSplat(p: [number, number, number], radius: number, color: [number, number, number]) {
+        if (this.numMeshSplats >= 4096) return;
+        const i = this.numMeshSplats;
+        const data = new Float32Array([
+            p[0], p[1], p[2], radius,
+            color[0], color[1], color[2], 1.0
+        ]);
+        this.device.queue.writeBuffer(this.meshSplatsBuffer, i * 32, data);
+        this.numMeshSplats++;
+        
+        this.device.queue.writeBuffer(
+            this.meshUniformsBuffer,
+            4,
+            new Float32Array([this.numMeshSplats])
+        );
+    }
+
     addDraw(renderPassEncoder: GPURenderPassEncoder, matcapTextureView: GPUTextureView) {
         const bindGroup = this.device.createBindGroup({
             label: "mesh matcap bind group",
@@ -257,6 +320,7 @@ export class GpuMeshRenderPipelineManager {
 
         renderPassEncoder.setPipeline(this.renderPipeline);
         renderPassEncoder.setBindGroup(0, bindGroup);
+        renderPassEncoder.setBindGroup(1, this.splatsBindGroup);
         renderPassEncoder.setVertexBuffer(0, this.vertexBuffer);
         renderPassEncoder.setIndexBuffer(this.indexBuffer, "uint32");
         renderPassEncoder.drawIndexed(this.indexCount);
@@ -272,6 +336,7 @@ export class GpuMeshRenderPipelineManager {
         if (this.pbrPipeline && this.pbrBindGroup && this.pbrVertexBuffer && this.pbrIndexBuffer && this.pbrIndexCount > 0) {
             renderPassEncoder.setPipeline(this.pbrPipeline);
             renderPassEncoder.setBindGroup(0, this.pbrBindGroup);
+            renderPassEncoder.setBindGroup(1, this.splatsBindGroup);
             renderPassEncoder.setVertexBuffer(0, this.pbrVertexBuffer);
             renderPassEncoder.setIndexBuffer(this.pbrIndexBuffer, "uint32");
             renderPassEncoder.drawIndexed(this.pbrIndexCount);

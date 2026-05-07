@@ -12,6 +12,9 @@ import groundAlbedoUrl from "$/assets/brown_mud_03_diff_2k.jpg?url";
 import groundNormalUrl from "$/assets/brown_mud_03_nor_gl_2k.png?url";
 import { loadHdrTexture } from "$/gpu/loadHdrTexture";
 import { loadTexture } from "$/gpu/loadTexture";
+import { buildBvh, raycastBvh, type BvhResult } from "$/gpu/bvh";
+import { vec4 } from "wgpu-matrix";
+import { STRIP_HEIGHT_FRAC } from "$/util";
 
 export class ViewerState {
     width = $state(300);
@@ -25,6 +28,10 @@ export class ViewerState {
     colorBezierTrainingPaused = $state(false);
     compareBlurred = $state(true);
     blurRadius = $state(16);
+    meshSplatsEnabled = $state(true);
+    
+    meshVerts: Float32Array | null = null;
+    meshBvh: BvhResult | null = null;
     
     runner = $state<GpuRunner | null>(null);
     
@@ -33,6 +40,49 @@ export class ViewerState {
         controlScheme: this.orbit,
         screenDims: { width: () => this.width, height: () => this.height },
     });
+
+    onPaintDrag(x: number, y: number) {
+        if (!this.meshBvh || !this.meshVerts || !this.runner || !this.meshSplatsEnabled) {
+            console.log("onPaintDrag skipped", { bvh: !!this.meshBvh, verts: !!this.meshVerts, runner: !!this.runner, enabled: this.meshSplatsEnabled });
+            return;
+        }
+        
+        const targetWidth = this.width / 2;
+        const targetHeight = this.height * (1 - STRIP_HEIGHT_FRAC);
+        
+        // Ignore clicks in the bottom strip
+        if (y > targetHeight) return;
+        
+        // Map x to either the left or right half
+        const localX = x % targetWidth;
+        
+        const ndcX = (localX / targetWidth) * 2 - 1;
+        const ndcY = -((y / targetHeight) * 2 - 1);
+        
+        const originNdC = [ndcX, ndcY, 0, 1];
+        const targetNdC = [ndcX, ndcY, 1, 1];
+        
+        const originWorldW = vec4.transformMat4(originNdC, this.camera.viewProjInvMat);
+        const targetWorldW = vec4.transformMat4(targetNdC, this.camera.viewProjInvMat);
+        
+        const origin = [originWorldW[0]/originWorldW[3], originWorldW[1]/originWorldW[3], originWorldW[2]/originWorldW[3]] as [number, number, number];
+        const target = [targetWorldW[0]/targetWorldW[3], targetWorldW[1]/targetWorldW[3], targetWorldW[2]/targetWorldW[3]] as [number, number, number];
+        
+        const dir = [target[0]-origin[0], target[1]-origin[1], target[2]-origin[2]] as [number, number, number];
+        const len = Math.sqrt(dir[0]*dir[0] + dir[1]*dir[1] + dir[2]*dir[2]);
+        dir[0] /= len; dir[1] /= len; dir[2] /= len;
+        
+        const hit = raycastBvh(this.meshBvh, this.meshVerts, origin, dir);
+        if (hit) {
+            console.log("Splat Hit at:", hit.p);
+            // Paint a splat with a random color and size
+            const radius = 0.02 + Math.random() * 0.08;
+            const color = [Math.random(), Math.random(), Math.random()] as [number, number, number];
+            this.runner.meshRenderPipelineManager.addSplat(hit.p, radius, color);
+        } else {
+            console.log("No hit");
+        }
+    }
 
     static mount({
         canvasPromise,
@@ -54,6 +104,9 @@ export class ViewerState {
                 loadGlb(groundUrl, false, [1, 1, 1, 1], 'Plane.001'), // Plane.001 — PBR textured
             ]);
             if (!gpu) return;
+
+            state.meshVerts = new Float32Array(mesh.vertices);
+            state.meshBvh = buildBvh(state.meshVerts, new Uint32Array(mesh.indices));
 
             const [envTexture, brushTexture, groundAlbedoTexture, groundNormalTexture] = await Promise.all([
                 loadHdrTexture(gpu.device, hdrUrl),

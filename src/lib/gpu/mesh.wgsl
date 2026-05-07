@@ -22,12 +22,28 @@ struct VertexOutput {
     @location(2) viewNormal: vec3f,
     @location(3) color: vec4f,
     @location(4) uv: vec2f,
+    @location(5) worldPos: vec3f,
 }
 
 struct FragOutput {
     @location(0) color: vec4f,
     @location(1) depth: vec4f,
 }
+
+struct MeshSplat {
+    pos: vec3f,
+    radius: f32,
+    color: vec3f,
+    hardness: f32,
+}
+
+struct MeshUniforms {
+    splatsEnabled: f32,
+    numSplats: f32,
+}
+
+@group(1) @binding(0) var<storage, read> textureSplats: array<MeshSplat>;
+@group(1) @binding(1) var<uniform> meshUniforms: MeshUniforms;
 
 // Near/far for depth remapping. Objects closer than DEPTH_NEAR get full
 // precision; the reciprocal mapping 1 - DEPTH_NEAR/depth compresses the
@@ -45,6 +61,7 @@ fn vert(in: VertexInput) -> VertexOutput {
     out.viewDepth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
     out.color = in.color;
     out.uv = in.uv;
+    out.worldPos = in.position;
     return out;
 }
 
@@ -60,7 +77,25 @@ fn frag(in: VertexOutput) -> FragOutput {
     // Tint the matcap by the material base color (linear multiply).
     let tinted_matcap = matcap_color * in.color.rgb;
 
-    let final_color = normals_color;
+    var final_color = normals_color;
+    
+    if (meshUniforms.splatsEnabled > 0.5) {
+        var splat_color = vec3f(0.0);
+        var total_weight = 0.0;
+        let num_splats = u32(meshUniforms.numSplats);
+        for (var i = 0u; i < num_splats; i++) {
+            let s = textureSplats[i];
+            let dist = length(in.worldPos - s.pos);
+            let w = exp(-(dist * dist) / (s.radius * s.radius));
+            splat_color += s.color * w;
+            total_weight += w;
+        }
+        let blend_factor = saturate(total_weight);
+        if (blend_factor > 0.001) {
+            final_color = mix(final_color, splat_color / total_weight, blend_factor);
+        }
+    }
+
     out.color = vec4f(reinhard(final_color * 4.0), 1.0);
     out.depth = vec4f(in.viewDepth, in.viewDepth, in.viewDepth, 1.0);
     return out;
@@ -84,6 +119,7 @@ fn vert_pbr(in: VertexInput) -> VertexOutput {
     out.viewDepth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
     out.color = in.color;
     out.uv = in.uv;
+    out.worldPos = in.position;
     return out;
 }
 
@@ -116,7 +152,25 @@ fn frag_pbr(in: VertexOutput) -> FragOutput {
     let lit = matcap_color * albedo;
 
     let normals_color = (worldNormal + 1.0) * 0.5;
-    let final_color = normals_color;
+    var final_color = normals_color;
+    
+    if (meshUniforms.splatsEnabled > 0.5) {
+        var splat_color = vec3f(0.0);
+        var total_weight = 0.0;
+        let num_splats = u32(meshUniforms.numSplats);
+        for (var i = 0u; i < num_splats; i++) {
+            let s = textureSplats[i];
+            let dist = length(in.worldPos - s.pos);
+            let w = exp(-(dist * dist) / (s.radius * s.radius));
+            splat_color += s.color * w;
+            total_weight += w;
+        }
+        let blend_factor = saturate(total_weight);
+        if (blend_factor > 0.001) {
+            final_color = mix(final_color, splat_color / total_weight, blend_factor);
+        }
+    }
+
     out.color = vec4f(reinhard(final_color * 4.0), 1.0);
     out.depth = vec4f(in.viewDepth, in.viewDepth, in.viewDepth, 1.0);
     return out;
