@@ -53,6 +53,8 @@ export class GpuEnvmapPipelineManager {
                     { format },
                     // Second color target (depth visualization) — write black/transparent
                     { format },
+                    // Third color target (normals) — write black/transparent
+                    { format },
                 ],
             },
             primitive: { topology: "triangle-list" },

@@ -18,6 +18,12 @@ struct VsOut {
     @location(0) ndc: vec2f,
 }
 
+struct EnvmapOut {
+    @location(0) color: vec4f,
+    @location(1) depth: vec4f,
+    @location(2) normal: vec4f,
+}
+
 @vertex
 fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
     // Two triangles covering the full screen.
@@ -36,7 +42,7 @@ const PI: f32 = 3.14159265358979;
 fn reinhard(c: vec3f) -> vec3f { return c / (c + 1.0); }
 
 @fragment
-fn frag(in: VsOut) -> @location(0) vec4f {
+fn frag(in: VsOut) -> EnvmapOut {
     // Reconstruct world-space ray direction from NDC position.
     // Unproject two points at different depths and take the direction.
     let near_h = uniforms.invViewProjMat * vec4f(in.ndc, 0.0, 1.0);
@@ -52,5 +58,9 @@ fn frag(in: VsOut) -> @location(0) vec4f {
     let v = 0.5 - lat / PI;
 
     let color = textureSample(envTex, envSampler, vec2f(u, v)).rgb;
-    return vec4f(reinhard(color * 4.0), 1.0);
+    var out: EnvmapOut;
+    out.color = vec4f(reinhard(color * 4.0), 1.0);
+    out.depth = vec4f(1.0, 1.0, 1.0, 1.0); // max depth for background
+    out.normal = vec4f(0.5, 0.5, 0.5, 1.0); // neutral normal for background
+    return out;
 }

@@ -47,6 +47,7 @@ export const GPU_CONSTANTS = {
     BLUR_SIGMA_S: 10.0,
     BLUR_SIGMA_C: 0.1,
     BLUR_SIGMA_D: 0.005,
+    BLUR_SIGMA_N: 0.05,
 };
 
 /**

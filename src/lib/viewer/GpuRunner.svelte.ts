@@ -101,6 +101,10 @@ export class GpuRunner {
     private optimBlurredDepthTextureView: GPUTextureView | null = null;
     private optimTempTexture: GPUTexture | null = null;
     private optimTempTextureView: GPUTextureView | null = null;
+    private targetNormalTexture: GPUTexture | null = null;
+    private targetNormalTextureView: GPUTextureView | null = null;
+    private optimNormalTexture: GPUTexture | null = null;
+    private optimNormalTextureView: GPUTextureView | null = null;
     private optimWidth = 0;
     private optimHeight = 0;
 
@@ -314,6 +318,7 @@ export class GpuRunner {
         this.pathTracePipelineManager.setOutputSize(ow, oh);
 
         if (this.optimTexture) this.optimTexture.destroy();
+        if (this.optimNormalTexture) this.optimNormalTexture.destroy();
         if (this.optimDepthTexture) this.optimDepthTexture.destroy();
         if (this.optimZTexture) this.optimZTexture.destroy();
         if (this.optimEdgeTexture) this.optimEdgeTexture.destroy();
@@ -325,6 +330,14 @@ export class GpuRunner {
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.optimTextureView = this.optimTexture.createView();
+        
+        this.optimNormalTexture = this.device.createTexture({
+            label: "optimization normal texture",
+            size: [ow, oh],
+            format: this.format,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.optimNormalTextureView = this.optimNormalTexture.createView();
 
         this.optimDepthTexture = this.device.createTexture({
             label: "optimization depth visualization",
@@ -463,6 +476,7 @@ export class GpuRunner {
             const fullH = Math.max(1, Math.floor(height * (1 - STRIP_HEIGHT_FRAC)));
             if (!this.targetTexture || this.fullWidth !== fullW || this.fullHeight !== fullH) {
                 if (this.targetTexture) this.targetTexture.destroy();
+                if (this.targetNormalTexture) this.targetNormalTexture.destroy();
                 if (this.targetDepthTexture) this.targetDepthTexture.destroy();
                 if (this.targetZTexture) this.targetZTexture.destroy();
                 if (this.fullEdgeTexture) this.fullEdgeTexture.destroy();
@@ -481,6 +495,14 @@ export class GpuRunner {
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
                 });
                 this.targetTextureView = this.targetTexture.createView();
+                
+                this.targetNormalTexture = this.device.createTexture({
+                    label: "full-res normal texture",
+                    size: [fullW, fullH],
+                    format: this.format,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+                });
+                this.targetNormalTextureView = this.targetNormalTexture.createView();
 
                 this.targetDepthTexture = this.device.createTexture({
                     label: "full-res depth visualization",
@@ -604,6 +626,12 @@ export class GpuRunner {
                         storeOp: "store",
                         view: this.targetDepthTextureView!,
                     },
+                    {
+                        clearValue: { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
+                        loadOp: "clear",
+                        storeOp: "store",
+                        view: this.targetNormalTextureView!,
+                    },
                 ],
                 depthStencilAttachment: {
                     view: this.targetZTextureView!,
@@ -631,6 +659,12 @@ export class GpuRunner {
                         loadOp: "clear",
                         storeOp: "store",
                         view: this.optimDepthTextureView!,
+                    },
+                    {
+                        clearValue: { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
+                        loadOp: "clear",
+                        storeOp: "store",
+                        view: this.optimNormalTextureView!,
                     },
                 ],
                 depthStencilAttachment: {
@@ -684,6 +718,7 @@ export class GpuRunner {
                     commandEncoder,
                     optimTargetView,
                     this.optimDepthTextureView!,
+                    this.optimNormalTextureView!,
                     this.optimDepthAwareBlurredTextureView!,
                     this.optimWidth,
                     this.optimHeight,

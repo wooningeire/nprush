@@ -123,7 +123,7 @@ export class GpuMeshRenderPipelineManager {
             bindGroupLayouts: [standardBgl, this.splatsBgl],
         });
 
-        const fragmentTargets: GPUColorTargetState[] = [{ format }, { format }];
+        const fragmentTargets: GPUColorTargetState[] = [{ format }, { format }, { format }];
 
         const primitiveState: GPUPrimitiveState = {
             topology: "triangle-list",
@@ -254,7 +254,7 @@ export class GpuMeshRenderPipelineManager {
             fragment: {
                 module,
                 entryPoint: "frag_pbr",
-                targets: [{ format: this._format }, { format: this._format }],
+                targets: [{ format: this._format }, { format: this._format }, { format: this._format }],
             },
             primitive: { topology: "triangle-list", cullMode: "back", frontFace: "ccw" },
             depthStencil: { format: MESH_DEPTH_FORMAT, depthWriteEnabled: true, depthCompare: "less" },

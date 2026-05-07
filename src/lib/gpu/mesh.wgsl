@@ -28,6 +28,7 @@ struct VertexOutput {
 struct FragOutput {
     @location(0) color: vec4f,
     @location(1) depth: vec4f,
+    @location(2) normal: vec4f,
 }
 
 struct MeshSplat {
@@ -98,6 +99,7 @@ fn frag(in: VertexOutput) -> FragOutput {
 
     out.color = vec4f(reinhard(final_color * 4.0), 1.0);
     out.depth = vec4f(in.viewDepth, in.viewDepth, in.viewDepth, 1.0);
+    out.normal = vec4f(normalize(in.viewNormal) * 0.5 + 0.5, 1.0);
     return out;
 }
 
@@ -173,5 +175,6 @@ fn frag_pbr(in: VertexOutput) -> FragOutput {
 
     out.color = vec4f(reinhard(final_color * 4.0), 1.0);
     out.depth = vec4f(in.viewDepth, in.viewDepth, in.viewDepth, 1.0);
+    out.normal = vec4f(normalize(in.viewNormal) * 0.5 + 0.5, 1.0);
     return out;
 }

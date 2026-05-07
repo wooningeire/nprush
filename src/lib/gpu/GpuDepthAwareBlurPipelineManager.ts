@@ -23,6 +23,7 @@ export class GpuDepthAwareBlurPipelineManager {
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm" } },
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
             ],
         });
 
@@ -46,6 +47,7 @@ export class GpuDepthAwareBlurPipelineManager {
         commandEncoder: GPUCommandEncoder,
         colorView: GPUTextureView,
         depthView: GPUTextureView,
+        normalView: GPUTextureView,
         dstView: GPUTextureView,
         width: number,
         height: number,
@@ -61,6 +63,7 @@ export class GpuDepthAwareBlurPipelineManager {
                 { binding: 1, resource: depthView },
                 { binding: 2, resource: dstView },
                 { binding: 3, resource: { buffer: this.paramsBuffer } },
+                { binding: 4, resource: normalView },
             ],
         });
 
