@@ -61,6 +61,13 @@ const {
     {/if}
 
 
+    <button 
+        class="render-btn" 
+        onclick={() => viewerState.takeScreenshot()}
+        disabled={viewerState.isCapturing}
+    >
+        Render to File
+    </button>
 </div>
 
 <style lang="scss">

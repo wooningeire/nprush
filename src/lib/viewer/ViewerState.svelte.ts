@@ -33,6 +33,7 @@ export class ViewerState {
     
     meshVerts: Float32Array | null = null;
     meshBvh: BvhResult | null = null;
+    isCapturing = $state(false);
     
     runner = $state<GpuRunner | null>(null);
     
@@ -78,6 +79,24 @@ export class ViewerState {
             const radius = 0.02 + Math.random() * 0.08;
             const color = [Math.random(), Math.random(), Math.random()] as [number, number, number];
             this.runner.meshRenderPipelineManager.addSplat(hit.p, radius, color);
+        }
+    }
+
+    async takeScreenshot() {
+        if (!this.runner || this.isCapturing) return;
+        this.isCapturing = true;
+        try {
+            const blob = await this.runner.takeScreenshot();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `nprush-render-${Date.now()}.png`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error("Failed to take screenshot", e);
+        } finally {
+            this.isCapturing = false;
         }
     }
 

@@ -60,6 +60,7 @@ export const requestGpu = async ({
     context.configure({
         device,
         format,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
         alphaMode: "premultiplied",
     });
 

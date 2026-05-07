@@ -110,6 +110,8 @@ export class GpuRunner {
     private optimWidth = 0;
     private optimHeight = 0;
 
+    private capturePromise: { resolve: (blob: Blob) => void, reject: (err: Error) => void } | null = null;
+
     readonly destroy: () => void;
 
     constructor({
@@ -297,6 +299,12 @@ export class GpuRunner {
                 this.baseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.baseColorLayerBezierManager.setAdcPeriod(150);
             });
+        });
+    }
+
+    async takeScreenshot(): Promise<Blob> {
+        return new Promise((resolve, reject) => {
+            this.capturePromise = { resolve, reject };
         });
     }
 
@@ -856,6 +864,71 @@ export class GpuRunner {
             this.device.queue.submit([commandEncoder.finish()]);
 
             if (canceled) return;
+
+            if (this.capturePromise) {
+                const { resolve, reject } = this.capturePromise;
+                this.capturePromise = null;
+
+                const texture = currentTexture;
+                const width = texture.width;
+                const height = texture.height;
+
+                const bytesPerPixel = 4;
+                const unpaddedBytesPerRow = width * bytesPerPixel;
+                const paddedBytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
+
+                const buffer = this.device.createBuffer({
+                    label: "screenshot buffer",
+                    size: paddedBytesPerRow * height,
+                    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+                });
+
+                const copyEncoder = this.device.createCommandEncoder({ label: "screenshot copy encoder" });
+                copyEncoder.copyTextureToBuffer(
+                    { texture },
+                    { buffer, bytesPerRow: paddedBytesPerRow },
+                    [width, height]
+                );
+                this.device.queue.submit([copyEncoder.finish()]);
+
+                buffer.mapAsync(GPUMapMode.READ).then(() => {
+                    const arrayBuffer = buffer.getMappedRange();
+                    const data = new Uint8Array(arrayBuffer.slice(0));
+                    buffer.unmap();
+                    buffer.destroy();
+
+                    const canvas = document.createElement("canvas");
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext("2d")!;
+                    const imageData = ctx.createImageData(width, height);
+
+                    const isBgra = this.format === "bgra8unorm";
+                    for (let y = 0; y < height; y++) {
+                        for (let x = 0; x < width; x++) {
+                            const srcIdx = y * paddedBytesPerRow + x * bytesPerPixel;
+                            const dstIdx = (y * width + x) * 4;
+                            if (isBgra) {
+                                imageData.data[dstIdx + 0] = data[srcIdx + 2];
+                                imageData.data[dstIdx + 1] = data[srcIdx + 1];
+                                imageData.data[dstIdx + 2] = data[srcIdx + 0];
+                                imageData.data[dstIdx + 3] = data[srcIdx + 3];
+                            } else {
+                                imageData.data[dstIdx + 0] = data[srcIdx + 0];
+                                imageData.data[dstIdx + 1] = data[srcIdx + 1];
+                                imageData.data[dstIdx + 2] = data[srcIdx + 2];
+                                imageData.data[dstIdx + 3] = data[srcIdx + 3];
+                            }
+                        }
+                    }
+                    ctx.putImageData(imageData, 0, 0);
+                    canvas.toBlob((blob) => {
+                        if (blob) resolve(blob);
+                        else reject(new Error("Failed to create blob"));
+                    }, "image/png");
+                }).catch(reject);
+            }
+
             handle = requestAnimationFrame(loop);
         };
 
