@@ -102,22 +102,80 @@ export class ViewerState {
 
     // --- Turntable Animation ---
     turntableFrameCount = $state(120);
-    turntableStepsPerFrame = $state(50);
+    turntableStepsPerFrame = $state(10);
     turntableProgress = $state(0);
     isTurntableRendering = $state(false);
     turntableCanceled = false;
+
+    // Multi-view training: when enabled, each frame trains from a random
+    // camera angle sampled from the turntable animation path.
+    turntableTraining = $state(false);
+
+    // Time-varying path parameters.
+    // t ∈ [0, 1] → full revolution.
+    // long(t) = baseLong + t * 2π
+    // lat(t)  = latCenter + latAmplitude * sin(t * 2π * latCycles)
+    // radius(t) = radiusCenter + radiusAmplitude * sin(t * 2π * radiusCycles)
+    turntableLatCenter = $state(Math.PI * 1 / 4);
+    turntableLatAmplitude = $state(0);
+    turntableLatCycles = $state(1);
+    turntableRadiusCenter = $state(1);
+    turntableRadiusAmplitude = $state(0);
+    turntableRadiusCycles = $state(2);
+
+    /**
+     * Evaluate the turntable animation path at a normalized time t ∈ [0, 1].
+     */
+    evaluatePath(t: number, baseLong: number): { long: number; lat: number; radius: number } {
+        const TWO_PI = Math.PI * 2;
+        return {
+            long: baseLong + t * TWO_PI,
+            lat: this.turntableLatCenter + this.turntableLatAmplitude * Math.sin(t * TWO_PI * this.turntableLatCycles),
+            radius: this.turntableRadiusCenter + this.turntableRadiusAmplitude * Math.sin(t * TWO_PI * this.turntableRadiusCycles),
+        };
+    }
+
+    /** Saved longitude origin for multi-view training. */
+    private turntableBaseLong = 0;
+
+    /**
+     * Toggle multi-view turntable training. When enabled, each training
+     * frame will use a randomly sampled camera angle from the animation path.
+     */
+    toggleTurntableTraining() {
+        this.turntableTraining = !this.turntableTraining;
+        if (this.turntableTraining) {
+            // Snapshot current camera as the base reference
+            this.turntableBaseLong = this.orbit.long;
+            this.turntableLatCenter = this.orbit.lat;
+            this.turntableRadiusCenter = this.orbit.radius;
+        }
+    }
+
+    /**
+     * Called each frame by the render loop while turntableTraining is enabled.
+     * Sets the camera to a random view from the turntable path so the
+     * optimizer sees all angles.
+     */
+    tickTurntableTraining() {
+        if (!this.turntableTraining) return;
+        const t = Math.random();
+        const p = this.evaluatePath(t, this.turntableBaseLong);
+        this.orbit.long = p.long;
+        this.orbit.lat = p.lat;
+        this.orbit.radius = p.radius;
+    }
 
     cancelTurntable() {
         this.turntableCanceled = true;
     }
 
     /**
-     * Render a turntable animation:
-     * 1. Save current camera state
-     * 2. For each frame, set camera longitude, run N training steps, capture composited frame
-     * 3. Encode all frames into a WebM video via MediaRecorder
-     * 4. Download the video
-     * 5. Restore camera state
+     * Render the turntable animation:
+     * 1. Deterministically sweep through the animation path
+     * 2. At each frame position, run a few training steps
+     * 3. Capture the composited frame
+     * 4. Encode all frames into a video and download
      */
     async renderTurntable() {
         if (!this.runner || this.isTurntableRendering) return;
@@ -126,27 +184,27 @@ export class ViewerState {
         this.turntableCanceled = false;
         this.turntableProgress = 0;
 
-        // Save original camera state
         const origLong = this.orbit.long;
         const origLat = this.orbit.lat;
         const origRadius = this.orbit.radius;
 
+        const baseLong = this.turntableTraining ? this.turntableBaseLong : origLong;
+
         const totalFrames = this.turntableFrameCount;
         const stepsPerFrame = this.turntableStepsPerFrame;
 
-        // We'll collect frames first, then encode
         const frames: ImageData[] = [];
 
         try {
             for (let frame = 0; frame < totalFrames; frame++) {
                 if (this.turntableCanceled) break;
 
-                // Set camera to the turntable angle for this frame
                 const t = frame / totalFrames;
-                this.orbit.long = origLong + t * Math.PI * 2;
+                const p = this.evaluatePath(t, baseLong);
+                this.orbit.long = p.long;
+                this.orbit.lat = p.lat;
+                this.orbit.radius = p.radius;
 
-                // Run N training steps at this camera angle by waiting for rAF ticks.
-                // Each rAF tick runs one optimization step in the loop.
                 for (let step = 0; step < stepsPerFrame; step++) {
                     if (this.turntableCanceled) break;
                     await new Promise<void>(r => requestAnimationFrame(() => r()));
@@ -154,20 +212,17 @@ export class ViewerState {
 
                 if (this.turntableCanceled) break;
 
-                // Capture the composited frame
                 const imageData = await this.runner.captureTurntableFrame();
                 frames.push(imageData);
                 this.turntableProgress = (frame + 1) / totalFrames;
             }
 
             if (!this.turntableCanceled && frames.length > 0) {
-                // Encode frames into a WebM video using canvas + MediaRecorder
                 await this.encodeFramesToVideo(frames);
             }
         } catch (e) {
             console.error("Turntable render failed", e);
         } finally {
-            // Restore camera
             this.orbit.long = origLong;
             this.orbit.lat = origLat;
             this.orbit.radius = origRadius;
@@ -189,7 +244,7 @@ export class ViewerState {
         canvas.height = h;
         const ctx = canvas.getContext("2d")!;
 
-        const stream = canvas.captureStream(fps); 
+        const stream = canvas.captureStream(fps);
         
         const mimeType = [
             "video/webm;codecs=vp9",
@@ -214,18 +269,13 @@ export class ViewerState {
         });
 
         recorder.start();
-        
-        // Let the recorder "warm up"
         await new Promise(r => setTimeout(r, 100));
 
         for (const frame of frames) {
             ctx.putImageData(frame, 0, 0);
-            // With fixed FPS captureStream, the recorder pulls from the canvas automatically.
-            // We just need to wait long enough for it to see the frame.
             await new Promise(r => setTimeout(r, frameDuration));
         }
 
-        // Small trailing buffer
         await new Promise(r => setTimeout(r, 100));
 
         recorder.stop();

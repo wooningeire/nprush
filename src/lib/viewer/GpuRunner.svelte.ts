@@ -684,43 +684,48 @@ export class GpuRunner {
                 return;
             }
 
+            // Multi-view turntable training: randomize camera each frame
+            this.viewerState.tickTurntableTraining();
+
             const commandEncoder = this.device.createCommandEncoder({
                 label: "runner loop command encoder",
             });
 
             // 1a. Render the model into the full-res target + depth textures (for visualization).
-            const spherePassEncoder = commandEncoder.beginRenderPass({
-                label: "mesh render pass (full res)",
-                colorAttachments: [
-                    {
-                        clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
-                        loadOp: "clear",
-                        storeOp: "store",
-                        view: this.targetTextureView,
+            if (!this.viewerState.turntableTraining) {
+                const spherePassEncoder = commandEncoder.beginRenderPass({
+                    label: "mesh render pass (full res)",
+                    colorAttachments: [
+                        {
+                            clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
+                            loadOp: "clear",
+                            storeOp: "store",
+                            view: this.targetTextureView,
+                        },
+                        {
+                            clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+                            loadOp: "clear",
+                            storeOp: "store",
+                            view: this.targetDepthTextureView!,
+                        },
+                        {
+                            clearValue: { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
+                            loadOp: "clear",
+                            storeOp: "store",
+                            view: this.targetNormalTextureView!,
+                        },
+                    ],
+                    depthStencilAttachment: {
+                        view: this.targetZTextureView!,
+                        depthClearValue: 1.0,
+                        depthLoadOp: "clear",
+                        depthStoreOp: "store",
                     },
-                    {
-                        clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
-                        loadOp: "clear",
-                        storeOp: "store",
-                        view: this.targetDepthTextureView!,
-                    },
-                    {
-                        clearValue: { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
-                        loadOp: "clear",
-                        storeOp: "store",
-                        view: this.targetNormalTextureView!,
-                    },
-                ],
-                depthStencilAttachment: {
-                    view: this.targetZTextureView!,
-                    depthClearValue: 1.0,
-                    depthLoadOp: "clear",
-                    depthStoreOp: "store",
-                },
-            });
-            this.envmapPipelineManager.addDraw(spherePassEncoder);
-            this.meshRenderPipelineManager.addDraw(spherePassEncoder, this.matcapTextureView);
-            spherePassEncoder.end();
+                });
+                this.envmapPipelineManager.addDraw(spherePassEncoder);
+                this.meshRenderPipelineManager.addDraw(spherePassEncoder, this.matcapTextureView);
+                spherePassEncoder.end();
+            }
 
             // 1b. Render the model into the optim-res (aspect-matched) textures for gradient computation.
             const optimPassEncoder = commandEncoder.beginRenderPass({
@@ -832,7 +837,9 @@ export class GpuRunner {
             this.splatForwardManager.dispatch(commandEncoder, true);
 
             // 3.2 Restore full-res target for visualization later
-            this.splatForwardManager.setTarget(this.fullSplatTextureView!, this.fullSplatDepthTextureView!, fullW, fullH);
+            if (!this.viewerState.turntableTraining) {
+                this.splatForwardManager.setTarget(this.fullSplatTextureView!, this.fullSplatDepthTextureView!, fullW, fullH);
+            }
 
             // 3b. Train the bezier edge layer: its target is the freshly-computed
             // edge texture, so the curves learn to trace the depth silhouette.
@@ -882,23 +889,25 @@ export class GpuRunner {
             }
 
             // 4. Run edge detection on full-res depth (for display)
-            this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);
-            this.splatOptimizerManager.dispatchEdge(commandEncoder, fullW, fullH);
-            // Restore optim-res edge bind group for next frame
-            this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!);
+            if (!this.viewerState.turntableTraining) {
+                this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);
+                this.splatOptimizerManager.dispatchEdge(commandEncoder, fullW, fullH);
+                // Restore optim-res edge bind group for next frame
+                this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!);
 
-            // 4.5. Compute views into textures
-            this.splatForwardManager.dispatch(commandEncoder, true);
-            if (this.viewerState.edgeBeziersEnabled) {
-                this.bezierForwardManager.dispatch(commandEncoder, true);
-            }
-            if (this.viewerState.baseColorBeziersEnabled) {
-                // For the full-res visualizer, we just want the base layer isolated, not drawn over splats
-                this.baseColorBezierForwardManager.setTarget(this.fullBaseColorBezierTextureView!, fullW, fullH);
-                this.baseColorBezierForwardManager.dispatch(commandEncoder, true);
-            }
-            if (this.viewerState.colorBeziersEnabled) {
-                this.colorBezierForwardManager.dispatch(commandEncoder, true);
+                // 4.5. Compute views into textures
+                this.splatForwardManager.dispatch(commandEncoder, true);
+                if (this.viewerState.edgeBeziersEnabled) {
+                    this.bezierForwardManager.dispatch(commandEncoder, true);
+                }
+                if (this.viewerState.baseColorBeziersEnabled) {
+                    // For the full-res visualizer, we just want the base layer isolated, not drawn over splats
+                    this.baseColorBezierForwardManager.setTarget(this.fullBaseColorBezierTextureView!, fullW, fullH);
+                    this.baseColorBezierForwardManager.dispatch(commandEncoder, true);
+                }
+                if (this.viewerState.colorBeziersEnabled) {
+                    this.colorBezierForwardManager.dispatch(commandEncoder, true);
+                }
             }
 
             // 5. Render Splat Visualization to Screen View (uses full-res textures)

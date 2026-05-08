@@ -6,6 +6,9 @@ const {
 }: {
     viewerState: ViewerState;
 } = $props();
+
+const latDeg = $derived(Math.round(viewerState.turntableLatAmplitude * 180 / Math.PI));
+const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 </script>
 
 <div class="overlays">
@@ -80,6 +83,21 @@ const {
     <div class="turntable-section">
         <div class="section-title">Turntable Animation</div>
 
+        <!-- Multi-view training toggle -->
+        <button
+            class="render-btn"
+            class:training-active={viewerState.turntableTraining}
+            onclick={() => viewerState.toggleTurntableTraining()}
+            disabled={viewerState.isTurntableRendering}
+        >
+            {#if viewerState.turntableTraining}
+                <div class="pulse-dot"></div>
+                Multi-View Training Active
+            {:else}
+                🔄 Start Multi-View Training
+            {/if}
+        </button>
+
         <div class="slider-group">
             <label>
                 Frames: {viewerState.turntableFrameCount}
@@ -95,6 +113,42 @@ const {
                     disabled={viewerState.isTurntableRendering} />
             </label>
         </div>
+
+        <div class="param-header">Path Variation</div>
+
+        <div class="slider-group">
+            <label>
+                Lat oscillation: {latDeg}°
+                <input type="range" min="0" max={Math.PI / 3} step="0.01" bind:value={viewerState.turntableLatAmplitude}
+                    disabled={viewerState.isTurntableRendering} />
+            </label>
+        </div>
+        {#if viewerState.turntableLatAmplitude > 0}
+            <div class="slider-group sub-param">
+                <label>
+                    Lat cycles: {viewerState.turntableLatCycles}
+                    <input type="range" min="1" max="8" step="1" bind:value={viewerState.turntableLatCycles}
+                        disabled={viewerState.isTurntableRendering} />
+                </label>
+            </div>
+        {/if}
+
+        <div class="slider-group">
+            <label>
+                Radius oscillation: {radPct}%
+                <input type="range" min="0" max="0.5" step="0.01" bind:value={viewerState.turntableRadiusAmplitude}
+                    disabled={viewerState.isTurntableRendering} />
+            </label>
+        </div>
+        {#if viewerState.turntableRadiusAmplitude > 0}
+            <div class="slider-group sub-param">
+                <label>
+                    Radius cycles: {viewerState.turntableRadiusCycles}
+                    <input type="range" min="1" max="8" step="1" bind:value={viewerState.turntableRadiusCycles}
+                        disabled={viewerState.isTurntableRendering} />
+                </label>
+            </div>
+        {/if}
 
         {#if viewerState.isTurntableRendering}
             <div class="progress-container">
@@ -213,6 +267,16 @@ const {
                     box-shadow: 0 5px 14px rgba(239, 68, 68, 0.4);
                 }
             }
+
+            &.training-active {
+                background: linear-gradient(135deg, #f59e0b 0%, #f97316 100%);
+                box-shadow: 0 3px 10px rgba(245, 158, 11, 0.3);
+                animation: glow-pulse 2s ease-in-out infinite;
+
+                &:hover:not(:disabled) {
+                    box-shadow: 0 5px 14px rgba(245, 158, 11, 0.4);
+                }
+            }
         }
 
         .spinner {
@@ -224,8 +288,26 @@ const {
             animation: spin 0.8s linear infinite;
         }
 
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: white;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
         @keyframes spin {
             to { transform: rotate(360deg); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.8); }
+        }
+
+        @keyframes glow-pulse {
+            0%, 100% { box-shadow: 0 3px 10px rgba(245, 158, 11, 0.3); }
+            50% { box-shadow: 0 3px 16px rgba(245, 158, 11, 0.5); }
         }
 
         .turntable-section {
@@ -236,6 +318,16 @@ const {
                 letter-spacing: 0.06em;
                 color: rgba(255, 255, 255, 0.5);
                 margin-bottom: 0.35rem;
+            }
+
+            .param-header {
+                font-size: 0.7rem;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                color: rgba(255, 255, 255, 0.35);
+                margin-top: 0.4rem;
+                margin-bottom: 0.15rem;
             }
         }
 
@@ -253,6 +345,14 @@ const {
             input[type="range"] {
                 width: 100%;
                 accent-color: #a855f7;
+            }
+
+            &.sub-param {
+                margin-left: 0.75rem;
+                label {
+                    color: rgba(255, 255, 255, 0.5);
+                    font-size: 0.75rem;
+                }
             }
         }
 
