@@ -1,5 +1,5 @@
 import forwardModuleSrc from "./bezier_forward.wgsl?raw";
-import { GPU_CONSTANTS, injectWgslConstants } from "./constants";
+import { GPU_CONSTANTS, injectWgslConstants } from "../constants";
 
 export class GpuBezierForwardPipelineManager {
     private readonly device: GPUDevice;

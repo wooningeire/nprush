@@ -1,5 +1,5 @@
 import depthAwareBlurModuleSrc from "./depth_aware_blur.wgsl?raw";
-import { GPU_CONSTANTS, injectWgslConstants } from "./constants";
+import { GPU_CONSTANTS, injectWgslConstants } from "../constants";
 
 export class GpuDepthAwareBlurPipelineManager {
     private readonly device: GPUDevice;

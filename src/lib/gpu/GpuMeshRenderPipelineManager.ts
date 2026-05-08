@@ -1,6 +1,6 @@
 import type { GpuUniformsBufferManager } from "./GpuUniformsBufferManager";
 import { GPU_CONSTANTS, injectWgslConstants } from "./constants";
-import type { MeshData } from "./loadGlb";
+import type { MeshData } from "./io/loadGlb.ts";
 import meshModuleSrc from "./mesh.wgsl?raw";
 
 // Format the caller must use for the depth-stencil attachment paired with this

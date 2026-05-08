@@ -1,4 +1,4 @@
-import type { GpuUniformsBufferManager } from "./GpuUniformsBufferManager";
+import type { GpuUniformsBufferManager } from "../GpuUniformsBufferManager";
 import envmapSrc from "./envmap.wgsl?raw";
 
 // Renders the equirectangular environment map as a fullscreen background.

@@ -1,8 +1,8 @@
 import pathTraceSrc from "./path_trace.wgsl?raw";
 import resolveSrc from "./path_trace_resolve.wgsl?raw";
-import { buildBvh } from "./bvh";
-import { GPU_CONSTANTS, injectWgslConstants } from "./constants";
-import type { MeshData } from "./loadGlb";
+import { buildBvh } from "../bvh.ts";
+import { GPU_CONSTANTS, injectWgslConstants } from "../constants";
+import type { MeshData } from "../io/loadGlb.ts";
 
 // Progressive path tracer with BVH acceleration.
 // Each dispatch() adds one sample per pixel; reset() clears on camera move.

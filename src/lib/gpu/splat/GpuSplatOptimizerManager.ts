@@ -5,7 +5,7 @@ import adcModuleSrc from "./splat_adc.wgsl?raw";
 import edgeModuleSrc from "./splat_edge.wgsl?raw";
 import sortModuleSrc from "./splat_sort.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
-import { GPU_CONSTANTS, injectWgslConstants } from "./constants";
+import { GPU_CONSTANTS, injectWgslConstants } from "../constants";
 
 export class GpuSplatOptimizerManager {
     private readonly device: GPUDevice;
