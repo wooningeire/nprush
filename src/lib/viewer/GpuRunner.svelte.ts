@@ -13,6 +13,7 @@ import type { MeshData } from "../gpu/io/loadGlb.ts";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 import type { ViewerState } from "./ViewerState.svelte.ts";
 import { GPU_CONSTANTS } from "$/gpu/constants";
+import { readTextureToImageData, imageDataToBlob } from "$/gpu/io/readback.ts";
 
 const OPTIM_SHORT = GPU_CONSTANTS.OPTIM_SHORT;
 
@@ -335,49 +336,7 @@ export class GpuRunner {
         width: number,
         height: number,
     ): Promise<ImageData> {
-        const bytesPerPixel = 4;
-        const unpaddedBytesPerRow = width * bytesPerPixel;
-        const paddedBytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
-
-        const buffer = this.device.createBuffer({
-            label: "texture readback buffer",
-            size: paddedBytesPerRow * height,
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-        });
-
-        const enc = this.device.createCommandEncoder({ label: "texture readback encoder" });
-        enc.copyTextureToBuffer(
-            { texture },
-            { buffer, bytesPerRow: paddedBytesPerRow },
-            [width, height],
-        );
-        this.device.queue.submit([enc.finish()]);
-
-        await buffer.mapAsync(GPUMapMode.READ);
-        const raw = new Uint8Array(buffer.getMappedRange().slice(0));
-        buffer.unmap();
-        buffer.destroy();
-
-        const imageData = new ImageData(width, height);
-        const isBgra = texture.format === "bgra8unorm";
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const src = y * paddedBytesPerRow + x * bytesPerPixel;
-                const dst = (y * width + x) * 4;
-                if (isBgra) {
-                    imageData.data[dst + 0] = raw[src + 2];
-                    imageData.data[dst + 1] = raw[src + 1];
-                    imageData.data[dst + 2] = raw[src + 0];
-                    imageData.data[dst + 3] = raw[src + 3];
-                } else {
-                    imageData.data[dst + 0] = raw[src + 0];
-                    imageData.data[dst + 1] = raw[src + 1];
-                    imageData.data[dst + 2] = raw[src + 2];
-                    imageData.data[dst + 3] = raw[src + 3];
-                }
-            }
-        }
-        return imageData;
+        return readTextureToImageData(this.device, texture, width, height, this.format);
     }
 
     private rebuildOptimTextures(panelAspect: number) {
@@ -960,60 +919,10 @@ export class GpuRunner {
                 const width = texture.width;
                 const height = texture.height;
 
-                const bytesPerPixel = 4;
-                const unpaddedBytesPerRow = width * bytesPerPixel;
-                const paddedBytesPerRow = Math.ceil(unpaddedBytesPerRow / 256) * 256;
-
-                const buffer = this.device.createBuffer({
-                    label: "screenshot buffer",
-                    size: paddedBytesPerRow * height,
-                    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-                });
-
-                const copyEncoder = this.device.createCommandEncoder({ label: "screenshot copy encoder" });
-                copyEncoder.copyTextureToBuffer(
-                    { texture },
-                    { buffer, bytesPerRow: paddedBytesPerRow },
-                    [width, height]
-                );
-                this.device.queue.submit([copyEncoder.finish()]);
-
-                buffer.mapAsync(GPUMapMode.READ).then(() => {
-                    const arrayBuffer = buffer.getMappedRange();
-                    const data = new Uint8Array(arrayBuffer.slice(0));
-                    buffer.unmap();
-                    buffer.destroy();
-
-                    const canvas = document.createElement("canvas");
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext("2d")!;
-                    const imageData = ctx.createImageData(width, height);
-
-                    const isBgra = this.format === "bgra8unorm";
-                    for (let y = 0; y < height; y++) {
-                        for (let x = 0; x < width; x++) {
-                            const srcIdx = y * paddedBytesPerRow + x * bytesPerPixel;
-                            const dstIdx = (y * width + x) * 4;
-                            if (isBgra) {
-                                imageData.data[dstIdx + 0] = data[srcIdx + 2];
-                                imageData.data[dstIdx + 1] = data[srcIdx + 1];
-                                imageData.data[dstIdx + 2] = data[srcIdx + 0];
-                                imageData.data[dstIdx + 3] = data[srcIdx + 3];
-                            } else {
-                                imageData.data[dstIdx + 0] = data[srcIdx + 0];
-                                imageData.data[dstIdx + 1] = data[srcIdx + 1];
-                                imageData.data[dstIdx + 2] = data[srcIdx + 2];
-                                imageData.data[dstIdx + 3] = data[srcIdx + 3];
-                            }
-                        }
-                    }
-                    ctx.putImageData(imageData, 0, 0);
-                    canvas.toBlob((blob) => {
-                        if (blob) resolve(blob);
-                        else reject(new Error("Failed to create blob"));
-                    }, "image/png");
-                }).catch(reject);
+                readTextureToImageData(this.device, texture, width, height, this.format)
+                    .then(imageDataToBlob)
+                    .then(resolve)
+                    .catch(reject);
             }
 
             // Turntable frame capture — read back composited layers

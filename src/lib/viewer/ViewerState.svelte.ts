@@ -16,6 +16,7 @@ import { loadTexture } from "../gpu/io/loadTexture.ts";
 import { buildBvh, raycastBvh, type BvhResult } from "../gpu/bvh.ts";
 import { vec4 } from "wgpu-matrix";
 import { STRIP_HEIGHT_FRAC } from "$/util";
+import { downloadBlob, encodeFramesToVideo } from "../util/export.ts";
 
 export class ViewerState {
     width = $state(300);
@@ -87,12 +88,7 @@ export class ViewerState {
         this.isCapturing = true;
         try {
             const blob = await this.runner.takeScreenshot();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `nprush-render-${Date.now()}.png`;
-            a.click();
-            URL.revokeObjectURL(url);
+            downloadBlob(blob, `nprush-render-${Date.now()}.png`);
         } catch (e) {
             console.error("Failed to take screenshot", e);
         } finally {
@@ -234,61 +230,13 @@ export class ViewerState {
     private async encodeFramesToVideo(frames: ImageData[]) {
         if (frames.length === 0) return;
 
-        const w = frames[0].width;
-        const h = frames[0].height;
-        const fps = 30;
-        const frameDuration = 1000 / fps;
-
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d")!;
-
-        const stream = canvas.captureStream(fps);
-        
-        const mimeType = [
-            "video/webm;codecs=vp9",
-            "video/webm;codecs=vp8",
-            "video/webm",
-            "video/mp4",
-        ].find(t => MediaRecorder.isTypeSupported(t)) || "video/webm";
-
-        const recorder = new MediaRecorder(stream, {
-            mimeType,
-            videoBitsPerSecond: 8_000_000,
-        });
-
-        const chunks: Blob[] = [];
-        recorder.ondataavailable = (e) => {
-            if (e.data.size > 0) chunks.push(e.data);
-        };
-
-        const done = new Promise<void>((resolve, reject) => {
-            recorder.onstop = () => resolve();
-            recorder.onerror = (e) => reject(e);
-        });
-
-        recorder.start();
-        await new Promise(r => setTimeout(r, 100));
-
-        for (const frame of frames) {
-            ctx.putImageData(frame, 0, 0);
-            await new Promise(r => setTimeout(r, frameDuration));
+        try {
+            const { blob, mimeType } = await encodeFramesToVideo(frames, 30);
+            const extension = mimeType.includes("mp4") ? "mp4" : "webm";
+            downloadBlob(blob, `nprush-turntable-${Date.now()}.${extension}`);
+        } catch (e) {
+            console.error("Failed to encode video", e);
         }
-
-        await new Promise(r => setTimeout(r, 100));
-
-        recorder.stop();
-        await done;
-
-        const blob = new Blob(chunks, { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        const extension = mimeType.includes("mp4") ? "mp4" : "webm";
-        a.download = `nprush-turntable-${Date.now()}.${extension}`;
-        a.click();
-        URL.revokeObjectURL(url);
     }
 
     static mount({
