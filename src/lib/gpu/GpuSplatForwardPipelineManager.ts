@@ -9,6 +9,7 @@ export class GpuSplatForwardPipelineManager {
     private bindGroup: GPUBindGroup | null = null;
     private dims: { width: number, height: number } = { width: 0, height: 0 };
     private readonly splatBuffer: GPUBuffer;
+    private readonly sortOrderBuffer: GPUBuffer;
     private readonly uniformsBuffer: GPUBuffer;
     private readonly numSplats: number;
     private targetColorView: GPUTextureView | null = null;
@@ -27,6 +28,7 @@ export class GpuSplatForwardPipelineManager {
     }) {
         this.device = device;
         this.splatBuffer = splatBuffer;
+        this.sortOrderBuffer = sortOrderBuffer;
         this.numSplats = numSplats;
 
         // VP matrix (64 bytes) + dims (8 bytes) + pad (8 bytes) = 80 bytes
@@ -90,7 +92,7 @@ export class GpuSplatForwardPipelineManager {
             entries: [
                 { binding: 0, resource: { buffer: this.splatBuffer } },
                 { binding: 1, resource: { buffer: this.uniformsBuffer } },
-                { binding: 2, resource: { buffer: sortOrderBuffer } },
+                { binding: 2, resource: { buffer: this.sortOrderBuffer } },
             ],
         });
     }

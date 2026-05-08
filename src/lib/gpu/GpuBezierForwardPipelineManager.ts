@@ -9,6 +9,7 @@ export class GpuBezierForwardPipelineManager {
     private targetView: GPUTextureView | null = null;
     private dims: { width: number, height: number } = { width: 0, height: 0 };
     private readonly bezierBuffer: GPUBuffer;
+    private readonly sortOrderBuffer: GPUBuffer;
     private readonly bezierUniformsBuffer: GPUBuffer;
     private readonly numBeziers: number;
     private readonly brushSampler: GPUSampler;
@@ -18,15 +19,18 @@ export class GpuBezierForwardPipelineManager {
         device,
         numBeziers,
         bezierBuffer,
+        sortOrderBuffer,
         brushTexture,
     }: {
         device: GPUDevice,
         numBeziers: number,
         bezierBuffer: GPUBuffer,
+        sortOrderBuffer: GPUBuffer,
         brushTexture: GPUTexture,
     }) {
         this.device = device;
         this.bezierBuffer = bezierBuffer;
+        this.sortOrderBuffer = sortOrderBuffer;
         this.numBeziers = numBeziers;
         this.brushTextureView = brushTexture.createView();
 
@@ -52,6 +56,7 @@ export class GpuBezierForwardPipelineManager {
                 { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
                 { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
                 { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
             ],
         });
 
@@ -124,6 +129,7 @@ export class GpuBezierForwardPipelineManager {
                 { binding: 1, resource: { buffer: this.bezierUniformsBuffer } },
                 { binding: 2, resource: this.brushSampler },
                 { binding: 3, resource: this.brushTextureView },
+                { binding: 4, resource: { buffer: this.sortOrderBuffer } },
             ],
         });
     }

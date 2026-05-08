@@ -220,6 +220,7 @@ export class GpuRunner {
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.edgeLayerBezierManager.bezierBuffer,
+            sortOrderBuffer: this.edgeLayerBezierManager.sortIndicesBuffer,
             brushTexture,
         });
 
@@ -227,6 +228,7 @@ export class GpuRunner {
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.baseColorLayerBezierManager.bezierBuffer,
+            sortOrderBuffer: this.baseColorLayerBezierManager.sortIndicesBuffer,
             brushTexture,
         });
 
@@ -234,6 +236,7 @@ export class GpuRunner {
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.colorLayerBezierManager.bezierBuffer,
+            sortOrderBuffer: this.colorLayerBezierManager.sortIndicesBuffer,
             brushTexture,
         });
         
@@ -851,6 +854,7 @@ export class GpuRunner {
                 if (!this.viewerState.edgeBezierTrainingPaused) {
                     this.edgeLayerBezierManager.dispatch(commandEncoder);
                 }
+                this.edgeLayerBezierManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
             }
 
             // Train base color beziers against depth-aware blurred target
@@ -868,6 +872,7 @@ export class GpuRunner {
                 if (!this.viewerState.baseColorBezierTrainingPaused) {
                     this.baseColorLayerBezierManager.dispatch(commandEncoder);
                 }
+                this.baseColorLayerBezierManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
 
                 // Render base color beziers into optimSplatTextureView (loadOp: "load")
                 // This makes it the background for the NEXT layer!
@@ -890,6 +895,7 @@ export class GpuRunner {
                 if (!this.viewerState.colorBezierTrainingPaused) {
                     this.colorLayerBezierManager.dispatch(commandEncoder);
                 }
+                this.colorLayerBezierManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
             }
 
             // 4. Run edge detection on full-res depth (for display)

@@ -48,6 +48,7 @@ struct ADCArray {
 // Per-pixel residual loss map: accumulated as fixed-point i32 (scale 10000).
 // ADC reads this to find high-loss regions and seeds new beziers there.
 @group(0) @binding(9) var<storage, read_write> pixel_loss: array<atomic<i32>, {@PIXEL_LOSS_SIZE}u>;
+@group(0) @binding(10) var<storage, read> sort_order: array<u32, {@NUM_BEZIERS}u>;
 
 const N_SEG: u32 = 16u;
 // Reciprocal depth near-plane constant — must match mesh.wgsl and splat_forward.wgsl.
@@ -158,16 +159,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     
     if (local_idx == 0u) {
         var count = 0u;
-        for (var word_idx = 0u; word_idx < {@NUM_BEZIERS_DIV_32}; word_idx++) {
-            var word = atomicLoad(&tile_mask[word_idx]);
-            while (word != 0u) {
-                let bit_idx = countTrailingZeros(word);
-                let bezier_id = word_idx * 32u + bit_idx;
+        for (var idx = 0u; idx < {@NUM_BEZIERS}u; idx++) {
+            // Traverse front-to-back: sort_order has farthest at 0, nearest at NUM_BEZIERS - 1
+            let bezier_id = sort_order[{@NUM_BEZIERS}u - 1u - idx];
+            let word_idx = bezier_id / 32u;
+            let bit_idx = bezier_id % 32u;
+            let word = atomicLoad(&tile_mask[word_idx]);
+            if ((word & (1u << bit_idx)) != 0u) {
                 if (count < MAX_TILE_BEZIERS) {
                     tile_beziers[count] = bezier_id;
                     count++;
                 }
-                word ^= (1u << bit_idx);
             }
         }
         atomicStore(&tile_bezier_count, count);

@@ -20,6 +20,7 @@ struct ForwardUniforms {
 @group(0) @binding(1) var<uniform> uniforms: ForwardUniforms;
 @group(0) @binding(2) var brush_sampler: sampler;
 @group(0) @binding(3) var brush_texture: texture_2d<f32>;
+@group(0) @binding(4) var<storage, read> sort_order: array<u32, {@NUM_BEZIERS}u>;
 
 const N_SEG: u32 = 16u;
 
@@ -49,10 +50,8 @@ fn vs_main(
     @builtin(instance_index) ii: u32,
     @builtin(vertex_index) vi: u32
 ) -> VsOut {
-    // Draw back-to-front: mirror the gaussian approach where index 0 is drawn last
-    // (front-most). The optimizer pushes active curves toward lower indices, so
-    // reversing instance order gives an approximate depth sort for free.
-    let bezier_idx = {@NUM_BEZIERS}u - 1u - ii;
+    // Draw back-to-front: use the sorted indices computed by the bitonic merge sort
+    let bezier_idx = sort_order[ii];
     let b = beziers.items[bezier_idx];
     let aspect = uniforms.dims.x / uniforms.dims.y;
 
