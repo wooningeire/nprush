@@ -233,8 +233,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
         let dt = t - 0.5;
         let pressure = 1.0 - 4.0 * dt * dt;
-        let local_width = width * pressure;
-        let local_softness = softness * pressure;
+
+        let B = bernstein(t);
+        let raw_w = dot(B, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
+        let linear_w = max(raw_w, DEPTH_NEAR_BEZ);
+        let inv_w = 1.0 / linear_w;
+
+        let local_width = width * pressure * inv_w;
+        let local_softness = softness * pressure * inv_w;
         let local_opacity = opacity * pressure;
 
         let inner = local_width - local_softness;
@@ -242,12 +248,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let a_geom = 1.0 - smoothstep(inner, outer, min_d);
         var a = clamp(a_geom * local_opacity, 0.0, 0.999);
 
-        // Interpolate depth (w-component of projected points) and apply the same
-        // reciprocal encoding used by mesh.wgsl / splat_forward.wgsl so that
+        // Compute depth value for visualization / depth-ordered compositing.
+        // Uses the same reciprocal encoding as mesh.wgsl so that
         // D_pred is in the same [0,1) space as tgt_depth.
-        let B = bernstein(t);
-        let raw_w = dot(B, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
-        let linear_w = max(raw_w, DEPTH_NEAR_BEZ);
         let d_val = clamp(1.0 - DEPTH_NEAR_BEZ / linear_w, 0.0, 1.0);
 
         alphas[idx] = a;
@@ -336,10 +339,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let opacity = b.color.a;
         let color = b.color.rgb;
 
-        let p0 = project_center(uniforms.vp, b.p0.xyz, aspect).xy;
-        let p1 = project_center(uniforms.vp, b.p1.xyz, aspect).xy;
-        let p2 = project_center(uniforms.vp, b.p2.xyz, aspect).xy;
-        let p3 = project_center(uniforms.vp, b.p3.xyz, aspect).xy;
+        let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
+        let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
+        let proj2 = project_center(uniforms.vp, b.p2.xyz, aspect);
+        let proj3 = project_center(uniforms.vp, b.p3.xyz, aspect);
+        let p0 = proj0.xy;
+        let p1 = proj1.xy;
+        let p2 = proj2.xy;
+        let p3 = proj3.xy;
 
         let T_prev = Ts[idx];
         let d_val = depths[idx];
@@ -364,8 +371,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let dt_pixel = t_pixel - 0.5;
         let pressure = 1.0 - 4.0 * dt_pixel * dt_pixel;
         let B_pixel = bernstein(t_pixel);
-        let local_width = width * pressure;
-        let local_softness = softness * pressure;
+
+        let raw_w = dot(B_pixel, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
+        let linear_w = max(raw_w, DEPTH_NEAR_BEZ);
+        let inv_w = 1.0 / linear_w;
+
+        let local_width = width * pressure * inv_w;
+        let local_softness = softness * pressure * inv_w;
         let local_opacity = opacity * pressure;
 
         let inner = local_width - local_softness;
@@ -398,15 +410,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         // d(inner)/d(width)=pressure, d(denom)/d(width)=0 => d(x_inner)/d(width) = -pressure/denom
         // => d(smoothstep)/d(width) = smoothstep_deriv * (-pressure/denom)
         // => da/d(width) = -da_eff * smoothstep_deriv * pressure / denom
-        dWidth = select(0.0, da_eff * smoothstep_deriv * pressure / denom, in_softband);
-        // d(x_inner)/d(softness): inner=-softness*pressure, outer=+softness*pressure
-        // denom=2*softness*pressure, d(inner)/d(s)=-pressure, d(denom)/d(s)=2*pressure
-        // d(x_inner)/d(s) = (pressure*denom - (d-inner)*2*pressure) / denom^2
-        //                 = pressure*(denom - 2*(d-inner)) / denom^2
-        //                 = pressure*(2*softness*pressure - 2*(d-inner)) / denom^2
-        let d_minus_inner = clamp(d - inner, 0.0, denom);
-        let dx_ds = pressure * (denom - 2.0 * d_minus_inner) / max(denom * denom, 1e-12);
-        dSoft  = select(0.0, -da_eff * smoothstep_deriv * dx_ds, in_softband);
+        // dWidth and dSoft are gradients of the world-space width/softness parameters.
+        // Since local_width = width * pressure * inv_w, we must chain inv_w through.
+        dWidth = select(0.0, da_eff * smoothstep_deriv * pressure * inv_w / denom, in_softband);
+        
+        // d(x_inner)/d(softness): x_inner = (d - (width-softness)*p*inv_w) / (2*softness*p*inv_w)
+        // Let W = width*p*inv_w, S = softness*p*inv_w. x_inner = (d - (W-S)) / (2*S)
+        // d(x_inner)/d(softness) = d(x_inner)/dS * (p*inv_w)
+        // d(x_inner)/dS = (1*(2S) - (d-(W-S))*2) / (4S^2) = (2S - 2d + 2W - 2S) / (4S^2) = (2W - 2d) / (4S^2)
+        // = (W - d) / (2*S^2)
+        let W = width * pressure * inv_w;
+        let dx_ds = (W - d) / max(2.0 * softness * softness * pressure * inv_w, 1e-12);
+        dSoft  = select(0.0, -da_eff * smoothstep_deriv * dx_ds * (pressure * inv_w), in_softband);
 
         // Depth gradient with respect to control points (z/w component).
         // d_val = 1 - DEPTH_NEAR / raw_w  =>  d(d_val)/d(raw_w) = DEPTH_NEAR / raw_w²

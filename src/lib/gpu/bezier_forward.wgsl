@@ -78,8 +78,13 @@ fn vs_main(
     let p2 = proj2.xy;
     let p3 = proj3.xy;
 
-    let width = max(b.p0.w, 0.0001);
-    let softness = max(b.p1.w, 0.0001);
+    // Perspective scaling: treat width/softness as world-space units.
+    // Use average depth for bounding box expansion.
+    let avg_w = (proj0.z + proj1.z + proj2.z + proj3.z) * 0.25;
+    let inv_w = 1.0 / max(avg_w, 0.001);
+
+    let width = max(b.p0.w, 0.0001) * inv_w;
+    let softness = max(b.p1.w, 0.0001) * inv_w;
     let pad = width + softness;
 
     // Tight AABB around the bezier hull + padding.
@@ -157,8 +162,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     let dt = t - 0.5;
     let pressure = 1.0 - 4.0 * dt * dt;
 
-    let width = max(b.p0.w, 0.0001);
-    let softness = max(b.p1.w, 0.0001);
+    // Perspective scaling: interpolate depth (w) along the curve
+    let omt = 1.0 - t;
+    let w = omt*omt*omt * proj0.z
+          + 3.0 * omt*omt * t * proj1.z
+          + 3.0 * omt * t*t * proj2.z
+          + t*t*t * proj3.z;
+    let inv_w = 1.0 / max(w, 0.001);
+
+    let width = max(b.p0.w, 0.0001) * inv_w;
+    let softness = max(b.p1.w, 0.0001) * inv_w;
     let local_width = width * pressure;
     let local_softness = softness * pressure;
     let local_opacity = b.color.a * pressure;
