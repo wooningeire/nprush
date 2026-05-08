@@ -213,6 +213,7 @@ export class GpuRunner {
             device,
             numSplats,
             splatBuffer: this.splatOptimizerManager.splatBuffer,
+            sortOrderBuffer: this.splatOptimizerManager.sortIndicesBuffer,
         });
 
         this.bezierForwardManager = new GpuBezierForwardPipelineManager({
@@ -827,7 +828,10 @@ export class GpuRunner {
                 this.splatOptimizerManager.dispatch(commandEncoder);
             }
 
-            // 3.1 Render current splats at optim-res to use as background for color beziers.
+            // 3.1 Sort splats by depth for correct alpha blending order
+            this.splatOptimizerManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
+
+            // 3.1b Render current splats at optim-res to use as background for color beziers.
             this.splatForwardManager.setTarget(
                 this.optimSplatTextureView!,
                 this.optimSplatDepthTextureView!,

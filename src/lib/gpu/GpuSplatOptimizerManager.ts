@@ -3,6 +3,7 @@ import stepModuleSrc from "./splat_step.wgsl?raw";
 import renderModuleSrc from "./splat_render.wgsl?raw";
 import adcModuleSrc from "./splat_adc.wgsl?raw";
 import edgeModuleSrc from "./splat_edge.wgsl?raw";
+import sortModuleSrc from "./splat_sort.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
 import { GPU_CONSTANTS, injectWgslConstants } from "./constants";
 
@@ -19,11 +20,22 @@ export class GpuSplatOptimizerManager {
     readonly renderUniformsBuffer: GPUBuffer;
     readonly splatUniformsBuffer: GPUBuffer;
 
+    // Depth sort buffers
+    readonly sortKeysBuffer: GPUBuffer;
+    readonly sortIndicesBuffer: GPUBuffer;
+    readonly sortUniformsBuffer: GPUBuffer;
+
     private readonly backwardPipeline: GPUComputePipeline;
     private readonly stepPipeline: GPUComputePipeline;
     private readonly adcPipeline: GPUComputePipeline;
     private readonly edgePipeline: GPUComputePipeline;
     private readonly renderPipeline: GPURenderPipeline;
+    private readonly sortInitPipeline: GPUComputePipeline;
+    private readonly sortStepPipeline: GPUComputePipeline;
+    private sortInitBindGroup: GPUBindGroup;
+    private sortStepBindGroups: GPUBindGroup[] = [];
+    private sortStepUniformBuffers: GPUBuffer[] = [];
+    private sortN: number = 0;
 
     private backwardBindGroupLayout: GPUBindGroupLayout;
     private stepBindGroupLayout: GPUBindGroupLayout;
@@ -124,6 +136,29 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
+        // Sort buffers
+        this.sortKeysBuffer = device.createBuffer({
+            label: "splat sort keys",
+            size: this.numSplats * 4,
+            usage: GPUBufferUsage.STORAGE,
+        });
+        this.sortIndicesBuffer = device.createBuffer({
+            label: "splat sort indices",
+            size: this.numSplats * 4,
+            usage: GPUBufferUsage.STORAGE,
+        });
+        // Sort uniforms: VP (64) + block_k (4) + sub_k (4) + pad (8) = 80
+        this.sortUniformsBuffer = device.createBuffer({
+            label: "splat sort uniforms",
+            size: 80,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        let n = 1;
+        while (n < this.numSplats) n <<= 1;
+        const sortN = n;
+        this.sortN = sortN;
+
         const injectConstants = (src: string) => {
             return injectWgslConstants(src, {
                 ...GPU_CONSTANTS,
@@ -132,10 +167,11 @@ export class GpuSplatOptimizerManager {
                 NUM_SPLATS_MINUS_ONE: this.numSplats - 1,
                 NUM_SPLATS_DIV_32: Math.ceil(this.numSplats / 32),
                 NUM_PARAMS: this.numParams,
+                SORT_N: sortN,
             });
         };
 
-        // Backward Pipeline — now has 5 bindings (splats, grads, target, edge, VP uniform)
+        // Backward Pipeline — now has 6 bindings (splats, grads, target, depth, VP uniform, sort order)
         this.backwardBindGroupLayout = device.createBindGroupLayout({
             label: "splat backward bind group layout",
             entries: [
@@ -144,6 +180,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
             ],
         });
         const backwardModule = device.createShaderModule({ label: "splat backward", code: injectConstants(backwardModuleSrc) });
@@ -276,6 +313,80 @@ export class GpuSplatOptimizerManager {
             fragment: { module: renderModule, entryPoint: "frag", targets: [{ format }] },
             primitive: { topology: "triangle-list" },
         });
+        // Sort pipelines
+        const sortBindGroupLayout = device.createBindGroupLayout({
+            label: "splat sort bind group layout",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+            ],
+        });
+        const sortModule = device.createShaderModule({ label: "splat sort", code: injectConstants(sortModuleSrc) });
+        sortModule.getCompilationInfo().then(info => {
+            for (const msg of info.messages) console.warn(`[splat_sort] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
+        });
+        this.sortInitPipeline = device.createComputePipeline({
+            label: "splat sort init pipeline",
+            layout: device.createPipelineLayout({
+                label: "splat sort init pipeline layout",
+                bindGroupLayouts: [sortBindGroupLayout],
+            }),
+            compute: { module: sortModule, entryPoint: "init_keys" },
+        });
+        this.sortStepPipeline = device.createComputePipeline({
+            label: "splat sort step pipeline",
+            layout: device.createPipelineLayout({
+                label: "splat sort step pipeline layout",
+                bindGroupLayouts: [sortBindGroupLayout],
+            }),
+            compute: { module: sortModule, entryPoint: "sort_step" },
+        });
+
+        // Pre-create init bind group (uses sortUniformsBuffer for VP only)
+        this.sortInitBindGroup = device.createBindGroup({
+            label: "splat sort init bind group",
+            layout: sortBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.splatBuffer } },
+                { binding: 1, resource: { buffer: this.sortKeysBuffer } },
+                { binding: 2, resource: { buffer: this.sortIndicesBuffer } },
+                { binding: 3, resource: { buffer: this.sortUniformsBuffer } },
+            ],
+        });
+
+        // Pre-create per-step uniform buffers and bind groups
+        const logN = Math.log2(this.sortN);
+
+        this.sortStepBindGroups = [];
+        this.sortStepUniformBuffers = [];
+
+        for (let block_k = 1; block_k <= logN; block_k++) {
+            for (let sub_k = block_k - 1; sub_k >= 0; sub_k--) {
+                const buf = device.createBuffer({
+                    label: `splat sort step uniforms k=${block_k} j=${sub_k}`,
+                    size: 80,
+                    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                });
+                // Pre-write step params at offset 64
+                device.queue.writeBuffer(buf, 64, new Uint32Array([block_k, sub_k, 0, 0]));
+
+                const bg = device.createBindGroup({
+                    label: `splat sort step bind group k=${block_k} j=${sub_k}`,
+                    layout: sortBindGroupLayout,
+                    entries: [
+                        { binding: 0, resource: { buffer: this.splatBuffer } },
+                        { binding: 1, resource: { buffer: this.sortKeysBuffer } },
+                        { binding: 2, resource: { buffer: this.sortIndicesBuffer } },
+                        { binding: 3, resource: { buffer: buf } },
+                    ],
+                });
+
+                this.sortStepUniformBuffers.push(buf);
+                this.sortStepBindGroups.push(bg);
+            }
+        }
     }
 
     writeSplatVPMatrix(mat: Mat4, invMat: Mat4, blurEnabled: boolean = false) {
@@ -312,6 +423,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 2, resource: targetTextureView },
                 { binding: 3, resource: targetDepthTextureView }, // actual depth, not edge
                 { binding: 4, resource: { buffer: this.splatUniformsBuffer } },
+                { binding: 5, resource: { buffer: this.sortIndicesBuffer } },
             ],
         });
     }
@@ -404,5 +516,46 @@ export class GpuSplatOptimizerManager {
         renderPassEncoder.setPipeline(this.renderPipeline);
         renderPassEncoder.setBindGroup(0, this.renderBindGroup);
         renderPassEncoder.draw(6);
+    }
+
+    /**
+     * Run a full depth sort of all splats using the current VP matrix.
+     * Writes the sort order into sortIndicesBuffer (back-to-front).
+     */
+    dispatchSort(commandEncoder: GPUCommandEncoder, vpMat: Mat4) {
+        const vpData = vpMat as Float32Array;
+
+        // Write VP matrix to the init uniform buffer
+        this.device.queue.writeBuffer(
+            this.sortUniformsBuffer, 0,
+            vpData.buffer, vpData.byteOffset, vpData.byteLength,
+        );
+
+        // Write VP matrix to all step uniform buffers
+        for (const buf of this.sortStepUniformBuffers) {
+            this.device.queue.writeBuffer(
+                buf, 0,
+                vpData.buffer, vpData.byteOffset, vpData.byteLength,
+            );
+        }
+
+        const wg = Math.ceil(this.sortN / 256);
+
+        // Pass 0: compute depth keys + init indices
+        const initPass = commandEncoder.beginComputePass({ label: "splat sort init pass" });
+        initPass.setPipeline(this.sortInitPipeline);
+        initPass.setBindGroup(0, this.sortInitBindGroup);
+        initPass.dispatchWorkgroups(wg);
+        initPass.end();
+
+        // Bitonic merge sort steps — each uses its own pre-baked bind group
+        const stepWg = Math.ceil(this.sortN / 2 / 256);
+        for (let i = 0; i < this.sortStepBindGroups.length; i++) {
+            const stepPass = commandEncoder.beginComputePass({ label: `splat sort step ${i}` });
+            stepPass.setPipeline(this.sortStepPipeline);
+            stepPass.setBindGroup(0, this.sortStepBindGroups[i]);
+            stepPass.dispatchWorkgroups(stepWg);
+            stepPass.end();
+        }
     }
 }

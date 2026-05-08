@@ -2,7 +2,7 @@ struct Splat {
     pos_sx: vec4f,    // x, y, z, sx
     color: vec4f,     // r, g, b, opacity
     quat: vec4f,      // qw, qx, qy, qz
-    sy_shape: vec4f,  // sy, shape_a, shape_b, _pad
+    sy_shape: vec4f,  // sy, shape_a, shape_b, sz
 }
 
 struct SplatArray {
@@ -17,6 +17,8 @@ struct ForwardUniforms {
     _pad: vec2f,
 }
 @group(0) @binding(1) var<uniform> uniforms: ForwardUniforms;
+
+@group(0) @binding(2) var<storage, read> sort_order: array<u32, {@NUM_SPLATS}u>;
 
 struct VsOut {
     @builtin(position) pos: vec4f,
@@ -41,7 +43,8 @@ fn project_axis(vp: mat4x4f, ax_world: vec3f, clip_xy: vec2f, w: f32, aspect: f3
 
 @vertex
 fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut {
-    let splat_idx = {@NUM_SPLATS}u - 1u - ii;
+    // Use sort order: instance 0 = farthest splat (drawn first, behind everything)
+    let splat_idx = sort_order[ii];
     let s = splats.splats[splat_idx];
     
     let pos3 = s.pos_sx.xyz;

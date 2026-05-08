@@ -25,6 +25,7 @@ struct SplatUniforms {
 @group(0) @binding(2) var targetTex: texture_2d<f32>;
 @group(0) @binding(3) var targetDepthTex: texture_2d<f32>;
 @group(0) @binding(4) var<uniform> splat_uniforms: SplatUniforms;
+@group(0) @binding(5) var<storage, read> sort_order: array<u32, {@NUM_SPLATS}u>;
 
 const MAX_TILE_SPLATS = {@SPLAT_MAX_TILE_SPLATS}u;
 var<workgroup> tile_mask: array<atomic<u32>, {@NUM_SPLATS_DIV_32}u>;
@@ -198,12 +199,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
     if (local_idx == 0u) {
         var count = 0u;
-        for (var wi = 0u; wi < {@NUM_SPLATS_DIV_32}; wi++) {
-            var word = atomicLoad(&tile_mask[wi]);
-            while (word != 0u) {
-                let bi = countTrailingZeros(word);
-                if (count < MAX_TILE_SPLATS) { tile_splats[count] = wi * 32u + bi; count++; }
-                word ^= (1u << bi);
+        for (var idx = 0u; idx < {@NUM_SPLATS}u; idx++) {
+            // Traverse front-to-back: sort_order has farthest at 0, nearest at NUM_SPLATS - 1
+            let splat_id = sort_order[{@NUM_SPLATS}u - 1u - idx];
+            let wi = splat_id / 32u;
+            let bi = splat_id % 32u;
+            let word = atomicLoad(&tile_mask[wi]);
+            if ((word & (1u << bi)) != 0u) {
+                if (count < MAX_TILE_SPLATS) { 
+                    tile_splats[count] = splat_id; 
+                    count++; 
+                }
             }
         }
         atomicStore(&tile_splat_count, count);

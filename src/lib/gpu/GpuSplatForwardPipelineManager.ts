@@ -18,10 +18,12 @@ export class GpuSplatForwardPipelineManager {
         device,
         numSplats,
         splatBuffer,
+        sortOrderBuffer,
     }: {
         device: GPUDevice,
         numSplats: number,
         splatBuffer: GPUBuffer,
+        sortOrderBuffer: GPUBuffer,
     }) {
         this.device = device;
         this.splatBuffer = splatBuffer;
@@ -39,6 +41,7 @@ export class GpuSplatForwardPipelineManager {
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
                 { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
             ],
         });
 
@@ -87,6 +90,7 @@ export class GpuSplatForwardPipelineManager {
             entries: [
                 { binding: 0, resource: { buffer: this.splatBuffer } },
                 { binding: 1, resource: { buffer: this.uniformsBuffer } },
+                { binding: 2, resource: { buffer: sortOrderBuffer } },
             ],
         });
     }
