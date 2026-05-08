@@ -40,7 +40,8 @@ fn init_keys(@builtin(global_invocation_id) gid: vec3u) {
         let clip = sort_uniforms.vp * vec4f(p_center, 1.0);
         var depth = clip.w;
         
-        if (b.color.a < 0.005 || depth < 0.0) {
+        const DEPTH_NEAR_CULL = 0.1;
+        if (b.color.a < 0.005 || depth < DEPTH_NEAR_CULL) {
             depth = 1e10;
         }
         sort_keys[i] = depth;

@@ -60,14 +60,15 @@ fn vs_main(
     let proj2 = project_to_screen(uniforms.vp, b.p2.xyz, aspect);
     let proj3 = project_to_screen(uniforms.vp, b.p3.xyz, aspect);
 
-    // Cull if ANY control point is behind the camera (w <= 0).
-    // When w <= 0 the perspective divide flips sign, producing a mirrored
-    // screen-space position that makes the AABB span the entire viewport.
+    // Cull if ANY control point is behind the camera near plane.
+    // When w is very small or negative the perspective divide behaves poorly,
+    // producing mirrored or huge screen-space positions.
     // Curves that straddle the near plane must be culled here; the optimizer
     // will pull them back into view via the backward pass.
-    if (proj0.z <= 0.0 || proj1.z <= 0.0 || proj2.z <= 0.0 || proj3.z <= 0.0) {
+    const DEPTH_NEAR_CULL = 0.1;
+    if (proj0.z < DEPTH_NEAR_CULL || proj1.z < DEPTH_NEAR_CULL || proj2.z < DEPTH_NEAR_CULL || proj3.z < DEPTH_NEAR_CULL) {
         var out: VsOut;
-        out.pos = vec4f(0.0, 0.0, 0.0, -1.0); // degenerate
+        out.pos = vec4f(0.0, 0.0, 2.0, 1.0); // degenerate/clipped
         out.bezier_idx = bezier_idx;
         out.p_screen = vec2f(0.0);
         return out;

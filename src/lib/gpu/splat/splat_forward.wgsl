@@ -62,7 +62,8 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
     let w = clip_center.w;
     
     // Collapse quad for splats behind the camera or too close to near plane
-    if (w < 0.1) {
+    const DEPTH_NEAR_CULL = 0.1;
+    if (w < DEPTH_NEAR_CULL) {
         var o_clip: VsOut;
         o_clip.pos = vec4f(0.0, 0.0, 2.0, 1.0); // Clip it
         return o_clip;

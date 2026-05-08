@@ -157,7 +157,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let s = splats.splats[splat_id];
         if (s.color.a < 0.005) { continue; }
         let proj = project_center(splat_uniforms.vp, s.pos_sx.xyz, aspect);
-        if (proj.z < 0.0) { continue; }
+        const DEPTH_NEAR_CULL = 0.1;
+        if (proj.z < DEPTH_NEAR_CULL) { continue; }
         let sx = max(s.pos_sx.w, 0.0001);
         let sy = max(s.sy_shape.x, 0.0001);
         let sz = max(s.sy_shape.w, 0.0001);

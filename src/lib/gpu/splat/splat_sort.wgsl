@@ -38,10 +38,11 @@ fn init_keys(@builtin(global_invocation_id) gid: vec3u) {
     if (i < {@NUM_SPLATS}u) {
         let s = splats.splats[i];
         let clip = sort_uniforms.vp * vec4f(s.pos_sx.xyz, 1.0);
-        // Use w (view-space depth).  Dead splats (opacity ≈ 0) get pushed to
-        // the very back so they don't interfere with blending.
+        // Use w (view-space depth).  Dead splats (opacity ≈ 0) or those behind
+        // the near plane get pushed to the very back so they don't interfere.
         var depth = clip.w;
-        if (s.color.a < 0.005 || depth < 0.0) {
+        const DEPTH_NEAR_CULL = 0.1;
+        if (s.color.a < 0.005 || depth < DEPTH_NEAR_CULL) {
             depth = 1e10;
         }
         sort_keys[i] = depth;

@@ -135,9 +135,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
         let proj2 = project_center(uniforms.vp, b.p2.xyz, aspect);
         let proj3 = project_center(uniforms.vp, b.p3.xyz, aspect);
-        // Skip if any control point is behind the camera — same rule as the
-        // forward pass so tile binning stays consistent with what gets rendered.
-        if (proj0.z <= 0.0 || proj1.z <= 0.0 || proj2.z <= 0.0 || proj3.z <= 0.0) { continue; }
+        // Skip if any control point is behind the camera near plane — same rule
+        // as the forward pass so tile binning stays consistent.
+        const DEPTH_NEAR_CULL = 0.1;
+        if (proj0.z < DEPTH_NEAR_CULL || proj1.z < DEPTH_NEAR_CULL || proj2.z < DEPTH_NEAR_CULL || proj3.z < DEPTH_NEAR_CULL) { continue; }
 
         let p0 = proj0.xy;
         let p1 = proj1.xy;

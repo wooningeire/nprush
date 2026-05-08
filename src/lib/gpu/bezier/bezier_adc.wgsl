@@ -66,7 +66,8 @@ fn pixel_to_world(px_idx: u32, spawn_depth: f32) -> vec3f {
 
 fn check_offscreen(clip: vec4f) -> bool {
     let m = f32({@BEZIER_OFFSCREEN_MARGIN});
-    if (clip.w < 0.0) { return true; }
+    const DEPTH_NEAR_CULL = 0.1;
+    if (clip.w < DEPTH_NEAR_CULL) { return true; }
     let ndc = clip.xy / max(clip.w, 1e-5);
     return abs(ndc.x) > m || abs(ndc.y) > m;
 }
