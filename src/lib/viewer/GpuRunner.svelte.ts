@@ -178,7 +178,6 @@ export class GpuRunner {
         brushTexture,
         groundAlbedoTexture,
         groundNormalTexture,
-        numSplats = constants.NUM_GAUSSIAN_SPLATS,
     }: {
         device: GPUDevice,
         context: GPUCanvasContext,
@@ -192,7 +191,6 @@ export class GpuRunner {
         brushTexture: GPUTexture,
         groundAlbedoTexture?: GPUTexture,
         groundNormalTexture?: GPUTexture,
-        numSplats?: number,
     }) {
         this.device = device;
         this.context = context;
@@ -241,7 +239,7 @@ export class GpuRunner {
         this.splatOptimizerManager = new GpuSplatOptimizerManager({
             device,
             format,
-            numSplats,
+            numSplats: constants.NUM_GAUSSIAN_SPLATS,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
         });
 
@@ -262,7 +260,7 @@ export class GpuRunner {
 
         this.splatForwardManager = new GpuSplatForwardPipelineManager({
             device,
-            numSplats,
+            numSplats: constants.NUM_GAUSSIAN_SPLATS,
             splatBuffer: this.splatOptimizerManager.splatBuffer,
             sortOrderBuffer: this.splatOptimizerManager.sortIndicesBuffer,
         });

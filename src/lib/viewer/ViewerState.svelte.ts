@@ -281,10 +281,8 @@ export class ViewerState {
 
     static mount({
         canvasPromise,
-        numSplats = constants.NUM_GAUSSIAN_SPLATS,
     }: {
         canvasPromise: Promise<HTMLCanvasElement>,
-        numSplats?: number,
     }) {
         const state = new ViewerState();
         
@@ -323,7 +321,6 @@ export class ViewerState {
                 brushTexture,
                 groundAlbedoTexture,
                 groundNormalTexture,
-                numSplats,
             });
             state.runner = gpuRunner;
 
