@@ -10,7 +10,6 @@ import { GpuDepthAwareBlurPipelineManager } from "../gpu/blur/GpuDepthAwareBlurP
 import { GpuEnvmapPipelineManager } from "../gpu/envmap/GpuEnvmapPipelineManager.ts";
 import { GpuPathTracePipelineManager } from "../gpu/pathtrace/GpuPathTracePipelineManager.ts";
 import type { MeshData } from "../gpu/io/loadGlb.ts";
-import { STRIP_HEIGHT_FRAC } from "$/util";
 import type { ViewerState } from "./ViewerState.svelte.ts";
 import { GPU_CONSTANTS } from "$/gpu/constants";
 import { readTextureToImageData, imageDataToBlob } from "$/gpu/io/readback.ts";
@@ -669,10 +668,10 @@ export class GpuRunner {
             // the visible panel dimensions.
             this.rebuildOptimTextures(1.0);
 
-            // Full-res target for visualization, sized to the visible main panel so the
-            // texture aspect matches the camera projection aspect.
-            const fullW = Math.max(1, Math.floor(width / 2));
-            const fullH = Math.max(1, Math.floor(height * (1 - STRIP_HEIGHT_FRAC)));
+            // Full-res render textures use a fixed resolution from viewerState,
+            // independent of the browser window size.
+            const fullW = Math.max(1, this.viewerState.renderWidth);
+            const fullH = Math.max(1, this.viewerState.renderHeight);
             if (!this.targetTexture || this.fullWidth !== fullW || this.fullHeight !== fullH) {
                 if (this.targetTexture) this.targetTexture.destroy();
                 if (this.targetNormalTexture) this.targetNormalTexture.destroy();

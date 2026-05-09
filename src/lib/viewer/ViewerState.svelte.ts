@@ -21,6 +21,12 @@ import { downloadBlob, openFrameWriter } from "../util/export.ts";
 export class ViewerState {
     width = $state(300);
     height = $state(150);
+
+    // Output render resolution — independent of the browser window size.
+    // These drive the full-res textures used for visualization and capture.
+    renderWidth = $state(1024);
+    renderHeight = $state(1024);
+
     edgeBeziersEnabled = $state(false);
     baseColorBeziersEnabled = $state(true);
     colorBeziersEnabled = $state(true);

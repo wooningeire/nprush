@@ -86,6 +86,23 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 
     <div class="separator"></div>
 
+    <div class="slider-group">
+        <label>
+            Render res: {viewerState.renderWidth}×{viewerState.renderHeight}
+            <input type="range" min="256" max="2048" step="256"
+                value={viewerState.renderWidth}
+                oninput={(e) => {
+                    const v = parseInt((e.target as HTMLInputElement).value);
+                    viewerState.renderWidth = v;
+                    viewerState.renderHeight = v;
+                }}
+                disabled={viewerState.isCapturing || viewerState.isTurntableRendering}
+            />
+        </label>
+    </div>
+
+    <div class="separator"></div>
+
     <div class="turntable-section">
         <div class="section-title">Turntable Animation</div>
 
