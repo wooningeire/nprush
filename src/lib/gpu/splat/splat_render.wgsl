@@ -12,6 +12,7 @@ struct RenderUniforms {
     base_color_beziers_enabled: f32,
     color_beziers_enabled: f32,
     mesh_splats_enabled: f32,
+    splats_enabled: f32,
 }
 @group(0) @binding(7) var<uniform> uniforms: RenderUniforms;
 
@@ -162,7 +163,8 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     // Right half: splats.
     let right_half_uv = vec2f((v.uv.x - 0.5) * 2.0, main_uv_y);
     let splat_px = vec2i(right_half_uv * vec2f(textureDimensions(splatViewTex)));
-    let base = textureLoad(splatViewTex, splat_px, 0).rgb;
+    let splat_color = textureLoad(splatViewTex, splat_px, 0).rgb;
+    let base = select(vec3f(0.05), splat_color, uniforms.splats_enabled > 0.5);
     
     let bezier_px = vec2i(right_half_uv * vec2f(textureDimensions(bezierViewTex)));
     let edge_a = clamp(textureLoad(bezierViewTex, bezier_px, 0).r, 0.0, 1.0);

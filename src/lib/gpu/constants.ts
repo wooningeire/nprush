@@ -42,8 +42,8 @@ export const GPU_CONSTANTS = {
     
     // Runner / Optimization config
     OPTIM_SHORT: 512,
-    NUM_GAUSSIAN_SPLATS: 1024,
-    NUM_EDGE_LAYER_BEZIERS: 8192,
+    NUM_GAUSSIAN_SPLATS: 256,
+    NUM_EDGE_LAYER_BEZIERS: 1024,
     
     // Mesh Splatting
     MESH_SPLAT_MAX_COUNT: 4096,

@@ -317,7 +317,8 @@ export class GpuRunner {
                 this.viewerState.edgeBeziersEnabled,
                 this.viewerState.baseColorBeziersEnabled,
                 this.viewerState.colorBeziersEnabled,
-                this.viewerState.meshSplatsEnabled
+                this.viewerState.meshSplatsEnabled,
+                this.viewerState.splatsEnabled,
             ));
             $effect(() => this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat, this.camera.viewProjInvMat, this.viewerState.compareBlurred));
             $effect(() => {
@@ -969,12 +970,14 @@ export class GpuRunner {
                 this.optimWidth,
                 this.optimHeight
             );
-            if (!this.viewerState.splatTrainingPaused) {
+            if (this.viewerState.splatsEnabled && !this.viewerState.splatTrainingPaused) {
                 this.splatOptimizerManager.dispatch(commandEncoder);
             }
 
             // 3.1 Sort splats by depth for correct alpha blending order
-            this.splatOptimizerManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
+            if (this.viewerState.splatsEnabled) {
+                this.splatOptimizerManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
+            }
 
             // 3.1b Render current splats at optim-res to use as background for color beziers.
             this.splatForwardManager.setTarget(
@@ -983,7 +986,7 @@ export class GpuRunner {
                 this.optimWidth,
                 this.optimHeight
             );
-            this.splatForwardManager.dispatch(commandEncoder, true);
+            this.splatForwardManager.dispatch(commandEncoder, true, this.viewerState.splatsEnabled);
 
             // 3.2 Restore full-res target for visualization later
             if (!this.viewerState.turntableTraining) {
@@ -1048,7 +1051,7 @@ export class GpuRunner {
                 this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!);
 
                 // 4.5. Compute views into textures
-                this.splatForwardManager.dispatch(commandEncoder, true);
+                this.splatForwardManager.dispatch(commandEncoder, true, this.viewerState.splatsEnabled);
                 if (this.viewerState.edgeBeziersEnabled) {
                     this.bezierForwardManager.dispatch(commandEncoder, true);
                 }
