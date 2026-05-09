@@ -344,7 +344,7 @@ export class GpuRunner {
         width: number,
         height: number,
     ): Promise<ImageData> {
-        return readTextureToImageData(this.device, texture, width, height, this.format);
+        return readTextureToImageData(this.device, texture, width, height, texture.format);
     }
 
     private rebuildOptimTextures(panelAspect: number) {

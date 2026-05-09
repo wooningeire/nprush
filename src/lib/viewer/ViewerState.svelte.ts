@@ -16,7 +16,7 @@ import { loadTexture } from "../gpu/io/loadTexture.ts";
 import { buildBvh, raycastBvh, type BvhResult } from "../gpu/bvh.ts";
 import { vec4 } from "wgpu-matrix";
 import { STRIP_HEIGHT_FRAC } from "$/util";
-import { downloadBlob, encodeFramesToVideo } from "../util/export.ts";
+import { downloadBlob, openFrameWriter } from "../util/export.ts";
 
 export class ViewerState {
     width = $state(300);
@@ -31,7 +31,7 @@ export class ViewerState {
     colorBezierTrainingPaused = $state(false);
     compareBlurred = $state(true);
     blurRadius = $state(16);
-    meshSplatsEnabled = $state(true);
+    meshSplatsEnabled = $state(false);
     
     meshVerts: Float32Array | null = null;
     meshBvh: BvhResult | null = null;
@@ -182,13 +182,22 @@ export class ViewerState {
 
     /**
      * Render the turntable animation:
-     * 1. Deterministically sweep through the animation path
-     * 2. At each frame position, run a few training steps
-     * 3. Capture the composited frame
-     * 4. Encode all frames into a video and download
+     * 1. Ask the user to pick an output folder (File System Access API).
+     * 2. Deterministically sweep through the animation path.
+     * 3. At each frame position, run a few render steps then capture the
+     *    composited frame and write it directly to the folder as a PNG.
+     *
+     * Frames are written one-by-one so memory usage stays flat regardless
+     * of frame count, and there is no dependency on the unreliable
+     * MediaRecorder / captureStream video encoding path.
      */
     async renderTurntable() {
         if (!this.runner || this.isTurntableRendering) return;
+
+        // Ask for the output folder before locking the UI — if the user
+        // cancels the picker we bail out cleanly with no state change.
+        const writer = await openFrameWriter();
+        if (!writer) return;
 
         this.isTurntableRendering = true;
         this.turntableCanceled = false;
@@ -202,8 +211,6 @@ export class ViewerState {
 
         const totalFrames = this.turntableFrameCount;
         const stepsPerFrame = this.turntableStepsPerFrame;
-
-        const frames: ImageData[] = [];
 
         try {
             for (let frame = 0; frame < totalFrames; frame++) {
@@ -223,33 +230,18 @@ export class ViewerState {
                 if (this.turntableCanceled) break;
 
                 const imageData = await this.runner.captureTurntableFrame();
-                frames.push(imageData);
+                await writer.write(imageData);
                 this.turntableProgress = (frame + 1) / totalFrames;
-            }
-
-            if (!this.turntableCanceled && frames.length > 0) {
-                await this.encodeFramesToVideo(frames);
             }
         } catch (e) {
             console.error("Turntable render failed", e);
         } finally {
+            await writer.close();
             this.orbit.long = origLong;
             this.orbit.lat = origLat;
             this.orbit.radius = origRadius;
             this.isTurntableRendering = false;
             this.turntableProgress = 0;
-        }
-    }
-
-    private async encodeFramesToVideo(frames: ImageData[]) {
-        if (frames.length === 0) return;
-
-        try {
-            const { blob, mimeType } = await encodeFramesToVideo(frames, 30);
-            const extension = mimeType.includes("mp4") ? "mp4" : "webm";
-            downloadBlob(blob, `nprush-turntable-${Date.now()}.${extension}`);
-        } catch (e) {
-            console.error("Failed to encode video", e);
         }
     }
 

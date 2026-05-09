@@ -185,7 +185,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
                 onclick={() => viewerState.renderTurntable()}
                 disabled={viewerState.isCapturing}
             >
-                🎬 Render Turntable
+                🎬 Save Frames to Folder
             </button>
         {/if}
     </div>
