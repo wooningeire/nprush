@@ -304,6 +304,14 @@ export class GpuRunner {
                 this.baseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.baseColorLayerBezierManager.setAdcPeriod(150);
             });
+            $effect(() => {
+                // During turntable training the camera rotates to random angles each
+                // view, so edge-layer curves that are off-screen from the current angle
+                // must not be killed — they will be visible again from other views.
+                // Setting no_kill suppresses both the loss-based and offscreen kills in
+                // bezier_adc.wgsl and the per-step offscreen cull in bezier_step.wgsl.
+                this.edgeLayerBezierManager.writeNoKill(this.viewerState.turntableTraining);
+            });
         });
     }
 

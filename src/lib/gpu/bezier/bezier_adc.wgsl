@@ -105,17 +105,21 @@ fn main() {
             continue;
         }
 
-        // Offscreen culling
-        let p0_clip = uniforms.vp * vec4f(b.p0.xyz, 1.0);
-        let p1_clip = uniforms.vp * vec4f(b.p1.xyz, 1.0);
-        let p2_clip = uniforms.vp * vec4f(b.p2.xyz, 1.0);
-        let p3_clip = uniforms.vp * vec4f(b.p3.xyz, 1.0);
+        // Offscreen culling — skipped when no_kill is set (e.g. turntable training)
+        // so curves that are temporarily off-screen from the current random view
+        // are not destroyed; they will be visible again from other angles.
+        if (adam.no_kill < 0.5) {
+            let p0_clip = uniforms.vp * vec4f(b.p0.xyz, 1.0);
+            let p1_clip = uniforms.vp * vec4f(b.p1.xyz, 1.0);
+            let p2_clip = uniforms.vp * vec4f(b.p2.xyz, 1.0);
+            let p3_clip = uniforms.vp * vec4f(b.p3.xyz, 1.0);
 
-        if (check_offscreen(p0_clip) && check_offscreen(p1_clip) && check_offscreen(p2_clip) && check_offscreen(p3_clip)) {
-            beziers.items[i].color.a = 0.0;
-            dead_indices[dead_count] = i;
-            dead_count = dead_count + 1u;
-            continue;
+            if (check_offscreen(p0_clip) && check_offscreen(p1_clip) && check_offscreen(p2_clip) && check_offscreen(p3_clip)) {
+                beziers.items[i].color.a = 0.0;
+                dead_indices[dead_count] = i;
+                dead_count = dead_count + 1u;
+                continue;
+            }
         }
     }
 
