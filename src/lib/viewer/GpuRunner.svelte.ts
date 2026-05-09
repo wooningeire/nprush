@@ -12,6 +12,9 @@ import { GpuPathTracePipelineManager } from "../gpu/pathtrace/GpuPathTracePipeli
 import type { MeshData } from "../gpu/file-load/loadGlb.ts";
 import type { ViewerState } from "./ViewerState.svelte.ts";
 import { RENDER_MODE_MULTIVIEW } from "./renderMode.ts";
+import { evaluateTurntablePath } from "./turntable/turntablePath.ts";
+import { compositeTurntableLayers } from "./turntable/turntableComposite.ts";
+import { TurntableFrameCaptureQueue } from "./turntable/turntableFrameCapture.ts";
 import type { Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants";
 import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
@@ -159,6 +162,7 @@ export class GpuRunner {
     private optimHeight = 0;
 
     private capturePromise: { resolve: (blob: Blob) => void, reject: (err: Error) => void } | null = null;
+    private readonly turntableCaptureQueue = new TurntableFrameCaptureQueue();
 
     // Prerendered multiview dataset — null until prerenderDataset() completes.
     private multiviewDataset: MultiviewDataset | null = null;
@@ -440,15 +444,8 @@ export class GpuRunner {
      * The promise resolves on the next rAF tick after the GPU readback completes.
      */
     captureTurntableFrame(): Promise<ImageData> {
-        return new Promise((resolve, reject) => {
-            this.turntableFrameRequest = { resolve, reject };
-        });
+        return this.turntableCaptureQueue.enqueue();
     }
-
-    private turntableFrameRequest: {
-        resolve: (img: ImageData) => void;
-        reject: (err: Error) => void;
-    } | null = null;
 
     private async readTextureToImageData(
         texture: GPUTexture,
@@ -498,7 +495,7 @@ export class GpuRunner {
 
                 // Sample a deterministic view position spread evenly around the path.
                 const t = i / numViews;
-                const p = vs.evaluatePath(t, (vs as any).turntableBaseLong);
+                const p = evaluateTurntablePath(t, vs.turntableBaseLong, vs.getTurntablePathParams());
                 vs.orbit.long = p.long;
                 vs.orbit.lat = p.lat;
                 vs.orbit.radius = p.radius;
@@ -1176,10 +1173,9 @@ export class GpuRunner {
                     .catch(reject);
             }
 
-            // Turntable frame capture — read back composited layers
-            if (this.turntableFrameRequest) {
-                const { resolve, reject } = this.turntableFrameRequest;
-                this.turntableFrameRequest = null;
+            const pendingTurntable = this.turntableCaptureQueue.dequeue();
+            if (pendingTurntable) {
+                const { resolve, reject } = pendingTurntable;
 
                 (async () => {
                     try {
@@ -1190,7 +1186,6 @@ export class GpuRunner {
                             return;
                         }
 
-                        // Read back the layers we need
                         const splat = await this.readTextureToImageData(this.fullSplatTexture!, w, h);
                         const baseColorBezier = this.viewerState.baseColorBeziersEnabled && this.fullBaseColorBezierTexture
                             ? await this.readTextureToImageData(this.fullBaseColorBezierTexture, w, h)
@@ -1202,44 +1197,12 @@ export class GpuRunner {
                             ? await this.readTextureToImageData(this.fullBezierTexture, w, h)
                             : null;
 
-                        // Composite: same logic as splat_render.wgsl right-half
-                        const result = new ImageData(w, h);
-                        for (let i = 0; i < w * h; i++) {
-                            const o = i * 4;
-                            let r = splat.data[o] / 255;
-                            let g = splat.data[o + 1] / 255;
-                            let b = splat.data[o + 2] / 255;
-
-                            // Coarse bezier: premultiplied alpha over
-                            if (baseColorBezier) {
-                                const ba = baseColorBezier.data[o + 3] / 255;
-                                r = r * (1 - ba) + baseColorBezier.data[o] / 255;
-                                g = g * (1 - ba) + baseColorBezier.data[o + 1] / 255;
-                                b = b * (1 - ba) + baseColorBezier.data[o + 2] / 255;
-                            }
-
-                            // Fine bezier: premultiplied alpha over
-                            if (colorBezier) {
-                                const ca = colorBezier.data[o + 3] / 255;
-                                r = r * (1 - ca) + colorBezier.data[o] / 255;
-                                g = g * (1 - ca) + colorBezier.data[o + 1] / 255;
-                                b = b * (1 - ca) + colorBezier.data[o + 2] / 255;
-                            }
-
-                            // Edge bezier: grayscale mix toward white
-                            if (edgeBezier) {
-                                const e = Math.min(1, edgeBezier.data[o] / 255);
-                                r = r + (1 - r) * e;
-                                g = g + (1 - g) * e;
-                                b = b + (1 - b) * e;
-                            }
-
-                            result.data[o] = Math.min(255, Math.round(r * 255));
-                            result.data[o + 1] = Math.min(255, Math.round(g * 255));
-                            result.data[o + 2] = Math.min(255, Math.round(b * 255));
-                            result.data[o + 3] = 255;
-                        }
-                        resolve(result);
+                        resolve(compositeTurntableLayers(w, h, {
+                            splat,
+                            baseColorBezier,
+                            colorBezier,
+                            edgeBezier,
+                        }));
                     } catch (e) {
                         reject(e as Error);
                     }

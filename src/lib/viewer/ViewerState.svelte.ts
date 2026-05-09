@@ -22,6 +22,8 @@ import {
     RENDER_MODE_SINGLE_VIEW_REALTIME,
     type RenderMode,
 } from "./renderMode.ts";
+import { evaluateTurntablePath, type TurntablePathParams } from "./turntable/turntablePath.ts";
+import { runTurntableExport } from "./turntable/turntableExport.ts";
 
 export class ViewerState {
     width = $state(300);
@@ -151,20 +153,23 @@ export class ViewerState {
     turntableRadiusAmplitude = $state(0);
     turntableRadiusCycles = $state(2);
 
-    /**
-     * Evaluate the turntable animation path at a normalized time t ∈ [0, 1].
-     */
-    evaluatePath(t: number, baseLong: number): { long: number; lat: number; radius: number } {
-        const TWO_PI = Math.PI * 2;
-        return {
-            long: baseLong + t * TWO_PI,
-            lat: this.turntableLatCenter + this.turntableLatAmplitude * Math.sin(t * TWO_PI * this.turntableLatCycles),
-            radius: this.turntableRadiusCenter + this.turntableRadiusAmplitude * Math.sin(t * TWO_PI * this.turntableRadiusCycles),
-        };
+    /** Saved longitude origin for multi-view training / turntable export while training. */
+    private _turntableBaseLong = 0;
+
+    get turntableBaseLong(): number {
+        return this._turntableBaseLong;
     }
 
-    /** Saved longitude origin for multi-view training. */
-    private turntableBaseLong = 0;
+    getTurntablePathParams(): TurntablePathParams {
+        return {
+            latCenter: this.turntableLatCenter,
+            latAmplitude: this.turntableLatAmplitude,
+            latCycles: this.turntableLatCycles,
+            radiusCenter: this.turntableRadiusCenter,
+            radiusAmplitude: this.turntableRadiusAmplitude,
+            radiusCycles: this.turntableRadiusCycles,
+        };
+    }
 
     setRenderMode(mode: RenderMode) {
         if (this.renderMode === mode) return;
@@ -185,7 +190,7 @@ export class ViewerState {
             return;
         }
         // Snapshot current camera as the base reference
-        this.turntableBaseLong = this.orbit.long;
+        this._turntableBaseLong = this.orbit.long;
         this.turntableLatCenter = this.orbit.lat;
         this.turntableRadiusCenter = this.orbit.radius;
         this.turntableViewFrames = 0;
@@ -243,37 +248,23 @@ export class ViewerState {
 
         const baseLong = this.turntableTraining ? this.turntableBaseLong : origLong;
 
-        const totalFrames = this.turntableFrameCount;
-        const stepsPerFrame = this.turntableStepsPerFrame;
-
         try {
-            for (let frame = 0; frame < totalFrames; frame++) {
-                if (this.turntableCanceled) break;
-
-                const t = frame / totalFrames;
-                const p = this.evaluatePath(t, baseLong);
-                this.orbit.long = p.long;
-                this.orbit.lat = p.lat;
-                this.orbit.radius = p.radius;
-
-                for (let step = 0; step < stepsPerFrame; step++) {
-                    if (this.turntableCanceled) break;
-                    await new Promise<void>(r => requestAnimationFrame(() => r()));
-                }
-
-                if (this.turntableCanceled) break;
-
-                const imageData = await this.runner.captureTurntableFrame();
-                await writer.write(imageData);
-                this.turntableProgress = (frame + 1) / totalFrames;
-            }
+            await runTurntableExport({
+                totalFrames: this.turntableFrameCount,
+                stepsPerFrame: this.turntableStepsPerFrame,
+                isCanceled: () => this.turntableCanceled,
+                captureFrame: () => this.runner!.captureTurntableFrame(),
+                writer,
+                orbit: this.orbit,
+                restoreOrbit: { long: origLong, lat: origLat, radius: origRadius },
+                evalAtT: t => evaluateTurntablePath(t, baseLong, this.getTurntablePathParams()),
+                onProgress: p => {
+                    this.turntableProgress = p;
+                },
+            });
         } catch (e) {
             console.error("Turntable render failed", e);
         } finally {
-            await writer.close();
-            this.orbit.long = origLong;
-            this.orbit.lat = origLat;
-            this.orbit.radius = origRadius;
             this.isTurntableRendering = false;
             this.turntableProgress = 0;
         }
