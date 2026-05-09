@@ -77,74 +77,43 @@ fn intersect_tri(ro: vec3f, rd: vec3f, i0: u32, i1: u32, i2: u32, t_max: f32) ->
     var res: Hit; res.hit = false;
     let v0 = load_vert(i0); let v1 = load_vert(i1); let v2 = load_vert(i2);
     
-    // Calculate dimension where the ray direction is maximal
-    var kz = 0u;
-    let abs_rd = abs(rd);
-    if (abs_rd.y > abs_rd.x) { kz = 1u; }
-    if (abs_rd.z > max(abs_rd.x, abs_rd.y)) { kz = 2u; }
+    let edge1 = v1.pos - v0.pos;
+    let edge2 = v2.pos - v0.pos;
+    let h = cross(rd, edge2);
+    let det = dot(edge1, h);
     
-    var kx = (kz + 1u) % 3u;
-    var ky = (kx + 1u) % 3u;
-    
-    // Swap kx and ky dimension to preserve winding direction of triangles
-    if (rd[kz] < 0.0) {
-        let temp = kx;
-        kx = ky;
-        ky = temp;
-    }
-    
-    // Calculate shear constants
-    let Sz = 1.0 / rd[kz];
-    let Sx = rd[kx] * Sz;
-    let Sy = rd[ky] * Sz;
-    
-    // Calculate vertices relative to ray origin
-    let A = v0.pos - ro;
-    let B = v1.pos - ro;
-    let C = v2.pos - ro;
-    
-    // Perform shear and scale of vertices
-    let Ax = A[kx] - Sx * A[kz];
-    let Ay = A[ky] - Sy * A[kz];
-    let Bx = B[kx] - Sx * B[kz];
-    let By = B[ky] - Sy * B[kz];
-    let Cx = C[kx] - Sx * C[kz];
-    let Cy = C[ky] - Sy * C[kz];
-    
-    // Calculate scaled barycentric coordinates
-    let U = Cx * By - Cy * Bx;
-    let V = Ax * Cy - Ay * Cx;
-    let W = Bx * Ay - By * Ax;
-    
-    // Check if ray passes through triangle
-    if ((U < 0.0 || V < 0.0 || W < 0.0) && (U > 0.0 || V > 0.0 || W > 0.0)) {
-        return res;
-    }
-    
-    // Calculate determinant
-    let det = U + V + W;
-    if (det == 0.0) { return res; }
-    
-    // Calculate scaled z-coordinates of vertices and use them to calculate the hit distance
-    let Az = Sz * A[kz];
-    let Bz = Sz * B[kz];
-    let Cz = Sz * C[kz];
-    let T = U * Az + V * Bz + W * Cz;
+    // If determinant is near zero, ray is parallel to triangle
+    if (abs(det) < 1e-12) { return res; }
     
     let inv_det = 1.0 / det;
-    let t = T * inv_det;
+    let s = ro - v0.pos;
+    let u = dot(s, h) * inv_det;
+    if (u < -1e-4 || u > 1.0 + 1e-4) { return res; }
     
+    let q = cross(s, edge1);
+    let v = dot(rd, q) * inv_det;
+    if (v < -1e-4 || u + v > 1.0 + 1e-4) { return res; }
+    
+    let t = dot(edge2, q) * inv_det;
     if (t < 1e-4 || t >= t_max) { return res; }
     
-    let u = U * inv_det;
-    let v = V * inv_det;
-    let w = W * inv_det;
-    
+    let w = 1.0 - u - v;
     res.hit = true;
     res.t = t;
-    res.norm = normalize(u * v0.norm + v * v1.norm + w * v2.norm);
-    res.color = u * v0.color + v * v1.color + w * v2.color;
     
+    // Interpolate normal and handle potential zero-length result
+    let n = u * v1.norm + v * v2.norm + w * v0.norm;
+    let len_sq = dot(n, n);
+    if (len_sq > 1e-18) {
+        res.norm = n * inverseSqrt(len_sq);
+    } else {
+        // Fallback to geometric normal if vertex normals are degenerate
+        res.norm = normalize(cross(edge1, edge2));
+
+        if dot(res.norm, rd) > 0 { res.norm = -res.norm; }
+    }
+    
+    res.color = u * v1.color + v * v2.color + w * v0.color;
     return res;
 }
 
@@ -158,7 +127,7 @@ fn aabb_hit(ro: vec3f, inv_rd: vec3f, node_base: u32, t_max: f32) -> bool {
     let tmin = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
     let tmax = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), max(t0.z, t1.z));
     // tmax < 0: box behind ray; tmin > tmax: miss; tmin >= t_max: farther than best hit
-    return tmax >= 0.0 && tmax >= tmin && tmin < t_max;
+    return tmax >= -1e-4 && tmax >= tmin && tmin < t_max;
 }
 
 // ── BVH traversal ─────────────────────────────────────────────────────────────
@@ -291,7 +260,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             }
             
             throughput *= albedo; // diffuse: albedo (cos/pi and pdf cancel)
-            ray_o = ray_o + ray_d * hit.t + n * 5e-4;
+            ray_o = ray_o + ray_d * hit.t + n * 1e-3;
             ray_d = cosine_hemisphere(n, &seed);
         }
     }

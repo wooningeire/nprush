@@ -143,4 +143,8 @@ export class GpuSplatForwardPipelineManager {
         }
         pass.end();
     }
+
+    destroy() {
+        this.uniformsBuffer.destroy();
+    }
 }

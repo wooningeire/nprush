@@ -370,6 +370,53 @@ export class GpuRunner {
                 // bezier_adc.wgsl and the per-step offscreen cull in bezier_step.wgsl.
                 this.edgeLayerBezierManager.writeNoKill(this.viewerState.turntableTraining);
             });
+
+            return () => {
+                // Cleanup managers
+                this.uniformsManager.destroy();
+                this.meshRenderPipelineManager.destroy();
+                this.splatOptimizerManager.destroy();
+                this.edgeLayerBezierManager.destroy();
+                this.baseColorLayerBezierManager.destroy();
+                this.colorLayerBezierManager.destroy();
+                this.splatForwardManager.destroy();
+                this.bezierForwardManager.destroy();
+                this.baseColorBezierForwardManager.destroy();
+                this.colorBezierForwardManager.destroy();
+                this.blurManager.destroy();
+                this.depthAwareBlurManager.destroy();
+                this.pathTracePipelineManager.destroy();
+                this.envmapPipelineManager.destroy?.();
+
+                // Cleanup all textures owned by runner
+                this.targetTexture?.destroy();
+                this.targetDepthTexture?.destroy();
+                this.targetZTexture?.destroy();
+                this.targetNormalTexture?.destroy();
+                this.fullEdgeTexture?.destroy();
+                this.fullSplatTexture?.destroy();
+                this.fullSplatDepthTexture?.destroy();
+                this.fullBezierTexture?.destroy();
+                this.fullBaseColorBezierTexture?.destroy();
+                this.fullColorBezierTexture?.destroy();
+                this.targetBlurredTexture?.destroy();
+                this.targetTempTexture?.destroy();
+
+                this.optimTexture?.destroy();
+                this.optimDepthTexture?.destroy();
+                this.optimZTexture?.destroy();
+                this.optimNormalTexture?.destroy();
+                this.optimEdgeTexture?.destroy();
+                this.optimSplatTexture?.destroy();
+                this.optimSplatDepthTexture?.destroy();
+                this.optimBlurredTexture?.destroy();
+                this.optimDepthAwareBlurredTexture?.destroy();
+                this.optimBlurredDepthTexture?.destroy();
+                this.optimTempTexture?.destroy();
+                this.dummyTexture?.destroy();
+
+                this.multiviewDataset?.destroy();
+            };
         });
     }
 
@@ -521,6 +568,12 @@ export class GpuRunner {
         if (this.optimDepthTexture) this.optimDepthTexture.destroy();
         if (this.optimZTexture) this.optimZTexture.destroy();
         if (this.optimEdgeTexture) this.optimEdgeTexture.destroy();
+        if (this.optimSplatTexture) this.optimSplatTexture.destroy();
+        if (this.optimSplatDepthTexture) this.optimSplatDepthTexture.destroy();
+        if (this.optimBlurredTexture) this.optimBlurredTexture.destroy();
+        if (this.optimDepthAwareBlurredTexture) this.optimDepthAwareBlurredTexture.destroy();
+        if (this.optimBlurredDepthTexture) this.optimBlurredDepthTexture.destroy();
+        if (this.optimTempTexture) this.optimTempTexture.destroy();
 
         this.optimTexture = this.device.createTexture({
             label: "optimization target texture",
@@ -680,9 +733,12 @@ export class GpuRunner {
                 if (this.targetZTexture) this.targetZTexture.destroy();
                 if (this.fullEdgeTexture) this.fullEdgeTexture.destroy();
                 if (this.fullSplatTexture) this.fullSplatTexture.destroy();
+                if (this.fullSplatDepthTexture) this.fullSplatDepthTexture.destroy();
                 if (this.fullBezierTexture) this.fullBezierTexture.destroy();
                 if (this.fullBaseColorBezierTexture) this.fullBaseColorBezierTexture.destroy();
                 if (this.fullColorBezierTexture) this.fullColorBezierTexture.destroy();
+                if (this.targetBlurredTexture) this.targetBlurredTexture.destroy();
+                if (this.targetTempTexture) this.targetTempTexture.destroy();
 
                 this.fullWidth = fullW;
                 this.fullHeight = fullH;

@@ -97,4 +97,9 @@ export class GpuBlurPipelineManager {
 
         pass.end();
     }
+
+    destroy() {
+        this.hParamsBuffer.destroy();
+        this.vParamsBuffer.destroy();
+    }
 }

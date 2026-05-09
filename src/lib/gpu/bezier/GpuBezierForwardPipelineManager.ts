@@ -152,4 +152,8 @@ export class GpuBezierForwardPipelineManager {
         pass.draw(4, this.numBeziers);
         pass.end();
     }
+
+    destroy() {
+        this.bezierUniformsBuffer.destroy();
+    }
 }

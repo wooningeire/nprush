@@ -581,4 +581,19 @@ export class GpuSplatOptimizerManager {
             stepPass.end();
         }
     }
+
+    destroy() {
+        this.splatBuffer.destroy();
+        this.gradBuffer.destroy();
+        this.adamBuffer.destroy();
+        this.adcBuffer.destroy();
+        this.renderUniformsBuffer.destroy();
+        this.splatUniformsBuffer.destroy();
+        this.sortKeysBuffer.destroy();
+        this.sortIndicesBuffer.destroy();
+        this.sortUniformsBuffer.destroy();
+        for (const buf of this.sortStepUniformBuffers) {
+            buf.destroy();
+        }
+    }
 }

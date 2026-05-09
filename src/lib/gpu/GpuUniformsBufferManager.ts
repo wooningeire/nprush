@@ -84,4 +84,8 @@ export class GpuUniformsBufferManager {
             (mat as Float32Array).byteLength
         );
     }
+
+    destroy() {
+        this.uniformsBuffer.destroy();
+    }
 }

@@ -75,4 +75,8 @@ export class GpuDepthAwareBlurPipelineManager {
         pass.dispatchWorkgroups(Math.ceil(width / 16), Math.ceil(height / 16));
         pass.end();
     }
+
+    destroy() {
+        this.paramsBuffer.destroy();
+    }
 }

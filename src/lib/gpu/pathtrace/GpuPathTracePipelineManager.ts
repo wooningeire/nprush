@@ -203,9 +203,33 @@ export class GpuPathTracePipelineManager {
         this.device.queue.writeBuffer(this.ptUniformsBuffer, 0, mat.buffer, mat.byteOffset, mat.byteLength);
     }
 
+    private envView: GPUTextureView | null = null;
+    private ptSampler: GPUSampler | null = null;
+
+    destroy() {
+        this.vertexBuffer?.destroy();
+        this.bvhNodeBuffer?.destroy();
+        this.bvhTriBuffer?.destroy();
+        this.accumBuffer?.destroy();
+        this._outputTexture?.destroy();
+        this.ptUniformsBuffer.destroy();
+        this.resolveUniformsBuffer.destroy();
+    }
+
     private rebuildBindGroups() {
         if (!this.vertexBuffer || !this.bvhNodeBuffer || !this.bvhTriBuffer ||
             !this.accumBuffer || !this.outputTextureView) return;
+
+        if (!this.envView) {
+            this.envView = this.envTexture.createView({ label: "pt env texture view" });
+        }
+        if (!this.ptSampler) {
+            this.ptSampler = this.device.createSampler({
+                label: "pt sampler",
+                magFilter: "linear", minFilter: "linear",
+                addressModeU: "repeat", addressModeV: "clamp-to-edge",
+            });
+        }
 
         this.ptBindGroup = this.device.createBindGroup({
             label: "path trace bind group",
@@ -216,12 +240,8 @@ export class GpuPathTracePipelineManager {
                 { binding: 2, resource: { buffer: this.bvhNodeBuffer } },
                 { binding: 3, resource: { buffer: this.bvhTriBuffer } },
                 { binding: 4, resource: { buffer: this.accumBuffer } },
-                { binding: 5, resource: this.envTexture.createView({ label: "pt env texture view" }) },
-                { binding: 6, resource: this.device.createSampler({
-                    label: "pt sampler",
-                    magFilter: "linear", minFilter: "linear",
-                    addressModeU: "repeat", addressModeV: "clamp-to-edge",
-                })},
+                { binding: 5, resource: this.envView },
+                { binding: 6, resource: this.ptSampler },
                 { binding: 7, resource: { buffer: this.splatBuffer! } },
                 { binding: 8, resource: { buffer: this.splatUniforms! } },
             ],

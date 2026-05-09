@@ -574,4 +574,19 @@ export class GpuBezierOptimizerManager {
             stepPass.end();
         }
     }
+
+    destroy() {
+        this.bezierBuffer.destroy();
+        this.gradBuffer.destroy();
+        this.adamBuffer.destroy();
+        this.adcBuffer.destroy();
+        this.bezierUniformsBuffer.destroy();
+        this.pixelLossBuffer.destroy();
+        this.sortKeysBuffer.destroy();
+        this.sortIndicesBuffer.destroy();
+        this.sortUniformsBuffer.destroy();
+        for (const buf of this.sortStepUniformBuffers) {
+            buf.destroy();
+        }
+    }
 }

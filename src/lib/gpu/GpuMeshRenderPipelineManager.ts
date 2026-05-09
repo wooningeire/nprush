@@ -308,19 +308,45 @@ export class GpuMeshRenderPipelineManager {
         );
     }
 
+    private matcapSampler: GPUSampler | null = null;
+    private matcapBindGroup: GPUBindGroup | null = null;
+    private lastMatcapView: GPUTextureView | null = null;
+
+    destroy() {
+        this.vertexBuffer.destroy();
+        this.indexBuffer.destroy();
+        this.meshSplatsBuffer.destroy();
+        this.meshUniformsBuffer.destroy();
+        this.groundVertexBuffer?.destroy();
+        this.groundIndexBuffer?.destroy();
+        this.pbrVertexBuffer?.destroy();
+        this.pbrIndexBuffer?.destroy();
+    }
+
     addDraw(renderPassEncoder: GPURenderPassEncoder, matcapTextureView: GPUTextureView) {
-        const bindGroup = this.device.createBindGroup({
-            label: "mesh matcap bind group",
-            layout: this.renderPipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: this.uniformsManager.uniformsBuffer } },
-                { binding: 1, resource: matcapTextureView },
-                { binding: 2, resource: this.device.createSampler({ label: "mesh matcap sampler", magFilter: "linear", minFilter: "linear" }) },
-            ],
-        });
+        if (!this.matcapSampler) {
+            this.matcapSampler = this.device.createSampler({ 
+                label: "mesh matcap sampler", 
+                magFilter: "linear", 
+                minFilter: "linear" 
+            });
+        }
+
+        if (!this.matcapBindGroup || this.lastMatcapView !== matcapTextureView) {
+            this.lastMatcapView = matcapTextureView;
+            this.matcapBindGroup = this.device.createBindGroup({
+                label: "mesh matcap bind group",
+                layout: this.renderPipeline.getBindGroupLayout(0),
+                entries: [
+                    { binding: 0, resource: { buffer: this.uniformsManager.uniformsBuffer } },
+                    { binding: 1, resource: matcapTextureView },
+                    { binding: 2, resource: this.matcapSampler },
+                ],
+            });
+        }
 
         renderPassEncoder.setPipeline(this.renderPipeline);
-        renderPassEncoder.setBindGroup(0, bindGroup);
+        renderPassEncoder.setBindGroup(0, this.matcapBindGroup);
         renderPassEncoder.setBindGroup(1, this.splatsBindGroup);
         renderPassEncoder.setVertexBuffer(0, this.vertexBuffer);
         renderPassEncoder.setIndexBuffer(this.indexBuffer, "uint32");
