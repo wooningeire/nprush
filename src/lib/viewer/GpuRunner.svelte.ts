@@ -9,13 +9,13 @@ import { GpuBlurPipelineManager } from "../gpu/blur/GpuBlurPipelineManager.ts";
 import { GpuDepthAwareBlurPipelineManager } from "../gpu/blur/GpuDepthAwareBlurPipelineManager.ts";
 import { GpuEnvmapPipelineManager } from "../gpu/envmap/GpuEnvmapPipelineManager.ts";
 import { GpuPathTracePipelineManager } from "../gpu/pathtrace/GpuPathTracePipelineManager.ts";
-import type { MeshData } from "../gpu/io/loadGlb.ts";
+import type { MeshData } from "../gpu/file-load/loadGlb.ts";
 import type { ViewerState } from "./ViewerState.svelte.ts";
 import { RENDER_MODE_MULTIVIEW } from "./renderMode.ts";
 import type { Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants";
 import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
-import { readTextureToImageData, imageDataToBlob } from "$/gpu/io/readback.ts";
+import { readTextureToImageData, imageDataToBlob } from "$/gpu/file-save/readback.ts";
 
 const OPTIM_SHORT = constants.OPTIM_SHORT;
 
