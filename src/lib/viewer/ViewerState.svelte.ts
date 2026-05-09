@@ -24,6 +24,7 @@ export class ViewerState {
     edgeBeziersEnabled = $state(false);
     baseColorBeziersEnabled = $state(true);
     colorBeziersEnabled = $state(true);
+    splatsEnabled = $state(true);
     splatTrainingPaused = $state(false);
     edgeBezierTrainingPaused = $state(false);
     baseColorBezierTrainingPaused = $state(false);
@@ -107,6 +108,14 @@ export class ViewerState {
     // camera angle sampled from the turntable animation path.
     turntableTraining = $state(false);
 
+    // Minimum number of path-tracer accumulation frames to hold each view
+    // before switching to the next random angle. Gives the PT enough time
+    // to converge before the optimizer sees the result.
+    turntableMinSamplesPerView = $state(32);
+
+    /** Frames accumulated on the current turntable training view. */
+    private turntableViewFrames = 0;
+
     // Time-varying path parameters.
     // t ∈ [0, 1] → full revolution.
     // long(t) = baseLong + t * 2π
@@ -145,16 +154,21 @@ export class ViewerState {
             this.turntableBaseLong = this.orbit.long;
             this.turntableLatCenter = this.orbit.lat;
             this.turntableRadiusCenter = this.orbit.radius;
+            this.turntableViewFrames = 0;
         }
     }
 
     /**
      * Called each frame by the render loop while turntableTraining is enabled.
-     * Sets the camera to a random view from the turntable path so the
-     * optimizer sees all angles.
+     * Holds the current camera view until the path tracer has accumulated
+     * at least `turntableMinSamplesPerView` samples, then switches to a new
+     * random angle so the optimizer sees all angles without starving the PT.
      */
     tickTurntableTraining() {
         if (!this.turntableTraining) return;
+        this.turntableViewFrames++;
+        if (this.turntableViewFrames < this.turntableMinSamplesPerView) return;
+        this.turntableViewFrames = 0;
         const t = Math.random();
         const p = this.evaluatePath(t, this.turntableBaseLong);
         this.orbit.long = p.long;

@@ -43,9 +43,15 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         </label>
     {/if}
     <label>
-        <input type="checkbox" bind:checked={viewerState.splatTrainingPaused} />
-        Pause Splat Training
+        <input type="checkbox" bind:checked={viewerState.splatsEnabled} />
+        Gaussian Splats
     </label>
+    {#if viewerState.splatsEnabled}
+        <label class="sub">
+            <input type="checkbox" bind:checked={viewerState.splatTrainingPaused} />
+            Pause training
+        </label>
+    {/if}
     <label>
         <input type="checkbox" bind:checked={viewerState.meshSplatsEnabled} />
         Mesh Texture Splats
@@ -97,6 +103,15 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
                 🔄 Start Multi-View Training
             {/if}
         </button>
+
+        {#if viewerState.turntableTraining}
+            <div class="slider-group">
+                <label>
+                    PT samples/view: {viewerState.turntableMinSamplesPerView}
+                    <input type="range" min="1" max="256" step="1" bind:value={viewerState.turntableMinSamplesPerView} />
+                </label>
+            </div>
+        {/if}
 
         <div class="slider-group">
             <label>
