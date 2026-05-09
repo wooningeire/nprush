@@ -43,6 +43,9 @@ export class ViewerState {
     meshBvh: BvhResult | null = null;
     isCapturing = $state(false);
     
+    renderMode = $state<'real-time' | 'animation'>('real-time');
+    viewportRenderingFrozen = $state(false);
+
     runner = $state<GpuRunner | null>(null);
     
     readonly orbit = new CameraOrbit();
@@ -158,6 +161,11 @@ export class ViewerState {
     /** Saved longitude origin for multi-view training. */
     private turntableBaseLong = 0;
 
+    setRenderMode(mode: 'real-time' | 'animation') {
+        if (this.renderMode === mode) return;
+        this.renderMode = mode;
+    }
+
     /**
      * Toggle multi-view turntable training. When enabled, kicks off a
      * prerender pass to build the dataset, then trains from it.
@@ -183,11 +191,11 @@ export class ViewerState {
     }
 
     /**
-     * Called each frame by the render loop while turntableTraining is enabled
+     * Called each frame by the render loop while in animation mode
      * AND the dataset is ready. No-op — view selection is handled directly in
      * the GpuRunner frame loop by sampling a random dataset slot each frame.
      */
-    tickTurntableTraining() {
+    tickAnimationMode() {
         // Dataset-driven: view selection happens in GpuRunner.loop() by picking
         // a random slot and writing its matrices directly to the GPU buffers,
         // without touching the reactive orbit state. This avoids triggering the

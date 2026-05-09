@@ -320,7 +320,11 @@ export class GpuRunner {
                 this.viewerState.meshSplatsEnabled,
                 this.viewerState.splatsEnabled,
             ));
-            $effect(() => this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat, this.camera.viewProjInvMat, this.viewerState.compareBlurred));
+            $effect(() => {
+                if (this.viewerState.renderMode !== 'animation') {
+                    this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat, this.camera.viewProjInvMat, this.viewerState.compareBlurred);
+                }
+            });
             $effect(() => {
                 // Reset Adam momentum on camera change so stale cross-view gradients
                 // don't corrupt the step for the new viewpoint during turntable training.
@@ -332,13 +336,15 @@ export class GpuRunner {
                 this.colorLayerBezierManager.resetAdam();
             });
             $effect(() => this.splatForwardManager.writeVPMatrix(this.camera.viewProjMat));
-            $effect(() => this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
-            $effect(() => this.baseColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
-            $effect(() => this.colorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => {
-                this.edgeLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
-                this.baseColorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
-                this.colorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+                if (this.viewerState.renderMode !== 'animation') {
+                    this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
+                    this.baseColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
+                    this.colorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
+                    this.edgeLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+                    this.baseColorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+                    this.colorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+                }
             });
             $effect(() => this.bezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.baseColorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
@@ -363,12 +369,12 @@ export class GpuRunner {
                 this.baseColorLayerBezierManager.setAdcPeriod(150);
             });
             $effect(() => {
-                // During turntable training the camera rotates to random angles each
+                // During animation mode the camera rotates to random angles each
                 // view, so edge-layer curves that are off-screen from the current angle
                 // must not be killed — they will be visible again from other views.
                 // Setting no_kill suppresses both the loss-based and offscreen kills in
                 // bezier_adc.wgsl and the per-step offscreen cull in bezier_step.wgsl.
-                this.edgeLayerBezierManager.writeNoKill(this.viewerState.turntableTraining);
+                this.edgeLayerBezierManager.writeNoKill(this.viewerState.renderMode === 'animation');
             });
 
             return () => {
@@ -861,8 +867,10 @@ export class GpuRunner {
                 return;
             }
 
-            // Multi-view turntable training: randomize camera each frame
-            this.viewerState.tickTurntableTraining();
+            // In animation mode, we might randomize camera each frame
+            if (this.viewerState.renderMode === 'animation') {
+                this.viewerState.tickAnimationMode();
+            }
 
             const commandEncoder = this.device.createCommandEncoder({
                 label: "runner loop command encoder",
@@ -892,7 +900,7 @@ export class GpuRunner {
             }
 
             // 1a. Render the model into the full-res target + depth textures (for visualization).
-            if (!this.viewerState.turntableTraining) {
+            if (!this.viewerState.viewportRenderingFrozen) {
                 const spherePassEncoder = commandEncoder.beginRenderPass({
                     label: "mesh render pass (full res)",
                     colorAttachments: [
@@ -1026,7 +1034,8 @@ export class GpuRunner {
                 this.optimWidth,
                 this.optimHeight
             );
-            if (this.viewerState.splatsEnabled && !this.viewerState.splatTrainingPaused) {
+            const defaultPause = this.viewerState.renderMode === 'animation' && (!this.viewerState.turntableTraining || !this.viewerState.multiviewDatasetReady);
+            if (this.viewerState.splatsEnabled && !(this.viewerState.splatTrainingPaused || defaultPause)) {
                 this.splatOptimizerManager.dispatch(commandEncoder);
             }
 
@@ -1045,14 +1054,14 @@ export class GpuRunner {
             this.splatForwardManager.dispatch(commandEncoder, true, this.viewerState.splatsEnabled);
 
             // 3.2 Restore full-res target for visualization later
-            if (!this.viewerState.turntableTraining) {
+            if (!this.viewerState.viewportRenderingFrozen) {
                 this.splatForwardManager.setTarget(this.fullSplatTextureView!, this.fullSplatDepthTextureView!, fullW, fullH);
             }
 
             // 3b. Train the bezier edge layer: its target is the freshly-computed
             // edge texture, so the curves learn to trace the depth silhouette.
             if (this.viewerState.edgeBeziersEnabled) {
-                if (!this.viewerState.edgeBezierTrainingPaused) {
+                if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
                     this.edgeLayerBezierManager.dispatch(commandEncoder);
                 }
                 this.edgeLayerBezierManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
@@ -1070,7 +1079,7 @@ export class GpuRunner {
                     this.optimWidth,
                     this.optimHeight,
                 );
-                if (!this.viewerState.baseColorBezierTrainingPaused) {
+                if (!(this.viewerState.baseColorBezierTrainingPaused || defaultPause)) {
                     this.baseColorLayerBezierManager.dispatch(commandEncoder);
                 }
                 this.baseColorLayerBezierManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
@@ -1093,14 +1102,14 @@ export class GpuRunner {
                     this.optimWidth,
                     this.optimHeight,
                 );
-                if (!this.viewerState.colorBezierTrainingPaused) {
+                if (!(this.viewerState.colorBezierTrainingPaused || defaultPause)) {
                     this.colorLayerBezierManager.dispatch(commandEncoder);
                 }
                 this.colorLayerBezierManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
             }
 
             // 4. Run edge detection on full-res depth (for display)
-            if (!this.viewerState.turntableTraining) {
+            if (!this.viewerState.viewportRenderingFrozen) {
                 this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);
                 this.splatOptimizerManager.dispatchEdge(commandEncoder, fullW, fullH);
                 // Restore optim-res edge bind group for next frame
