@@ -1,5 +1,10 @@
 <script lang="ts">
 import type { ViewerState } from "./ViewerState.svelte";
+import {
+    RENDER_MODE_MULTIVIEW,
+    RENDER_MODE_SINGLE_VIEW_REALTIME,
+    type RenderMode,
+} from "./renderMode.ts";
 
 const {
     viewerState,
@@ -17,11 +22,12 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             Render Mode
             <select
                 value={viewerState.renderMode}
-                onchange={(e) => viewerState.setRenderMode((e.target as HTMLSelectElement).value as any)}
+                onchange={(e) =>
+                    viewerState.setRenderMode((e.target as HTMLSelectElement).value as RenderMode)}
                 style="background: rgba(0,0,0,0.5); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 2px 4px;"
             >
-                <option value="real-time">Real-Time</option>
-                <option value="animation">Animation</option>
+                <option value={RENDER_MODE_SINGLE_VIEW_REALTIME}>Single-view (realtime)</option>
+                <option value={RENDER_MODE_MULTIVIEW}>Multiview</option>
             </select>
         </label>
     </div>
@@ -125,27 +131,26 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     <div class="separator"></div>
 
     <div class="turntable-section">
-        <div class="section-title">Turntable Animation</div>
+        <div class="section-title">Turntable</div>
 
-        <!-- Mode Toggle Button -->
-        <button
-            class="render-btn"
-            class:training-active={viewerState.turntableTraining}
-            onclick={() => viewerState.toggleTurntableTraining()}
-            disabled={viewerState.isTurntableRendering}
-        >
-            {#if viewerState.multiviewPrerendering}
-                <div class="spinner"></div>
-                Prerendering… {Math.round(viewerState.multiviewPrerenderProgress * 100)}%
-            {:else if viewerState.turntableTraining}
-                <div class="pulse-dot"></div>
-                Stop Multi-View Training
-            {:else}
-                🔄 Start Multi-View Training
-            {/if}
-        </button>
+        {#if viewerState.renderMode === RENDER_MODE_MULTIVIEW}
+            <button
+                class="render-btn"
+                class:training-active={viewerState.turntableTraining}
+                onclick={() => viewerState.toggleTurntableTraining()}
+                disabled={viewerState.isTurntableRendering}
+            >
+                {#if viewerState.multiviewPrerendering}
+                    <div class="spinner"></div>
+                    Prerendering… {Math.round(viewerState.multiviewPrerenderProgress * 100)}%
+                {:else if viewerState.turntableTraining}
+                    <div class="pulse-dot"></div>
+                    Stop Multiview Training
+                {:else}
+                    🔄 Start Multiview Training
+                {/if}
+            </button>
 
-        {#if viewerState.renderMode === 'animation'}
             {#if !viewerState.multiviewDatasetReady || viewerState.turntableTraining}
                 <div class="slider-group">
                     <label>
@@ -168,82 +173,82 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
                     <div class="progress-bar prerender" style:width="{viewerState.multiviewPrerenderProgress * 100}%"></div>
                 </div>
             {/if}
+        {/if}
 
-            <div class="slider-group">
+        <div class="slider-group">
+            <label>
+                Frames: {viewerState.turntableFrameCount}
+                <input type="range" min="12" max="360" step="12" bind:value={viewerState.turntableFrameCount}
+                    disabled={viewerState.isTurntableRendering} />
+            </label>
+        </div>
+
+        <div class="slider-group">
+            <label>
+                Steps/frame: {viewerState.turntableStepsPerFrame}
+                <input type="range" min="1" max="200" step="1" bind:value={viewerState.turntableStepsPerFrame}
+                    disabled={viewerState.isTurntableRendering} />
+            </label>
+        </div>
+
+        <div class="param-header">Path Variation</div>
+
+        <div class="slider-group">
+            <label>
+                Lat oscillation: {latDeg}°
+                <input type="range" min="0" max={Math.PI / 3} step="0.01" bind:value={viewerState.turntableLatAmplitude}
+                    disabled={viewerState.isTurntableRendering} />
+            </label>
+        </div>
+        {#if viewerState.turntableLatAmplitude > 0}
+            <div class="slider-group sub-param">
                 <label>
-                    Frames: {viewerState.turntableFrameCount}
-                    <input type="range" min="12" max="360" step="12" bind:value={viewerState.turntableFrameCount}
+                    Lat cycles: {viewerState.turntableLatCycles}
+                    <input type="range" min="1" max="8" step="1" bind:value={viewerState.turntableLatCycles}
                         disabled={viewerState.isTurntableRendering} />
                 </label>
             </div>
+        {/if}
 
-            <div class="slider-group">
+        <div class="slider-group">
+            <label>
+                Radius oscillation: {radPct}%
+                <input type="range" min="0" max="0.5" step="0.01" bind:value={viewerState.turntableRadiusAmplitude}
+                    disabled={viewerState.isTurntableRendering} />
+            </label>
+        </div>
+        {#if viewerState.turntableRadiusAmplitude > 0}
+            <div class="slider-group sub-param">
                 <label>
-                    Steps/frame: {viewerState.turntableStepsPerFrame}
-                    <input type="range" min="1" max="200" step="1" bind:value={viewerState.turntableStepsPerFrame}
+                    Radius cycles: {viewerState.turntableRadiusCycles}
+                    <input type="range" min="1" max="8" step="1" bind:value={viewerState.turntableRadiusCycles}
                         disabled={viewerState.isTurntableRendering} />
                 </label>
             </div>
+        {/if}
 
-            <div class="param-header">Path Variation</div>
-
-            <div class="slider-group">
-                <label>
-                    Lat oscillation: {latDeg}°
-                    <input type="range" min="0" max={Math.PI / 3} step="0.01" bind:value={viewerState.turntableLatAmplitude}
-                        disabled={viewerState.isTurntableRendering} />
-                </label>
+        {#if viewerState.isTurntableRendering}
+            <div class="progress-container">
+                <div class="progress-bar" style:width="{viewerState.turntableProgress * 100}%"></div>
             </div>
-            {#if viewerState.turntableLatAmplitude > 0}
-                <div class="slider-group sub-param">
-                    <label>
-                        Lat cycles: {viewerState.turntableLatCycles}
-                        <input type="range" min="1" max="8" step="1" bind:value={viewerState.turntableLatCycles}
-                            disabled={viewerState.isTurntableRendering} />
-                    </label>
-                </div>
-            {/if}
-
-            <div class="slider-group">
-                <label>
-                    Radius oscillation: {radPct}%
-                    <input type="range" min="0" max="0.5" step="0.01" bind:value={viewerState.turntableRadiusAmplitude}
-                        disabled={viewerState.isTurntableRendering} />
-                </label>
+            <div class="progress-label">
+                {Math.round(viewerState.turntableProgress * 100)}%
+                — Frame {Math.round(viewerState.turntableProgress * viewerState.turntableFrameCount)}/{viewerState.turntableFrameCount}
             </div>
-            {#if viewerState.turntableRadiusAmplitude > 0}
-                <div class="slider-group sub-param">
-                    <label>
-                        Radius cycles: {viewerState.turntableRadiusCycles}
-                        <input type="range" min="1" max="8" step="1" bind:value={viewerState.turntableRadiusCycles}
-                            disabled={viewerState.isTurntableRendering} />
-                    </label>
-                </div>
-            {/if}
-
-            {#if viewerState.isTurntableRendering}
-                <div class="progress-container">
-                    <div class="progress-bar" style:width="{viewerState.turntableProgress * 100}%"></div>
-                </div>
-                <div class="progress-label">
-                    {Math.round(viewerState.turntableProgress * 100)}%
-                    — Frame {Math.round(viewerState.turntableProgress * viewerState.turntableFrameCount)}/{viewerState.turntableFrameCount}
-                </div>
-                <button
-                    class="render-btn cancel"
-                    onclick={() => viewerState.cancelTurntable()}
-                >
-                    ✕ Cancel
-                </button>
-            {:else}
-                <button
-                    class="render-btn turntable"
-                    onclick={() => viewerState.renderTurntable()}
-                    disabled={viewerState.isCapturing}
-                >
-                    🎬 Save Frames to Folder
-                </button>
-            {/if}
+            <button
+                class="render-btn cancel"
+                onclick={() => viewerState.cancelTurntable()}
+            >
+                ✕ Cancel
+            </button>
+        {:else}
+            <button
+                class="render-btn turntable"
+                onclick={() => viewerState.renderTurntable()}
+                disabled={viewerState.isCapturing}
+            >
+                🎬 Save Frames to Folder
+            </button>
         {/if}
     </div>
 </div>

@@ -37,9 +37,9 @@ export const constants = {
     SPLAT_EDGE_THRESHOLD_MAX: 0.06,
     
     // Runner / Optimization config
-    OPTIM_SHORT: 128,
-    NUM_GAUSSIAN_SPLATS: 256,
-    NUM_EDGE_LAYER_BEZIERS: 1024,
+    OPTIM_SHORT: 256,
+    NUM_GAUSSIAN_SPLATS: 512,
+    NUM_EDGE_LAYER_BEZIERS: 4096,
     
     // Mesh Splatting
     MESH_SPLAT_MAX_COUNT: 4096,

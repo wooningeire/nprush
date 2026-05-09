@@ -11,6 +11,7 @@ import { GpuEnvmapPipelineManager } from "../gpu/envmap/GpuEnvmapPipelineManager
 import { GpuPathTracePipelineManager } from "../gpu/pathtrace/GpuPathTracePipelineManager.ts";
 import type { MeshData } from "../gpu/io/loadGlb.ts";
 import type { ViewerState } from "./ViewerState.svelte.ts";
+import { RENDER_MODE_MULTIVIEW } from "./renderMode.ts";
 import type { Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants";
 import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
@@ -323,15 +324,16 @@ export class GpuRunner {
                 this.viewerState.splatsEnabled,
             ));
             $effect(() => {
-                if (this.viewerState.renderMode !== 'animation') {
+                if (this.viewerState.renderMode !== RENDER_MODE_MULTIVIEW) {
                     this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat, this.camera.viewProjInvMat, this.viewerState.compareBlurred);
                 }
             });
             $effect(() => {
-                // Reset Adam momentum on camera change so stale cross-view gradients
-                // don't corrupt the step for the new viewpoint during turntable training.
-                // Mirrors the pathtracer's reset() call on camera change.
+                // Reset Adam on camera change for ordinary navigation. Multiview uses
+                // dataset views without moving the orbit. Single-view turntable export
+                // moves the camera each frame but should accumulate optimizer state.
                 this.camera.viewProjMat;
+                if (this.viewerState.isTurntableRendering) return;
                 this.splatOptimizerManager.resetAdam();
                 this.edgeLayerBezierManager.resetAdam();
                 this.baseColorLayerBezierManager.resetAdam();
@@ -339,7 +341,7 @@ export class GpuRunner {
             });
             $effect(() => this.splatForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => {
-                if (this.viewerState.renderMode !== 'animation') {
+                if (this.viewerState.renderMode !== RENDER_MODE_MULTIVIEW) {
                     this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
                     this.baseColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
                     this.colorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
@@ -369,12 +371,12 @@ export class GpuRunner {
                 this.baseColorLayerBezierManager.setAdcPeriod(150);
             });
             $effect(() => {
-                // During animation mode the camera rotates to random angles each
-                // view, so edge-layer curves that are off-screen from the current angle
-                // must not be killed — they will be visible again from other views.
-                // Setting no_kill suppresses both the loss-based and offscreen kills in
-                // bezier_adc.wgsl and the per-step offscreen cull in bezier_step.wgsl.
-                this.edgeLayerBezierManager.writeNoKill(this.viewerState.renderMode === 'animation');
+                // Multiview rotates the effective view each frame; single-view turntable
+                // export also moves the camera so silhouette curves should not be killed
+                // while they are temporarily off-screen.
+                this.edgeLayerBezierManager.writeNoKill(
+                    this.viewerState.renderMode === RENDER_MODE_MULTIVIEW || this.viewerState.isTurntableRendering,
+                );
             });
 
             return () => {
@@ -864,7 +866,7 @@ export class GpuRunner {
             }
 
             // In animation mode, we might randomize camera each frame
-            if (this.viewerState.renderMode === 'animation') {
+            if (this.viewerState.renderMode === RENDER_MODE_MULTIVIEW) {
                 this.viewerState.tickAnimationMode();
             }
 
@@ -1034,7 +1036,7 @@ export class GpuRunner {
                 this.optimWidth,
                 this.optimHeight
             );
-            const defaultPause = this.viewerState.renderMode === 'animation' && (!this.viewerState.turntableTraining || !this.viewerState.multiviewDatasetReady);
+            const defaultPause = this.viewerState.renderMode === RENDER_MODE_MULTIVIEW && (!this.viewerState.turntableTraining || !this.viewerState.multiviewDatasetReady);
             if (this.viewerState.splatsEnabled && !(this.viewerState.splatTrainingPaused || defaultPause)) {
                 this.splatOptimizerManager.dispatch(commandEncoder);
             }

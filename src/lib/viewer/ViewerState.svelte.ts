@@ -17,6 +17,11 @@ import { buildBvh, raycastBvh, type BvhResult } from "../gpu/bvh.ts";
 import { vec4 } from "wgpu-matrix";
 import { STRIP_HEIGHT_FRAC } from "$/util";
 import { downloadBlob, openFrameWriter } from "../util/export.ts";
+import {
+    RENDER_MODE_MULTIVIEW,
+    RENDER_MODE_SINGLE_VIEW_REALTIME,
+    type RenderMode,
+} from "./renderMode.ts";
 
 export class ViewerState {
     width = $state(300);
@@ -43,7 +48,7 @@ export class ViewerState {
     meshBvh: BvhResult | null = null;
     isCapturing = $state(false);
     
-    renderMode = $state<'real-time' | 'animation'>('real-time');
+    renderMode = $state<RenderMode>(RENDER_MODE_SINGLE_VIEW_REALTIME);
     viewportRenderingFrozen = $state(false);
 
     runner = $state<GpuRunner | null>(null);
@@ -161,8 +166,11 @@ export class ViewerState {
     /** Saved longitude origin for multi-view training. */
     private turntableBaseLong = 0;
 
-    setRenderMode(mode: 'real-time' | 'animation') {
+    setRenderMode(mode: RenderMode) {
         if (this.renderMode === mode) return;
+        if (mode === RENDER_MODE_SINGLE_VIEW_REALTIME && this.turntableTraining) {
+            this.turntableTraining = false;
+        }
         this.renderMode = mode;
     }
 
@@ -191,7 +199,7 @@ export class ViewerState {
     }
 
     /**
-     * Called each frame by the render loop while in animation mode
+     * Called each frame by the render loop while in Multiview mode
      * AND the dataset is ready. No-op — view selection is handled directly in
      * the GpuRunner frame loop by sampling a random dataset slot each frame.
      */
