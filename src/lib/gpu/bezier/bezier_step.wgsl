@@ -142,7 +142,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
             -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
             0.0, 0.0, 0.0, 0.00, 0.001, 0.001
         );
-        let width_hi = select(0.1, uniforms.max_width, uniforms.max_width > 0.0);
+        let width_hi = uniforms.max_width;
         let hi = array<f32, 18>(
             1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
             1e9, 1e9, 1e9, 1e9, 1e9, 1e9,

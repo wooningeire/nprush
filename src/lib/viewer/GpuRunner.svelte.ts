@@ -353,7 +353,7 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.writeMode(0); // Edge mode
                 this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
-                this.colorLayerBezierManager.writeMaxWidth(0.012); // finer strokes on second color layer
+                this.colorLayerBezierManager.writeMaxWidth(0.03); // finer strokes on second color layer
                 // Fine color layer: less aggressive killing so thin strokes survive,
                 // but background penalty enabled to kill off-model curves.
                 this.colorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
@@ -363,6 +363,7 @@ export class GpuRunner {
                 // Enable no_kill so broad strokes aren't pruned before they settle —
                 // the ADC stuck+loss kill was the main source of base-layer jitter.
                 // Longer ADC period reduces clone/kill churn on broad strokes.
+                this.baseColorLayerBezierManager.writeMaxWidth(2);
                 this.baseColorLayerBezierManager.writeBgPenalty(0.0);
                 this.baseColorLayerBezierManager.writeNoKill(true);
                 this.baseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);

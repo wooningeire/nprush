@@ -74,47 +74,31 @@ fn vs_main(
     let p2 = proj2.xy;
     let p3 = proj3.xy;
 
-    let k = vi / 2u;
-    let t = f32(k) / f32(N_SEG);
-    
-    let omt = 1.0 - t;
-    let pos = omt*omt*omt * p0 + 3.0 * omt*omt * t * p1 + 3.0 * omt * t*t * p2 + t*t*t * p3;
-    let deriv = 3.0 * omt*omt * (p1 - p0) + 6.0 * omt * t * (p2 - p1) + 3.0 * t*t * (p3 - p2);
-    
-    var tangent = normalize(deriv);
-    if (length(deriv) < 1e-4) {
-        tangent = normalize(p3 - p0);
-        if (length(p3 - p0) < 1e-4) {
-            tangent = vec2f(1.0, 0.0);
-        }
-    }
-    
-    let normal = vec2f(-tangent.y, tangent.x);
+    // Perspective scaling: treat width/softness as world-space units.
+    // Use average depth for bounding box expansion.
+    let avg_w = (proj0.z + proj1.z + proj2.z + proj3.z) * 0.25;
+    let inv_w = 1.0 / max(avg_w, 0.001);
 
-    let dt = t - 0.5;
-    let pressure = 1.0 - 4.0 * dt * dt;
+    let width = max(b.p0.w, 0.0001) * inv_w;
+    let softness = max(b.p1.w, 0.0001) * inv_w;
+    let pad = width + softness;
 
-    let w = omt*omt*omt * proj0.z + 3.0 * omt*omt * t * proj1.z + 3.0 * omt * t*t * proj2.z + t*t*t * proj3.z;
-    let inv_w = 1.0 / max(w, 0.001);
+    // Tight AABB around the bezier hull + padding.
+    // Clamp to a generous screen-space bound so a single off-screen control
+    // point can never produce a quad that covers the entire viewport.
+    let SCREEN_BOUND = 4.0; // aspect-corrected NDC units; well beyond any visible pixel
+    let min_p = max(min(min(p0, p1), min(p2, p3)) - vec2f(pad), vec2f(-SCREEN_BOUND));
+    let max_p = min(max(max(p0, p1), max(p2, p3)) + vec2f(pad), vec2f( SCREEN_BOUND));
 
-    let width = max(b.p0.w, 0.0001) * inv_w * pressure;
-    let softness = max(b.p1.w, 0.0001) * inv_w * pressure;
-    
-    // Base padding plus a generous safety margin to cover curvature bowing between segments
-    // and provide enough room for the smoothstep anti-aliasing.
-    let pad = (width + softness) * 1.5 + 0.005;
-
-    var center = pos;
-    // Extend the caps to cover the semicircles at the ends of the stroke
-    if (k == 0u) {
-        center -= tangent * pad;
-    } else if (k == N_SEG) {
-        center += tangent * pad;
-    }
-
-    let side = vi % 2u;
-    let offset = select(-normal * pad, normal * pad, side == 1u);
-    let c = center + offset;
+    // Emit a quad (triangle-strip: 4 verts) covering the AABB
+    // vi: 0=(min_x,max_y), 1=(min_x,min_y), 2=(max_x,max_y), 3=(max_x,min_y)
+    let corners = array<vec2f, 4>(
+        vec2f(min_p.x, max_p.y),
+        vec2f(min_p.x, min_p.y),
+        vec2f(max_p.x, max_p.y),
+        vec2f(max_p.x, min_p.y),
+    );
+    let c = corners[vi];
 
     let ndc = vec2f(c.x / aspect, c.y);
 

@@ -41,6 +41,7 @@ export class GpuBezierOptimizerManager {
     private readonly adcBindGroup: GPUBindGroup;
     private readonly adcBindGroupLayout: GPUBindGroupLayout;
 
+    private readonly adcScratchBuffer: GPUBuffer;
     private readonly sortInitPipeline: GPUComputePipeline;
     private readonly sortStepPipeline: GPUComputePipeline;
     private readonly sortInitBindGroup: GPUBindGroup;
@@ -144,6 +145,12 @@ export class GpuBezierOptimizerManager {
             label: "bezier pixel loss buffer",
             size: PIXEL_LOSS_MAX * 4, // one i32 per pixel
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+
+        this.adcScratchBuffer = device.createBuffer({
+            label: "bezier adc scratch buffer",
+            size: this.numBeziers * 4,
+            usage: GPUBufferUsage.STORAGE,
         });
 
         // Sort Buffers
@@ -269,6 +276,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
             ],
         });
         const adcModule = device.createShaderModule({
@@ -296,6 +304,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 2, resource: { buffer: this.adcBuffer } },
                 { binding: 3, resource: { buffer: this.pixelLossBuffer } },
                 { binding: 4, resource: { buffer: this.bezierUniformsBuffer } },
+                { binding: 5, resource: { buffer: this.adcScratchBuffer } },
             ],
         });
 
@@ -580,6 +589,7 @@ export class GpuBezierOptimizerManager {
         this.gradBuffer.destroy();
         this.adamBuffer.destroy();
         this.adcBuffer.destroy();
+        this.adcScratchBuffer.destroy();
         this.bezierUniformsBuffer.destroy();
         this.pixelLossBuffer.destroy();
         this.sortKeysBuffer.destroy();

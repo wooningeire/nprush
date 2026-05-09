@@ -42,11 +42,7 @@ struct BezierUniforms {
 @group(0) @binding(2) var<storage, read_write> adc: ADCArray;
 @group(0) @binding(3) var<storage, read_write> pixel_loss: array<atomic<i32>, {@PIXEL_LOSS_SIZE}u>;
 @group(0) @binding(4) var<uniform> uniforms: BezierUniforms;
-
-// dead_indices is private to this single-thread workgroup (workgroup_size 1,1,1),
-// so function-scope storage is equivalent and avoids the 32 KiB workgroup
-// memory limit on DX12/Metal backends.
-var<private> dead_indices: array<u32, {@NUM_BEZIERS}u>;
+@group(0) @binding(5) var<storage, read_write> dead_indices: array<u32, {@NUM_BEZIERS}u>;
 
 // Reconstruct a world-space point from a pixel index, using the same reciprocal
 // depth encoding as mesh.wgsl. depth_enc = 1 - 0.1/w  =>  w = 0.1/(1-depth_enc).
