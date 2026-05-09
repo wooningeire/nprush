@@ -4,6 +4,11 @@ export class TurntableFrameCaptureQueue {
         reject: (err: Error) => void;
     } | null = null;
 
+    /** True until the runner dequeues pending readback — used to bypass frozen-viewport skips for capture. */
+    hasPending(): boolean {
+        return this.pending !== null;
+    }
+
     enqueue(): Promise<ImageData> {
         return new Promise((resolve, reject) => {
             this.pending = { resolve, reject };

@@ -870,6 +870,10 @@ export class GpuRunner {
                 label: "runner loop command encoder",
             });
 
+            // Frozen viewport skips full-resolution splat/bezier passes unless we must
+            // refresh those textures for turntable PNG export (readback next enqueue).
+            const needsTurntableExportLayers = this.turntableCaptureQueue.hasPending();
+
             // When the prerendered dataset is ready, pick a random view and
             // write its stored matrices to the uniforms buffers so the mesh
             // render and optimizers see the correct camera for this frame.
@@ -1073,8 +1077,8 @@ export class GpuRunner {
             );
             this.splatForwardManager.dispatch(commandEncoder, true, this.viewerState.splatsEnabled);
 
-            // 3.2 Restore full-res target for visualization later
-            if (!this.viewerState.viewportRenderingFrozen) {
+            // 3.2 Restore full-res target for visualization (or turntable readback textures)
+            if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
                 this.splatForwardManager.setTarget(this.fullSplatTextureView!, this.fullSplatDepthTextureView!, fullW, fullH);
             }
 
@@ -1128,8 +1132,9 @@ export class GpuRunner {
                 this.colorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
             }
 
-            // 4. Run edge detection on full-res depth (for display)
-            if (!this.viewerState.viewportRenderingFrozen) {
+            // 4. Run edge detection on full-res depth + full-res splat/bezier overlays
+            // (skipped when viewport frozen unless turntable capture needs those textures)
+            if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
                 this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);
                 this.splatOptimizerManager.dispatchEdge(commandEncoder, fullW, fullH);
                 // Restore optim-res edge bind group for next frame
