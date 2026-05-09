@@ -506,10 +506,10 @@ export class GpuRunner {
             const width = currentTexture.width;
             const height = currentTexture.height;
 
-            // Rebuild optim textures to match the camera's visible-panel aspect
-            // (right half of canvas, above the debug strip). Must match Camera.aspect.
-            const panelAspect = (width / 2) / (height * (1 - STRIP_HEIGHT_FRAC));
-            this.rebuildOptimTextures(panelAspect);
+            // Optim textures use a fixed 1:1 aspect so optimization is independent
+            // of the browser window size. Only the full-res display textures track
+            // the visible panel dimensions.
+            this.rebuildOptimTextures(1.0);
 
             // Full-res target for visualization, sized to the visible main panel so the
             // texture aspect matches the camera projection aspect.
