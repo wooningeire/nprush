@@ -443,6 +443,37 @@ export class GpuBezierOptimizerManager {
         );
     }
 
+    /**
+     * Reset Adam momentum (m, v) and step counter (t) without touching the
+     * bezier parameters themselves. Call this whenever the camera changes
+     * during turntable training so stale cross-view momentum doesn't corrupt
+     * the gradient step for the new viewpoint.
+     *
+     * AdamState layout: m[numParams * f32] | v[numParams * f32] | t(f32) | pixel_count(f32) | no_kill(f32) | pad(f32)
+     */
+    resetAdam() {
+        // Zero m and v, reset t to 0. pixel_count and no_kill are written
+        // separately each frame so we don't need to preserve them here.
+        this.device.queue.writeBuffer(
+            this.adamBuffer,
+            0,
+            new Float32Array(this.numParams * 2 + 1) // m + v + t, all zeros
+        );
+        // Reset ADC accumulators (grad_accum and loss_accum) so stale
+        // per-view gradient norms don't trigger spurious clone/kill decisions.
+        this.device.queue.writeBuffer(
+            this.adcBuffer,
+            0,
+            new Float32Array(this.numBeziers * 2) // grad_accum + loss_accum
+        );
+        // Reset per-pixel residual loss map used for ADC seeding.
+        this.device.queue.writeBuffer(
+            this.pixelLossBuffer,
+            0,
+            new Int32Array(this.pixelLossBuffer.size / 4)
+        );
+    }
+
     setBackwardTarget(
         targetTextureView: GPUTextureView,
         targetDepthTextureView: GPUTextureView,

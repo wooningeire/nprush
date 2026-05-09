@@ -474,6 +474,29 @@ export class GpuSplatOptimizerManager {
         );
     }
 
+    /**
+     * Reset Adam momentum (m, v) and step counter (t) without touching the
+     * splat parameters themselves. Call this whenever the camera changes
+     * during turntable training so stale cross-view momentum doesn't corrupt
+     * the gradient step for the new viewpoint.
+     */
+    resetAdam() {
+        // adamBuffer layout: m[numParams * f32] | v[numParams * f32] | t(f32) | pad(12)
+        // Zero m and v, reset t to 0. Preserve splat parameters (splatBuffer).
+        this.device.queue.writeBuffer(
+            this.adamBuffer,
+            0,
+            new Float32Array(this.numParams * 2 + 1) // m + v + t, all zeros
+        );
+        // Also reset ADC grad_accum so stale positional gradient norms from the
+        // previous view don't trigger spurious clone/kill decisions.
+        this.device.queue.writeBuffer(
+            this.adcBuffer,
+            0,
+            new Float32Array(this.numSplats)
+        );
+    }
+
     dispatch(commandEncoder: GPUCommandEncoder) {
         if (!this.backwardBindGroup) return;
 

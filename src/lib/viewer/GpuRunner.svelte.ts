@@ -21,6 +21,51 @@ const OPTIM_SHORT = GPU_CONSTANTS.OPTIM_SHORT;
 // curve is a 1D primitive that natively traces a contour.
 const NUM_EDGE_LAYER_BEZIERS = GPU_CONSTANTS.NUM_EDGE_LAYER_BEZIERS;
 
+/**
+ * Fixed prerendered multiview dataset.
+ *
+ * Holds N converged path-traced images (one per camera view) plus the
+ * corresponding camera matrices. Each texture is rgba8unorm at optim-res.
+ * Memory: N × W × H × 4 bytes — 32 views at 128×128 ≈ 2 MB.
+ */
+class MultiviewDataset {
+    readonly textures: GPUTexture[];
+    readonly textureViews: GPUTextureView[];
+    /** Per-view viewProjMat (16 f32 each). */
+    readonly viewProjMats: Float32Array[];
+    /** Per-view viewMat (16 f32 each). */
+    readonly viewMats: Float32Array[];
+    /** Per-view invViewProjMat (16 f32 each). */
+    readonly invViewProjMats: Float32Array[];
+    readonly numViews: number;
+
+    constructor(device: GPUDevice, numViews: number, width: number, height: number) {
+        this.numViews = numViews;
+        this.textures = [];
+        this.textureViews = [];
+        this.viewProjMats = [];
+        this.viewMats = [];
+        this.invViewProjMats = [];
+        for (let i = 0; i < numViews; i++) {
+            const tex = device.createTexture({
+                label: `multiview dataset slot ${i}`,
+                size: [width, height],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+            });
+            this.textures.push(tex);
+            this.textureViews.push(tex.createView({ label: `multiview view ${i}` }));
+            this.viewProjMats.push(new Float32Array(16));
+            this.viewMats.push(new Float32Array(16));
+            this.invViewProjMats.push(new Float32Array(16));
+        }
+    }
+
+    destroy() {
+        for (const tex of this.textures) tex.destroy();
+    }
+}
+
 export class GpuRunner {
     private readonly device: GPUDevice;
     private readonly context: GPUCanvasContext;
@@ -112,6 +157,9 @@ export class GpuRunner {
     private optimHeight = 0;
 
     private capturePromise: { resolve: (blob: Blob) => void, reject: (err: Error) => void } | null = null;
+
+    // Prerendered multiview dataset — null until prerenderDataset() completes.
+    private multiviewDataset: MultiviewDataset | null = null;
 
     readonly destroy: () => void;
 
@@ -273,6 +321,16 @@ export class GpuRunner {
                 this.viewerState.meshSplatsEnabled
             ));
             $effect(() => this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat, this.camera.viewProjInvMat, this.viewerState.compareBlurred));
+            $effect(() => {
+                // Reset Adam momentum on camera change so stale cross-view gradients
+                // don't corrupt the step for the new viewpoint during turntable training.
+                // Mirrors the pathtracer's reset() call on camera change.
+                this.camera.viewProjMat;
+                this.splatOptimizerManager.resetAdam();
+                this.edgeLayerBezierManager.resetAdam();
+                this.baseColorLayerBezierManager.resetAdam();
+                this.colorLayerBezierManager.resetAdam();
+            });
             $effect(() => this.splatForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.baseColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat));
@@ -345,6 +403,98 @@ export class GpuRunner {
         height: number,
     ): Promise<ImageData> {
         return readTextureToImageData(this.device, texture, width, height, texture.format);
+    }
+
+    /**
+     * Build a prerendered multiview dataset.
+     *
+     * For each of `numViews` camera positions sampled from the turntable path:
+     *   1. Set the camera to that position.
+     *   2. Accumulate `minSamplesPerView` PT frames (one per rAF tick).
+     *   3. Copy the resolved PT output into a dedicated GPUTexture slot.
+     *
+     * Memory: numViews × (ow × oh × 4 bytes) ≈ 32 × 128×128×4 = 2 MB.
+     * After this returns, `multiviewDataset` is populated and training can
+     * use it as a fixed dataset — no live PT dispatch needed per frame.
+     */
+    async prerenderDataset(): Promise<void> {
+        const vs = this.viewerState;
+        const numViews = vs.multiviewNumViews as number;
+        const samplesPerView = vs.turntableMinSamplesPerView as number;
+
+        // Wait until optim textures are ready (loop may not have run yet).
+        while (!this.optimTextureView || this.optimWidth === 0) {
+            await new Promise<void>(r => requestAnimationFrame(() => r()));
+        }
+
+        const ow = this.optimWidth;
+        const oh = this.optimHeight;
+
+        // Destroy any previous dataset and allocate fresh slots.
+        this.multiviewDataset?.destroy();
+        this.multiviewDataset = null;
+        const dataset = new MultiviewDataset(this.device, numViews, ow, oh);
+
+        vs.multiviewPrerendering = true;
+        vs.multiviewPrerenderProgress = 0;
+        vs.multiviewDatasetReady = false;
+
+        try {
+            for (let i = 0; i < numViews; i++) {
+                if (!vs.turntableTraining) break; // canceled
+
+                // Sample a deterministic view position spread evenly around the path.
+                const t = i / numViews;
+                const p = vs.evaluatePath(t, (vs as any).turntableBaseLong);
+                vs.orbit.long = p.long;
+                vs.orbit.lat = p.lat;
+                vs.orbit.radius = p.radius;
+
+                // Reset PT accumulation for this new view.
+                this.pathTracePipelineManager.reset();
+
+                // Accumulate PT samples — one per rAF tick.
+                for (let s = 0; s < samplesPerView; s++) {
+                    if (!vs.turntableTraining) break;
+                    await new Promise<void>(r => requestAnimationFrame(() => r()));
+                }
+
+                if (!vs.turntableTraining) break;
+
+                // Copy the resolved PT output into the dataset slot.
+                // The PT output texture is already at optim-res (ow × oh).
+                const ptTex = this.pathTracePipelineManager.outputTexture;
+                if (ptTex) {
+                    const enc = this.device.createCommandEncoder({ label: `prerender copy view ${i}` });
+                    enc.copyTextureToTexture(
+                        { texture: ptTex },
+                        { texture: dataset.textures[i] },
+                        [ow, oh, 1],
+                    );
+                    this.device.queue.submit([enc.finish()]);
+                }
+
+                // Store the camera matrices for this view.
+                dataset.viewProjMats[i].set(this.camera.viewProjMat as Float32Array);
+                dataset.viewMats[i].set(this.camera.viewMat as Float32Array);
+                dataset.invViewProjMats[i].set(this.camera.viewProjInvMat as Float32Array);
+
+                vs.multiviewPrerenderProgress = (i + 1) / numViews;
+            }
+        } finally {
+            vs.multiviewPrerendering = false;
+            if (vs.turntableTraining) {
+                this.multiviewDataset = dataset;
+                vs.multiviewDatasetReady = true;
+                // Reset Adam so training starts fresh from the new dataset.
+                this.splatOptimizerManager.resetAdam();
+                this.edgeLayerBezierManager.resetAdam();
+                this.baseColorLayerBezierManager.resetAdam();
+                this.colorLayerBezierManager.resetAdam();
+            } else {
+                dataset.destroy();
+            }
+        }
     }
 
     private rebuildOptimTextures(panelAspect: number) {
@@ -662,6 +812,29 @@ export class GpuRunner {
                 label: "runner loop command encoder",
             });
 
+            // When the prerendered dataset is ready, pick a random view and
+            // write its stored matrices to the uniforms buffers so the mesh
+            // render and optimizers see the correct camera for this frame.
+            // This replaces the live PT dispatch for the optimizer target.
+            let datasetView: GPUTextureView | null = null;
+            if (this.viewerState.turntableTraining && this.viewerState.multiviewDatasetReady && this.multiviewDataset) {
+                const ds = this.multiviewDataset;
+                const idx = Math.floor(Math.random() * ds.numViews);
+                datasetView = ds.textureViews[idx];
+                // Write camera matrices so the mesh render pass uses this view.
+                this.uniformsManager.writeViewProjMat(ds.viewProjMats[idx]);
+                this.uniformsManager.writeViewMat(ds.viewMats[idx]);
+                this.uniformsManager.writeInvViewProjMat(ds.invViewProjMats[idx]);
+                // Write VP to all optimizer uniforms.
+                this.splatOptimizerManager.writeSplatVPMatrix(ds.viewProjMats[idx], ds.invViewProjMats[idx], this.viewerState.compareBlurred);
+                this.edgeLayerBezierManager.writeVPMatrix(ds.viewProjMats[idx]);
+                this.baseColorLayerBezierManager.writeVPMatrix(ds.viewProjMats[idx]);
+                this.colorLayerBezierManager.writeVPMatrix(ds.viewProjMats[idx]);
+                this.edgeLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
+                this.baseColorLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
+                this.colorLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
+            }
+
             // 1a. Render the model into the full-res target + depth textures (for visualization).
             if (!this.viewerState.turntableTraining) {
                 const spherePassEncoder = commandEncoder.beginRenderPass({
@@ -735,11 +908,14 @@ export class GpuRunner {
             // 1b.5 Path trace pass — accumulates one sample per pixel into the PT output texture.
             // The PT output is used as the target for the splat/bezier optimizers instead of
             // the rasterized mesh render, giving a more physically-based training signal.
-            this.pathTracePipelineManager.dispatch(commandEncoder);
+            // Skip during dataset-driven training — the prerendered textures are used directly.
+            if (!datasetView) {
+                this.pathTracePipelineManager.dispatch(commandEncoder);
+            }
 
-            // Use path trace output as the optimization target if available, else fall back to raster.
+            // Use dataset view if available, else PT output, else raster fallback.
             const ptOutputView = this.pathTracePipelineManager.outputTextureView;
-            const optimTargetView = ptOutputView ?? this.optimTextureView!;
+            const optimTargetView = datasetView ?? ptOutputView ?? this.optimTextureView!;
 
             // 1c. Run separable blur on targets if enabled
             if (this.viewerState.compareBlurred) {

@@ -18,8 +18,9 @@ export class GpuPathTracePipelineManager {
     private accumWidth  = 0;
     private accumHeight = 0;
 
-    private outputTexture: GPUTexture | null = null;
+    private _outputTexture: GPUTexture | null = null;
     outputTextureView: GPUTextureView | null = null;
+    get outputTexture(): GPUTexture | null { return this._outputTexture; }
 
     private readonly ptUniformsBuffer:      GPUBuffer;
     private readonly resolveUniformsBuffer: GPUBuffer;
@@ -172,17 +173,17 @@ export class GpuPathTracePipelineManager {
         this.accumHeight = height;
 
         if (this.accumBuffer)  this.accumBuffer.destroy();
-        if (this.outputTexture) this.outputTexture.destroy();
+        if (this._outputTexture) this._outputTexture.destroy();
 
         this.accumBuffer = this.device.createBuffer({
             label: "pt accum", size: width * height * 4 * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-        this.outputTexture = this.device.createTexture({
+        this._outputTexture = this.device.createTexture({
             label: "pt output", size: [width, height], format: "rgba8unorm",
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
         });
-        this.outputTextureView = this.outputTexture.createView({ label: "pt output view" });
+        this.outputTextureView = this._outputTexture.createView({ label: "pt output view" });
 
         this.device.queue.writeBuffer(this.resolveUniformsBuffer, 0, new Uint32Array([width, height, 0, 0]));
         this.ptBindGroup = this.resolveBindGroup = null;

@@ -116,6 +116,15 @@ export class ViewerState {
     /** Frames accumulated on the current turntable training view. */
     private turntableViewFrames = 0;
 
+    // --- Prerendered multiview dataset ---
+    // Number of views to prerender into the dataset.
+    multiviewNumViews = $state(32);
+    // True while the prerender pass is running.
+    multiviewPrerendering = $state(false);
+    multiviewPrerenderProgress = $state(0);
+    // True once the dataset is ready; training uses it instead of live PT.
+    multiviewDatasetReady = $state(false);
+
     // Time-varying path parameters.
     // t ∈ [0, 1] → full revolution.
     // long(t) = baseLong + t * 2π
@@ -144,36 +153,39 @@ export class ViewerState {
     private turntableBaseLong = 0;
 
     /**
-     * Toggle multi-view turntable training. When enabled, each training
-     * frame will use a randomly sampled camera angle from the animation path.
+     * Toggle multi-view turntable training. When enabled, kicks off a
+     * prerender pass to build the dataset, then trains from it.
      */
     toggleTurntableTraining() {
-        this.turntableTraining = !this.turntableTraining;
         if (this.turntableTraining) {
-            // Snapshot current camera as the base reference
-            this.turntableBaseLong = this.orbit.long;
-            this.turntableLatCenter = this.orbit.lat;
-            this.turntableRadiusCenter = this.orbit.radius;
-            this.turntableViewFrames = 0;
+            // Stop training
+            this.turntableTraining = false;
+            return;
+        }
+        // Snapshot current camera as the base reference
+        this.turntableBaseLong = this.orbit.long;
+        this.turntableLatCenter = this.orbit.lat;
+        this.turntableRadiusCenter = this.orbit.radius;
+        this.turntableViewFrames = 0;
+        this.multiviewDatasetReady = false;
+        this.turntableTraining = true;
+        // Kick off prerender — runner will detect turntableTraining=true and
+        // multiviewDatasetReady=false and run the prerender pass.
+        if (this.runner) {
+            this.runner.prerenderDataset().catch(e => console.error("Prerender failed", e));
         }
     }
 
     /**
-     * Called each frame by the render loop while turntableTraining is enabled.
-     * Holds the current camera view until the path tracer has accumulated
-     * at least `turntableMinSamplesPerView` samples, then switches to a new
-     * random angle so the optimizer sees all angles without starving the PT.
+     * Called each frame by the render loop while turntableTraining is enabled
+     * AND the dataset is ready. No-op — view selection is handled directly in
+     * the GpuRunner frame loop by sampling a random dataset slot each frame.
      */
     tickTurntableTraining() {
-        if (!this.turntableTraining) return;
-        this.turntableViewFrames++;
-        if (this.turntableViewFrames < this.turntableMinSamplesPerView) return;
-        this.turntableViewFrames = 0;
-        const t = Math.random();
-        const p = this.evaluatePath(t, this.turntableBaseLong);
-        this.orbit.long = p.long;
-        this.orbit.lat = p.lat;
-        this.orbit.radius = p.radius;
+        // Dataset-driven: view selection happens in GpuRunner.loop() by picking
+        // a random slot and writing its matrices directly to the GPU buffers,
+        // without touching the reactive orbit state. This avoids triggering the
+        // resetAdam $effect on every frame.
     }
 
     cancelTurntable() {

@@ -96,7 +96,10 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             onclick={() => viewerState.toggleTurntableTraining()}
             disabled={viewerState.isTurntableRendering}
         >
-            {#if viewerState.turntableTraining}
+            {#if viewerState.multiviewPrerendering}
+                <div class="spinner"></div>
+                Prerendering… {Math.round(viewerState.multiviewPrerenderProgress * 100)}%
+            {:else if viewerState.turntableTraining}
                 <div class="pulse-dot"></div>
                 Multi-View Training Active
             {:else}
@@ -104,12 +107,26 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             {/if}
         </button>
 
-        {#if viewerState.turntableTraining}
+        {#if viewerState.turntableTraining || !viewerState.multiviewDatasetReady}
+            <div class="slider-group">
+                <label>
+                    Views: {viewerState.multiviewNumViews}
+                    <input type="range" min="8" max="128" step="8" bind:value={viewerState.multiviewNumViews}
+                        disabled={viewerState.turntableTraining} />
+                </label>
+            </div>
             <div class="slider-group">
                 <label>
                     PT samples/view: {viewerState.turntableMinSamplesPerView}
-                    <input type="range" min="1" max="256" step="1" bind:value={viewerState.turntableMinSamplesPerView} />
+                    <input type="range" min="8" max="256" step="8" bind:value={viewerState.turntableMinSamplesPerView}
+                        disabled={viewerState.turntableTraining} />
                 </label>
+            </div>
+        {/if}
+
+        {#if viewerState.multiviewPrerendering}
+            <div class="progress-container">
+                <div class="progress-bar prerender" style:width="{viewerState.multiviewPrerenderProgress * 100}%"></div>
             </div>
         {/if}
 
@@ -385,6 +402,10 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             background: linear-gradient(90deg, #10b981, #34d399);
             border-radius: 2px;
             transition: width 0.3s ease;
+
+            &.prerender {
+                background: linear-gradient(90deg, #6366f1, #a855f7);
+            }
         }
 
         .progress-label {
