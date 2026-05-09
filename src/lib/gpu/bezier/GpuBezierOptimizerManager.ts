@@ -469,6 +469,14 @@ export class GpuBezierOptimizerManager {
      * the gradient step for the new viewpoint.
      *
      * AdamState layout: m[numParams * f32] | v[numParams * f32] | t(f32) | pixel_count(f32) | no_kill(f32) | pad(f32)
+     *
+     * We intentionally do NOT clear the ADC buffers (grad/loss accumulators or
+     * pixel_loss) here: the camera effect runs whenever the view-projection
+     * matrix changes, including every frame during orbit. Clearing them would
+     * leave at most one step of signal while bezier_adc.wgsl still divides by
+     * adc_period, so clone/split and loss-based killing would effectively
+     * never fire. Those buffers are reset inside the ADC shader after each
+     * ADC pass instead.
      */
     resetAdam() {
         // Zero m and v, reset t to 0. pixel_count and no_kill are written
@@ -478,19 +486,21 @@ export class GpuBezierOptimizerManager {
             0,
             new Float32Array(this.numParams * 2 + 1) // m + v + t, all zeros
         );
-        // Reset ADC accumulators (grad_accum and loss_accum) so stale
-        // per-view gradient norms don't trigger spurious clone/kill decisions.
+    }
+
+    /** Clear ADC statistics and pixel-loss map; reset the step counter used for ADC cadence. */
+    resetAdcState() {
         this.device.queue.writeBuffer(
             this.adcBuffer,
             0,
-            new Float32Array(this.numBeziers * 2) // grad_accum + loss_accum
+            new Float32Array(this.numBeziers * 2), // grad_accum + loss_accum
         );
-        // Reset per-pixel residual loss map used for ADC seeding.
         this.device.queue.writeBuffer(
             this.pixelLossBuffer,
             0,
-            new Int32Array(this.pixelLossBuffer.size / 4)
+            new Int32Array(this.pixelLossBuffer.size / 4),
         );
+        this.stepCount = 0;
     }
 
     setBackwardTarget(

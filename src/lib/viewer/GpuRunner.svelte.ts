@@ -11,6 +11,7 @@ import { GpuEnvmapPipelineManager } from "../gpu/envmap/GpuEnvmapPipelineManager
 import { GpuPathTracePipelineManager } from "../gpu/pathtrace/GpuPathTracePipelineManager.ts";
 import type { MeshData } from "../gpu/io/loadGlb.ts";
 import type { ViewerState } from "./ViewerState.svelte.ts";
+import type { Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants";
 import { readTextureToImageData, imageDataToBlob } from "$/gpu/io/readback.ts";
 
@@ -542,6 +543,9 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.resetAdam();
                 this.baseColorLayerBezierManager.resetAdam();
                 this.colorLayerBezierManager.resetAdam();
+                this.edgeLayerBezierManager.resetAdcState();
+                this.baseColorLayerBezierManager.resetAdcState();
+                this.colorLayerBezierManager.resetAdcState();
             } else {
                 dataset.destroy();
             }
@@ -879,10 +883,14 @@ export class GpuRunner {
             // render and optimizers see the correct camera for this frame.
             // This replaces the live PT dispatch for the optimizer target.
             let datasetView: GPUTextureView | null = null;
+            // Depth sort keys must use the same view-projection as the optimizer
+            // uniforms for this frame (dataset random view vs live camera).
+            let sortVp: Mat4 = this.camera.viewProjMat as Mat4;
             if (this.viewerState.turntableTraining && this.viewerState.multiviewDatasetReady && this.multiviewDataset) {
                 const ds = this.multiviewDataset;
                 const idx = Math.floor(Math.random() * ds.numViews);
                 datasetView = ds.textureViews[idx];
+                sortVp = ds.viewProjMats[idx] as Mat4;
                 // Write camera matrices so the mesh render pass uses this view.
                 this.uniformsManager.writeViewProjMat(ds.viewProjMats[idx]);
                 this.uniformsManager.writeViewMat(ds.viewMats[idx]);
@@ -1039,7 +1047,7 @@ export class GpuRunner {
 
             // 3.1 Sort splats by depth for correct alpha blending order
             if (this.viewerState.splatsEnabled) {
-                this.splatOptimizerManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
+                this.splatOptimizerManager.dispatchSort(commandEncoder, sortVp);
             }
 
             // 3.1b Render current splats at optim-res to use as background for color beziers.
@@ -1062,7 +1070,7 @@ export class GpuRunner {
                 if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
                     this.edgeLayerBezierManager.dispatch(commandEncoder);
                 }
-                this.edgeLayerBezierManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
+                this.edgeLayerBezierManager.dispatchSort(commandEncoder, sortVp);
             }
 
             // Train base color beziers against depth-aware blurred target
@@ -1080,7 +1088,7 @@ export class GpuRunner {
                 if (!(this.viewerState.baseColorBezierTrainingPaused || defaultPause)) {
                     this.baseColorLayerBezierManager.dispatch(commandEncoder);
                 }
-                this.baseColorLayerBezierManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
+                this.baseColorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
 
                 // Render base color beziers into optimSplatTextureView (loadOp: "load")
                 // This makes it the background for the NEXT layer!
@@ -1103,7 +1111,7 @@ export class GpuRunner {
                 if (!(this.viewerState.colorBezierTrainingPaused || defaultPause)) {
                     this.colorLayerBezierManager.dispatch(commandEncoder);
                 }
-                this.colorLayerBezierManager.dispatchSort(commandEncoder, this.camera.viewProjMat);
+                this.colorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
             }
 
             // 4. Run edge detection on full-res depth (for display)
