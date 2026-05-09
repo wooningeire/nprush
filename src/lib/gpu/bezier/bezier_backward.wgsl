@@ -397,7 +397,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         // da/d(opacity): chain through a = a_geom * local_opacity * pressure
         let a_geom = 1.0 - smoothstep(inner, outer, d);
         // Direct background penalty: push opacity to zero on background pixels.
-        // Weight is per-layer (0 = disabled for base color, >0 for fine color layer).
+        // Weight is per-layer (0 = disabled for coarse bezier, >0 for fine bezier layer).
         let bg_opacity_penalty = uniforms.bg_penalty * is_background;
         var d_opacity = da * a_geom * pressure + bg_opacity_penalty;
 
@@ -451,7 +451,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let B_prev = bernstein(t_prev);
         let B_curr = bernstein(t_curr);
 
-        // --- Regularization (fine color layer only: max_width > 0) ---
+        // --- Regularization (fine bezier layer only: max_width > 0) ---
         let is_fine = uniforms.max_width > 0.0;
         let base = i * 18u;
 

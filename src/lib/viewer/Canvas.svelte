@@ -15,14 +15,12 @@ let {
 // is positioned at i / STRIP_LABELS.length, so a missing entry shifts
 // every subsequent label out of alignment with its panel.
 const STRIP_LABELS = [
-    "Target Color",
     "Splat Color",
     "Target Depth",
     "Target Edges",
-    "Splat Edges",
-    "Bezier Edges",
-    "Color Beziers",
-    "Blurred Target",
+    "Edge Beziers",
+    "Coarse bezier",
+    "Fine bezier",
 ];
 
 let shiftHeld = $state(false);

@@ -161,13 +161,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     adc.grad_accum[bezier_id] += sqrt(pos_grad_norm2);
 
     // Prune very thin or transparent beziers — thresholds are configurable
-    // per layer so fine color beziers can use a lower kill threshold.
+    // per layer so fine beziers can use a lower kill threshold.
     let alpha_thresh = select(f32({@BEZIER_PRUNE_ALPHA_DEFAULT}), uniforms.prune_alpha_thresh, uniforms.prune_alpha_thresh > 0.0);
     let width_thresh = select(f32({@BEZIER_PRUNE_WIDTH_DEFAULT}), uniforms.prune_width_thresh, uniforms.prune_width_thresh > 0.0);
     b.color.a = select(b.color.a, 0.0, b.color.a < alpha_thresh || b.p0.w <= width_thresh);
 
     // Kill beziers whose bounding hull is entirely outside the view frustum.
-    // Skipped when no_kill is set (fine color layer) — those curves are allowed
+    // Skipped when no_kill is set (fine bezier layer) — those curves are allowed
     // to drift temporarily and will be pulled back by the loss gradient.
     if (b.color.a > 0.0 && adam.no_kill < 0.5) {
         let c0 = uniforms.vp * vec4f(b.p0.xyz, 1.0);

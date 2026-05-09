@@ -355,12 +355,12 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.writeMode(0); // Edge mode
                 this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
-                this.colorLayerBezierManager.writeMaxWidth(0.03); // finer strokes on second color layer
-                // Fine color layer: less aggressive killing so thin strokes survive,
+                this.colorLayerBezierManager.writeMaxWidth(0.03); // finer strokes on fine bezier layer
+                // Fine bezier layer: less aggressive killing so thin strokes survive,
                 // but background penalty enabled to kill off-model curves.
                 this.colorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.colorLayerBezierManager.writeBgPenalty(0.0);
-                // Base color layer: no background penalty (blurred target bleeds into bg).
+                // Coarse bezier layer: no background penalty (blurred target bleeds into bg).
                 // Enable no_kill so broad strokes aren't pruned before they settle —
                 // the ADC stuck+loss kill was the main source of base-layer jitter.
                 // Longer ADC period reduces clone/kill churn on broad strokes.
@@ -689,7 +689,7 @@ export class GpuRunner {
             ow, oh
         );
 
-        // Base Color layer: target is depth-aware blurred color + sharp depth, background is splat output
+        // Coarse bezier layer: target is depth-aware blurred color + sharp depth, background is splat output
         this.baseColorLayerBezierManager.setBackwardTarget(
             this.optimDepthAwareBlurredTextureView!,
             this.optimDepthTextureView!,
@@ -699,7 +699,7 @@ export class GpuRunner {
             ow, oh
         );
 
-        // Color layer: target is sharp color + depth, background is splat output
+        // Fine bezier layer: target is sharp color + depth, background is splat output
         this.colorLayerBezierManager.setBackwardTarget(
             this.optimTextureView!,
             this.optimDepthTextureView!,
@@ -810,7 +810,7 @@ export class GpuRunner {
                 this.fullBezierTextureView = this.fullBezierTexture.createView();
 
                 this.fullBaseColorBezierTexture = this.device.createTexture({
-                    label: "full-res base color bezier view",
+                    label: "full-res coarse bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
@@ -818,7 +818,7 @@ export class GpuRunner {
                 this.fullBaseColorBezierTextureView = this.fullBaseColorBezierTexture.createView();
 
                 this.fullColorBezierTexture = this.device.createTexture({
-                    label: "full-res color bezier view",
+                    label: "full-res fine bezier view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
@@ -1044,7 +1044,7 @@ export class GpuRunner {
                 this.splatOptimizerManager.dispatchSort(commandEncoder, sortVp);
             }
 
-            // 3.1b Render current splats at optim-res to use as background for color beziers.
+            // 3.1b Render current splats at optim-res to use as background for bezier layers.
             this.splatForwardManager.setTarget(
                 this.optimSplatTextureView!,
                 this.optimSplatDepthTextureView!,
@@ -1067,7 +1067,7 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.dispatchSort(commandEncoder, sortVp);
             }
 
-            // Train base color beziers against depth-aware blurred target
+            // Train coarse beziers against depth-aware blurred target
             if (this.viewerState.baseColorBeziersEnabled) {
                 // Background is pure splats
                 this.baseColorLayerBezierManager.setBackwardTarget(
@@ -1084,15 +1084,15 @@ export class GpuRunner {
                 }
                 this.baseColorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
 
-                // Render base color beziers into optimSplatTextureView (loadOp: "load")
+                // Render coarse beziers into optimSplatTextureView (loadOp: "load")
                 // This makes it the background for the NEXT layer!
                 this.baseColorBezierForwardManager.setTarget(this.optimSplatTextureView!, this.optimWidth, this.optimHeight);
                 this.baseColorBezierForwardManager.dispatch(commandEncoder, false);
             }
 
-            // Train sharp color beziers against sharp target
+            // Train fine beziers against sharp target
             if (this.viewerState.colorBeziersEnabled) {
-                // Background is now splats OR splats+base (if base was enabled)
+                // Background is now splats OR splats+coarse (if coarse was enabled)
                 this.colorLayerBezierManager.setBackwardTarget(
                     optimTargetView,
                     this.optimDepthTextureView!,
@@ -1121,7 +1121,7 @@ export class GpuRunner {
                     this.bezierForwardManager.dispatch(commandEncoder, true);
                 }
                 if (this.viewerState.baseColorBeziersEnabled) {
-                    // For the full-res visualizer, we just want the base layer isolated, not drawn over splats
+                    // For the full-res visualizer, we just want the coarse layer isolated, not drawn over splats
                     this.baseColorBezierForwardManager.setTarget(this.fullBaseColorBezierTextureView!, fullW, fullH);
                     this.baseColorBezierForwardManager.dispatch(commandEncoder, true);
                 }
@@ -1210,7 +1210,7 @@ export class GpuRunner {
                             let g = splat.data[o + 1] / 255;
                             let b = splat.data[o + 2] / 255;
 
-                            // Base color bezier: premultiplied alpha over
+                            // Coarse bezier: premultiplied alpha over
                             if (baseColorBezier) {
                                 const ba = baseColorBezier.data[o + 3] / 255;
                                 r = r * (1 - ba) + baseColorBezier.data[o] / 255;
@@ -1218,7 +1218,7 @@ export class GpuRunner {
                                 b = b * (1 - ba) + baseColorBezier.data[o + 2] / 255;
                             }
 
-                            // Color bezier: premultiplied alpha over
+                            // Fine bezier: premultiplied alpha over
                             if (colorBezier) {
                                 const ca = colorBezier.data[o + 3] / 255;
                                 r = r * (1 - ca) + colorBezier.data[o] / 255;

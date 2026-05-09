@@ -51,7 +51,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     {/if}
     <label>
         <input type="checkbox" bind:checked={viewerState.baseColorBeziersEnabled} />
-        Base Color Beziers
+        Coarse bezier
     </label>
     {#if viewerState.baseColorBeziersEnabled}
         <label class="sub">
@@ -61,7 +61,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     {/if}
     <label>
         <input type="checkbox" bind:checked={viewerState.colorBeziersEnabled} />
-        Color Beziers
+        Fine bezier
     </label>
     {#if viewerState.colorBeziersEnabled}
         <label class="sub">

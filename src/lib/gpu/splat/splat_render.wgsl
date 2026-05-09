@@ -126,13 +126,13 @@ fn frag(v: VsOut) -> @location(0) vec4f {
             let e = textureLoad(bezierViewTex, px, 0).r;
             return vec4f(e, e, e, 1.0);
         } else if (panel_idx < 4.5) {
-            // Panel 4: Base Color Bezier layer
+            // Panel 4: Coarse bezier layer
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * vec2f(textureDimensions(baseColorBezierViewTex)));
             return textureLoad(baseColorBezierViewTex, px, 0);
         } else {
-            // Panel 5: Color Bezier layer
+            // Panel 5: Fine bezier layer
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * vec2f(textureDimensions(colorBezierViewTex)));

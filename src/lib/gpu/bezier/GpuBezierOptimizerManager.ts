@@ -416,7 +416,7 @@ export class GpuBezierOptimizerManager {
     writeBgPenalty(weight: number = 0) {
         // Writes BezierUniforms.bg_penalty at offset 80.
         // Layout: vp(64) + mode(4) + max_width(4) + prune_alpha(4) + prune_width(4) = 80
-        // 0 = disabled (base color layer), >0 = enabled (fine color layer).
+        // 0 = disabled (coarse bezier layer), >0 = enabled (fine bezier layer).
         this.device.queue.writeBuffer(
             this.bezierUniformsBuffer,
             80,
