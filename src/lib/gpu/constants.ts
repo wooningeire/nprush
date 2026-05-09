@@ -21,6 +21,10 @@ export const constants = {
     BEZIER_FP_SCALE_POS: 10000.0,
     BEZIER_FP_SCALE_COL: 100000.0,
     BEZIER_MAX_TILE_BEZIERS: 1024,
+    /** Optimizer params per curve (XYZ×4 CPs + RGBA + width/soft + degree-1 SH×9). */
+    BEZIER_PARAMS_PER: 27,
+    /** GPU storage floats per curve (9 × vec4: CPs + color + SH). */
+    BEZIER_FLOATS_PER: 36,
 
     // Splat ADC & Optimization
     SPLAT_ADC_PERIOD: 25,

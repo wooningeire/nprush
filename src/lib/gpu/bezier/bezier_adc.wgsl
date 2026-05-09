@@ -4,6 +4,9 @@ struct Bezier {
     p2: vec4f,    // x, y, z, _pad
     p3: vec4f,    // x, y, z, _pad
     color: vec4f, // r, g, b, a
+    sh1_r: vec4f,
+    sh1_g: vec4f,
+    sh1_b: vec4f,
 }
 
 struct BezierArray {
@@ -177,11 +180,11 @@ fn main() {
         beziers.items[i] = b;
         beziers.items[new_idx] = new_b;
 
-        for (var p = 0u; p < 18u; p = p + 1u) {
-            adam.m[i * 18u + p] = 0.0;
-            adam.v[i * 18u + p] = 0.0;
-            adam.m[new_idx * 18u + p] = 0.0;
-            adam.v[new_idx * 18u + p] = 0.0;
+        for (var p = 0u; p < {@BEZIER_PARAMS_PER}u; p = p + 1u) {
+            adam.m[i * {@BEZIER_PARAMS_PER}u + p] = 0.0;
+            adam.v[i * {@BEZIER_PARAMS_PER}u + p] = 0.0;
+            adam.m[new_idx * {@BEZIER_PARAMS_PER}u + p] = 0.0;
+            adam.v[new_idx * {@BEZIER_PARAMS_PER}u + p] = 0.0;
         }
     }
 
@@ -238,11 +241,14 @@ fn main() {
         nb.p2 = vec4f(center + tangent * 0.33, 0.0);
         nb.p3 = vec4f(center + tangent,        0.0);
         nb.color = vec4f(0.5, 0.5, 0.5, 0.5);
+        nb.sh1_r = vec4f(0.0);
+        nb.sh1_g = vec4f(0.0);
+        nb.sh1_b = vec4f(0.0);
 
         beziers.items[slot] = nb;
-        for (var p = 0u; p < 18u; p = p + 1u) {
-            adam.m[slot * 18u + p] = 0.0;
-            adam.v[slot * 18u + p] = 0.0;
+        for (var p = 0u; p < {@BEZIER_PARAMS_PER}u; p = p + 1u) {
+            adam.m[slot * {@BEZIER_PARAMS_PER}u + p] = 0.0;
+            adam.v[slot * {@BEZIER_PARAMS_PER}u + p] = 0.0;
         }
     }
 
@@ -300,11 +306,11 @@ fn main() {
         beziers.items[i] = b;
         beziers.items[new_idx] = new_b;
 
-        for (var p = 0u; p < 18u; p = p + 1u) {
-            adam.m[i * 18u + p] = 0.0;
-            adam.v[i * 18u + p] = 0.0;
-            adam.m[new_idx * 18u + p] = 0.0;
-            adam.v[new_idx * 18u + p] = 0.0;
+        for (var p = 0u; p < {@BEZIER_PARAMS_PER}u; p = p + 1u) {
+            adam.m[i * {@BEZIER_PARAMS_PER}u + p] = 0.0;
+            adam.v[i * {@BEZIER_PARAMS_PER}u + p] = 0.0;
+            adam.m[new_idx * {@BEZIER_PARAMS_PER}u + p] = 0.0;
+            adam.v[new_idx * {@BEZIER_PARAMS_PER}u + p] = 0.0;
         }
     }
 

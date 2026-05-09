@@ -6,12 +6,6 @@ import type { Mat4 } from "wgpu-matrix";
 import { constants, injectWgslConstants } from "../constants";
 import { nextPowerOfTwoAtLeast } from "../nextPowerOfTwoAtLeast";
 
-// Each cubic bezier is 14 optimizable parameters but stored with 16-float
-// stride (4 vec4f) so the WGSL struct lays out cleanly without per-field
-// padding. Mirrors the splat manager's 11-params/12-floats layout.
-const PARAMS_PER_BEZIER = 18;
-const FLOATS_PER_BEZIER = 20;
-
 // Optim resolution — must match GpuRunner's OPTIM_SHORT logic.
 // We use the square short-side; the actual pixel count is written at runtime.
 // The pixel_loss buffer is sized to the worst-case square (OPTIM_SHORT²).
@@ -65,14 +59,14 @@ export class GpuBezierOptimizerManager {
     }) {
         this.device = device;
         this.numBeziers = numBeziers;
-        this.numParams = numBeziers * PARAMS_PER_BEZIER;
+        this.numParams = numBeziers * constants.BEZIER_PARAMS_PER;
 
         // Initialize curves as short, randomly oriented squiggles clustered
         // near the origin. Bright grayscale colors give them an immediate
         // contribution to the silhouette image they're trying to reconstruct.
-        const data = new Float32Array(numBeziers * FLOATS_PER_BEZIER);
+        const data = new Float32Array(numBeziers * constants.BEZIER_FLOATS_PER);
         for (let i = 0; i < numBeziers; i++) {
-            const o = i * FLOATS_PER_BEZIER;
+            const o = i * constants.BEZIER_FLOATS_PER;
             const cx = (Math.random() * 2 - 1);
             const cy = (Math.random() * 2 - 1);
             const len = 0.2 + Math.random() * 0.2;
@@ -105,6 +99,10 @@ export class GpuBezierOptimizerManager {
             data[o + 17] = Math.random();
             data[o + 18] = Math.random();
             data[o + 19] = 0.5;
+            // Degree-1 SH (vec4 .xyz; .w unused) — start at DC-only.
+            for (let k = 20; k < constants.BEZIER_FLOATS_PER; k++) {
+                data[o + k] = 0;
+            }
         }
 
         this.bezierBuffer = device.createBuffer({
@@ -138,7 +136,7 @@ export class GpuBezierOptimizerManager {
 
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier VP uniforms buffer",
-            size: 160, // mat4x4f(64) + mode(4) + max_width(4) + prune_alpha(4) + prune_width(4) + bg_penalty(4) + pad(8) + adc_period_steps(4) + vp_inv(64)
+            size: 176, // BezierUniforms through cam_world (+ optional tail pad)
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         device.queue.writeBuffer(
@@ -402,6 +400,15 @@ export class GpuBezierOptimizerManager {
             (mat as Float32Array).buffer,
             (mat as Float32Array).byteOffset,
             (mat as Float32Array).byteLength
+        );
+    }
+
+    /** Camera world position (`invView * (0,0,0,1)`), for degree-1 SH view dependence. */
+    writeCamWorld(x: number, y: number, z: number, w: number = 1) {
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            160,
+            new Float32Array([x, y, z, w]),
         );
     }
 

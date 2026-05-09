@@ -2,11 +2,14 @@
 // Now in 3D: curves are defined by 3D control points projected to the screen.
 
 struct Bezier {
-    p0: vec4f,    // x, y, z, width
-    p1: vec4f,    // x, y, z, softness
-    p2: vec4f,    // x, y, z, _pad
-    p3: vec4f,    // x, y, z, _pad
-    color: vec4f, // r, g, b, a
+    p0: vec4f,
+    p1: vec4f,
+    p2: vec4f,
+    p3: vec4f,
+    color: vec4f,
+    sh1_r: vec4f,
+    sh1_g: vec4f,
+    sh1_b: vec4f,
 }
 
 struct BezierArray {
@@ -18,17 +21,17 @@ struct GradArray {
 }
 
 struct BezierUniforms {
-    vp: mat4x4f,             // offset 0,   size 64
-    mode: f32,               // offset 64,  size 4
-    max_width: f32,          // offset 68,  size 4
-    prune_alpha_thresh: f32, // offset 72,  size 4
-    prune_width_thresh: f32, // offset 76,  size 4
-    bg_penalty: f32,         // offset 80,  size 4
-    _pad0: f32,              // offset 84,  size 4
-    _pad1: f32,              // offset 88,  size 4
-    adc_period_steps: f32,   // offset 92, must match CPU ADC dispatch cadence (see GpuBezierOptimizerManager)
-    vp_inv: mat4x4f,         // offset 96,  size 64
-    // total: 160 bytes
+    vp: mat4x4f,
+    mode: f32,
+    max_width: f32,
+    prune_alpha_thresh: f32,
+    prune_width_thresh: f32,
+    bg_penalty: f32,
+    _pad0: f32,
+    _pad1: f32,
+    adc_period_steps: f32,
+    vp_inv: mat4x4f,
+    cam_world: vec4f,
 }
 
 struct ADCArray {
@@ -86,6 +89,45 @@ fn backproject_gradient(vp: mat4x4f, pos3: vec3f, aspect: f32, dp2d: vec2f) -> v
         dp3d[ax] = dp2d.x * ds_dx + dp2d.y * ds_dy;
     }
     return dp3d;
+}
+
+const SH_C1_B: f32 = 0.4886025119029199;
+
+fn bezier_pos_world(b: Bezier, tt: f32) -> vec3f {
+    let omt = 1.0 - tt;
+    return omt*omt*omt*b.p0.xyz + 3.0*omt*omt*tt*b.p1.xyz + 3.0*omt*tt*tt*b.p2.xyz + tt*tt*tt*b.p3.xyz;
+}
+
+fn bezier_deriv_world(b: Bezier, tt: f32) -> vec3f {
+    let omt = 1.0 - tt;
+    return 3.0*omt*omt*(b.p1.xyz - b.p0.xyz) + 6.0*omt*tt*(b.p2.xyz - b.p1.xyz) + 3.0*tt*tt*(b.p3.xyz - b.p2.xyz);
+}
+
+fn bezier_dirs_sh(cam_xyz: vec3f, pos_w: vec3f, tang: vec3f) -> vec3f {
+    let Vcam = normalize(cam_xyz - pos_w);
+    var ez = tang;
+    if (dot(ez, ez) < 1e-10) {
+        ez = vec3f(1.0, 0.0, 0.0);
+    } else {
+        ez = normalize(ez);
+    }
+    var ex = cross(vec3f(0.0, 1.0, 0.0), ez);
+    if (dot(ex, ex) < 1e-12) {
+        ex = cross(vec3f(1.0, 0.0, 0.0), ez);
+    }
+    ex = normalize(ex);
+    let ey = normalize(cross(ez, ex));
+    return vec3f(dot(Vcam, ex), dot(Vcam, ey), dot(Vcam, ez));
+}
+
+fn bezier_rgb_linear_dl(b: Bezier, dl: vec3f) -> vec3f {
+    let lx = dl.x;
+    let ly = dl.y;
+    let lz = dl.z;
+    let rr = b.color.r + SH_C1_B * (ly*b.sh1_r.x + lz*b.sh1_r.y + lx*b.sh1_r.z);
+    let gg = b.color.g + SH_C1_B * (ly*b.sh1_g.x + lz*b.sh1_g.y + lx*b.sh1_g.z);
+    let bb = b.color.b + SH_C1_B * (ly*b.sh1_b.x + lz*b.sh1_b.y + lx*b.sh1_b.z);
+    return vec3f(rr, gg, bb);
 }
 
 const MAX_TILE_BEZIERS = {@BEZIER_MAX_TILE_BEZIERS}u;
@@ -195,6 +237,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var alphas = array<f32, MAX_TILE_BEZIERS>();
     var min_seg = array<u32, MAX_TILE_BEZIERS>();
     var depths = array<f32, MAX_TILE_BEZIERS>();
+    var curve_t_vals = array<f32, MAX_TILE_BEZIERS>();
     var Ts = array<f32, MAX_TILE_BEZIERS + 1u>();
     Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
@@ -263,7 +306,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         alphas[idx] = a;
         min_seg[idx] = min_k;
         depths[idx] = d_val;
-        C_pred += Ts[idx] * a * b.color.rgb;
+        curve_t_vals[idx] = t;
+
+        let pos_w_f = bezier_pos_world(b, t);
+        let tang_f = bezier_deriv_world(b, t);
+        let dl_f = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w_f, tang_f);
+        let rgb_lin_f = bezier_rgb_linear_dl(b, dl_f);
+        let rgb_vis_f = max(rgb_lin_f, vec3f(0.0));
+
+        C_pred += Ts[idx] * a * rgb_vis_f;
         D_pred += Ts[idx] * a * d_val;
         Ts[idx + 1u] = Ts[idx] * (1.0 - a);
     }
@@ -344,7 +395,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let width = max(b.p0.w, 0.001);
         let softness = max(b.p1.w, 0.001);
         let opacity = b.color.a;
-        let color = b.color.rgb;
 
         let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
         let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
@@ -358,10 +408,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let T_prev = Ts[idx];
         let d_val = depths[idx];
 
-        let dColor = dC * (T_prev * a);
-        let da = dT * (-T_prev) + dot(dC, T_prev * color) + dD_total * (T_prev * d_val);
-        dT = dT * (1.0 - a) + dot(dC, a * color) + dD_total * (a * d_val);
-
         let k = min_seg[idx];
         let t_prev = f32(k - 1u) / f32(N_SEG);
         let t_curr = f32(k) / f32(N_SEG);
@@ -374,10 +420,25 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let d_vec = p - proj;
         let d = max(length(d_vec), 1e-6);
 
-        let t_pixel = (f32(k - 1u) + u_clamped) / f32(N_SEG);
-        let dt_pixel = t_pixel - 0.5;
+        let t_geom = (f32(k - 1u) + u_clamped) / f32(N_SEG);
+        let dt_pixel = t_geom - 0.5;
         let pressure = 1.0 - 4.0 * dt_pixel * dt_pixel;
-        let B_pixel = bernstein(t_pixel);
+        let B_pixel = bernstein(t_geom);
+
+        let pos_w_b = bezier_pos_world(b, t_geom);
+        let dl_b = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w_b, bezier_deriv_world(b, t_geom));
+        let lx_b = dl_b.x;
+        let ly_b = dl_b.y;
+        let lz_b = dl_b.z;
+        let rr_lin = b.color.r + SH_C1_B * (ly_b*b.sh1_r.x + lz_b*b.sh1_r.y + lx_b*b.sh1_r.z);
+        let gg_lin = b.color.g + SH_C1_B * (ly_b*b.sh1_g.x + lz_b*b.sh1_g.y + lx_b*b.sh1_g.z);
+        let bb_lin = b.color.b + SH_C1_B * (ly_b*b.sh1_b.x + lz_b*b.sh1_b.y + lx_b*b.sh1_b.z);
+        let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
+        let color = rgb_vis;
+
+        let dColor = dC * (T_prev * a);
+        let da = dT * (-T_prev) + dot(dC, T_prev * color) + dD_total * (T_prev * d_val);
+        dT = dT * (1.0 - a) + dot(dC, a * color) + dD_total * (a * d_val);
 
         let raw_w = dot(B_pixel, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
         let linear_w = max(raw_w, DEPTH_NEAR_BEZ);
@@ -453,7 +514,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
         // --- Regularization (fine bezier layer only: max_width > 0) ---
         let is_fine = uniforms.max_width > 0.0;
-        let base = i * 18u;
+        let base = i * {@BEZIER_PARAMS_PER}u;
 
         // 1. Softness → 0: loss = REG_SOFT * softness^2
         //    d_soft += REG_SOFT * 2 * softness
@@ -572,14 +633,33 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         atomicAdd(&grads.data[base + 9u], i32(dP3_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 10u], i32(dP3_3d.y * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 11u], i32((dP3_3d.z + dDepth_dZs.w) * FP_SCALE_POS));
-        
-        atomicAdd(&grads.data[base + 12u], i32(dColor.r * FP_SCALE_COL));
-        atomicAdd(&grads.data[base + 13u], i32(dColor.g * FP_SCALE_COL));
-        atomicAdd(&grads.data[base + 14u], i32(dColor.b * FP_SCALE_COL));
+
+        let d_relu_r = select(0.0, dColor.r, rr_lin > 0.0);
+        let d_relu_g = select(0.0, dColor.g, gg_lin > 0.0);
+        let d_relu_b = select(0.0, dColor.b, bb_lin > 0.0);
+
+        atomicAdd(&grads.data[base + 12u], i32(d_relu_r * FP_SCALE_COL));
+        atomicAdd(&grads.data[base + 13u], i32(d_relu_g * FP_SCALE_COL));
+        atomicAdd(&grads.data[base + 14u], i32(d_relu_b * FP_SCALE_COL));
         atomicAdd(&grads.data[base + 15u], i32(d_opacity * FP_SCALE_COL));
         
         atomicAdd(&grads.data[base + 16u], i32(dWidth * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 17u], i32(dSoft * FP_SCALE_POS));
+
+        // ∂rgb_lin/∂sh matches bezier_rgb_linear_dl: coef (x,y,z) maps to (ly, lz, lx) * SH_C1.
+        let k_r = SH_C1_B * d_relu_r * FP_SCALE_COL;
+        let k_g = SH_C1_B * d_relu_g * FP_SCALE_COL;
+        let k_b = SH_C1_B * d_relu_b * FP_SCALE_COL;
+
+        atomicAdd(&grads.data[base + 18u], i32(ly_b * k_r));
+        atomicAdd(&grads.data[base + 19u], i32(lz_b * k_r));
+        atomicAdd(&grads.data[base + 20u], i32(lx_b * k_r));
+        atomicAdd(&grads.data[base + 21u], i32(ly_b * k_g));
+        atomicAdd(&grads.data[base + 22u], i32(lz_b * k_g));
+        atomicAdd(&grads.data[base + 23u], i32(lx_b * k_g));
+        atomicAdd(&grads.data[base + 24u], i32(ly_b * k_b));
+        atomicAdd(&grads.data[base + 25u], i32(lz_b * k_b));
+        atomicAdd(&grads.data[base + 26u], i32(lx_b * k_b));
 
         // Accumulate this bezier's contribution to the color loss for ADC pruning.
         let color_loss_contrib = dot(dC * dC, vec3f(1.0)) * (T_prev * a);

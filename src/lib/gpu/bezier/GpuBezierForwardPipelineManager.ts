@@ -43,9 +43,10 @@ export class GpuBezierForwardPipelineManager {
             mipmapFilter: "linear",
         });
 
+        // mat4x4 (64) + dims vec2 + pad + cam_world vec4 — match splat forward layout.
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier forward uniforms buffer",
-            size: 64 + 16, // mat4x4f + dims (vec2f) + pad (vec2f)
+            size: 96,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -114,11 +115,15 @@ export class GpuBezierForwardPipelineManager {
         );
     }
 
+    writeCameraWorld(x: number, y: number, z: number) {
+        this.device.queue.writeBuffer(this.bezierUniformsBuffer, 80, new Float32Array([x, y, z, 1.0]));
+    }
+
     setTarget(targetView: GPUTextureView, width: number, height: number) {
         this.targetView = targetView;
         if (this.dims.width !== width || this.dims.height !== height) {
             this.dims = { width, height };
-            this.device.queue.writeBuffer(this.bezierUniformsBuffer, 64, new Float32Array([width, height]));
+            this.device.queue.writeBuffer(this.bezierUniformsBuffer, 64, new Float32Array([width, height, 0, 0]));
         }
 
         this.bindGroup = this.device.createBindGroup({

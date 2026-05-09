@@ -4,6 +4,9 @@ struct Bezier {
     p2: vec4f, // x, y, z, _pad
     p3: vec4f, // x, y, z, _pad
     color: vec4f,
+    sh1_r: vec4f,
+    sh1_g: vec4f,
+    sh1_b: vec4f,
 }
 
 struct BezierArray {
@@ -14,6 +17,7 @@ struct ForwardUniforms {
     vp: mat4x4f,
     dims: vec2f,
     _pad: vec2f,
+    cam_world: vec4f,
 }
 
 @group(0) @binding(0) var<storage, read> beziers: BezierArray;
@@ -23,6 +27,34 @@ struct ForwardUniforms {
 @group(0) @binding(4) var<storage, read> sort_order: array<u32, {@NUM_BEZIERS}u>;
 
 const N_SEG: u32 = 16u;
+const SH_C1_B: f32 = 0.4886025119029199;
+
+fn bezier_pos_world(b: Bezier, tt: f32) -> vec3f {
+    let omt = 1.0 - tt;
+    return omt*omt*omt*b.p0.xyz + 3.0*omt*omt*tt*b.p1.xyz + 3.0*omt*tt*tt*b.p2.xyz + tt*tt*tt*b.p3.xyz;
+}
+
+fn bezier_deriv_world(b: Bezier, tt: f32) -> vec3f {
+    let omt = 1.0 - tt;
+    return 3.0*omt*omt*(b.p1.xyz - b.p0.xyz) + 6.0*omt*tt*(b.p2.xyz - b.p1.xyz) + 3.0*tt*tt*(b.p3.xyz - b.p2.xyz);
+}
+
+fn bezier_dirs_sh(cam_xyz: vec3f, pos_w: vec3f, tang: vec3f) -> vec3f {
+    let Vcam = normalize(cam_xyz - pos_w);
+    var ez = tang;
+    if (dot(ez, ez) < 1e-10) {
+        ez = vec3f(1.0, 0.0, 0.0);
+    } else {
+        ez = normalize(ez);
+    }
+    var ex = cross(vec3f(0.0, 1.0, 0.0), ez);
+    if (dot(ex, ex) < 1e-12) {
+        ex = cross(vec3f(1.0, 0.0, 0.0), ez);
+    }
+    ex = normalize(ex);
+    let ey = normalize(cross(ez, ex));
+    return vec3f(dot(Vcam, ex), dot(Vcam, ey), dot(Vcam, ez));
+}
 
 fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
     let omt = 1.0 - t;
@@ -194,5 +226,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 
     if (a < 0.001) { discard; }
 
-    return vec4f(b.color.rgb * a, a);
+    let pos_w = bezier_pos_world(b, t);
+    let dl_b = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w, bezier_deriv_world(b, t));
+    let lx_b = dl_b.x;
+    let ly_b = dl_b.y;
+    let lz_b = dl_b.z;
+    let rr_lin = b.color.r + SH_C1_B * (ly_b*b.sh1_r.x + lz_b*b.sh1_r.y + lx_b*b.sh1_r.z);
+    let gg_lin = b.color.g + SH_C1_B * (ly_b*b.sh1_g.x + lz_b*b.sh1_g.y + lx_b*b.sh1_g.z);
+    let bb_lin = b.color.b + SH_C1_B * (ly_b*b.sh1_b.x + lz_b*b.sh1_b.y + lx_b*b.sh1_b.z);
+    let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
+
+    return vec4f(rgb_vis * a, a);
 }

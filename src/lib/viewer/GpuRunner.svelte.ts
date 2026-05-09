@@ -894,6 +894,10 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
                 this.baseColorLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
                 this.colorLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
+                const sortVpFa = sortVp as Float32Array;
+                this.bezierForwardManager.writeVPMatrix(sortVpFa);
+                this.baseColorBezierForwardManager.writeVPMatrix(sortVpFa);
+                this.colorBezierForwardManager.writeVPMatrix(sortVpFa);
             }
 
             const camWorld = vec3.transformMat4(vec3.fromValues(0, 0, 0), invViewForCam);
@@ -904,6 +908,16 @@ export class GpuRunner {
             ]);
             this.splatForwardManager.writeVPMatrix(sortVp);
             this.splatForwardManager.writeCameraWorld(camWorld[0], camWorld[1], camWorld[2]);
+
+            this.edgeLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
+            this.baseColorLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
+            this.colorLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
+            const cx = camWorld[0];
+            const cy = camWorld[1];
+            const cz = camWorld[2];
+            this.bezierForwardManager.writeCameraWorld(cx, cy, cz);
+            this.baseColorBezierForwardManager.writeCameraWorld(cx, cy, cz);
+            this.colorBezierForwardManager.writeCameraWorld(cx, cy, cz);
 
             // 1a. Render the model into the full-res target + depth textures (for visualization).
             if (!this.viewerState.viewportRenderingFrozen) {
