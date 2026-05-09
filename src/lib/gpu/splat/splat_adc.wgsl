@@ -3,6 +3,9 @@ struct Splat {
     color: vec4f,
     quat: vec4f,
     sy_shape: vec4f,
+    sh1_r: vec4f,
+    sh1_g: vec4f,
+    sh1_b: vec4f,
 }
 
 struct SplatArray {
@@ -75,11 +78,11 @@ fn main() {
                 splats.splats[i] = s;
                 splats.splats[new_idx] = new_s;
 
-                for (var p = 0u; p < 16u; p++) {
-                    adam.m[i * 16u + p] = 0.0;
-                    adam.v[i * 16u + p] = 0.0;
-                    adam.m[new_idx * 16u + p] = 0.0;
-                    adam.v[new_idx * 16u + p] = 0.0;
+                for (var p = 0u; p < {@SPLAT_PARAMS_PER_SPLAT}u; p++) {
+                    adam.m[i * {@SPLAT_PARAMS_PER_SPLAT}u + p] = 0.0;
+                    adam.v[i * {@SPLAT_PARAMS_PER_SPLAT}u + p] = 0.0;
+                    adam.m[new_idx * {@SPLAT_PARAMS_PER_SPLAT}u + p] = 0.0;
+                    adam.v[new_idx * {@SPLAT_PARAMS_PER_SPLAT}u + p] = 0.0;
                 }
             }
         }

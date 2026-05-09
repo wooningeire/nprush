@@ -10,6 +10,9 @@ struct Splat {
     color: vec4f,
     quat: vec4f,
     sy_shape: vec4f,
+    sh1_r: vec4f,
+    sh1_g: vec4f,
+    sh1_b: vec4f,
 }
 
 struct SplatArray {

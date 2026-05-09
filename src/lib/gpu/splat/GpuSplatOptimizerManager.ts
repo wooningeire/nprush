@@ -66,36 +66,33 @@ export class GpuSplatOptimizerManager {
     }) {
         this.device = device;
         this.numSplats = numSplats;
-        this.numParams = numSplats * 16;
-        
-        // Init Buffers — 4 × vec4f = 16 floats per splat
-        const splatData = new Float32Array(this.numSplats * 16);
+        const floatsPer = constants.SPLAT_PARAMS_PER_SPLAT;
+        this.numParams = numSplats * floatsPer;
+
+        // Structured splat buffer; see WGSL `Splat` (SH degree-1 = 28 floats total).
+        const splatData = new Float32Array(this.numSplats * floatsPer);
         for (let i = 0; i < this.numSplats; i++) {
-            const o = i * 16;
+            const o = i * floatsPer;
             // pos_sx: x, y, z, sx
             splatData[o + 0] = (Math.random() * 2 - 1) * 0.3;
             splatData[o + 1] = (Math.random() * 2 - 1) * 0.3;
             splatData[o + 2] = (Math.random() * 2 - 1) * 0.3;
-            splatData[o + 3] = 0.1 + Math.random() * 0.15;  // sx
-            // color: r, g, b, opacity
+            splatData[o + 3] = 0.1 + Math.random() * 0.15;
             splatData[o + 4] = Math.random();
             splatData[o + 5] = Math.random();
             splatData[o + 6] = Math.random();
-            if (i < 512) {
-                splatData[o + 7] = 0.3 + Math.random() * 0.4;
-            } else {
-                splatData[o + 7] = 0.0;
-            }
-            // quat: qw, qx, qy, qz — identity
+            splatData[o + 7] = i < 512 ? 0.3 + Math.random() * 0.4 : 0.0;
             splatData[o + 8] = 1.0;
             splatData[o + 9] = 0.0;
             splatData[o + 10] = 0.0;
             splatData[o + 11] = 0.0;
-            // sy_shape: sy, shape_a, shape_b, pad
-            splatData[o + 12] = 0.1 + Math.random() * 0.15; // sy
-            splatData[o + 13] = 2.0;  // shape_a
-            splatData[o + 14] = 0.5;  // shape_b
-            splatData[o + 15] = 0.1 + Math.random() * 0.15; // sz
+            splatData[o + 12] = 0.1 + Math.random() * 0.15;
+            splatData[o + 13] = 2.0;
+            splatData[o + 14] = 0.5;
+            splatData[o + 15] = 0.1 + Math.random() * 0.15;
+            for (let j = 16; j < floatsPer; j++) {
+                splatData[o + j] = 0.0;
+            }
         }
 
         this.splatBuffer = device.createBuffer({
@@ -130,7 +127,7 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
-        // VP matrix for backward and forward shaders (mat4x4f = 64 bytes) + inv VP (64 bytes) + blur_enabled (4 bytes) + padding
+        // VP (64) + inv VP (64) + cam_world (16) + extras.x = blur flag (vec4 tail = 16) — 160 B
         this.splatUniformsBuffer = device.createBuffer({
             label: "splat VP uniforms buffer",
             size: 160,
@@ -388,7 +385,12 @@ export class GpuSplatOptimizerManager {
         }
     }
 
-    writeSplatVPMatrix(mat: Mat4, invMat: Mat4, blurEnabled: boolean = false) {
+    writeSplatVPMatrix(
+        mat: Mat4,
+        invMat: Mat4,
+        blurEnabled: boolean = false,
+        camWorldXYZ: readonly [number, number, number] | Float32Array,
+    ) {
         this.device.queue.writeBuffer(
             this.splatUniformsBuffer,
             0,
@@ -406,7 +408,16 @@ export class GpuSplatOptimizerManager {
         this.device.queue.writeBuffer(
             this.splatUniformsBuffer,
             128,
-            new Float32Array([blurEnabled ? 1 : 0])
+            new Float32Array([
+                camWorldXYZ[0],
+                camWorldXYZ[1],
+                camWorldXYZ[2],
+                1.0,
+                blurEnabled ? 1 : 0,
+                0,
+                0,
+                0,
+            ])
         );
     }
 

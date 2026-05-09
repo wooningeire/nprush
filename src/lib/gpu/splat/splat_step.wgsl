@@ -3,6 +3,9 @@ struct Splat {
     color: vec4f,
     quat: vec4f,
     sy_shape: vec4f,
+    sh1_r: vec4f,
+    sh1_g: vec4f,
+    sh1_b: vec4f,
 }
 
 struct SplatArray {
@@ -38,20 +41,40 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     if (splat_id >= {@NUM_SPLATS}u) { return; }
 
     var s = splats.splats[splat_id];
-    let base_idx = splat_id * 16u;
+    let base_idx = splat_id * {@SPLAT_PARAMS_PER_SPLAT}u;
     let t = current_t + 1.0;
     var pos_grad_norm2 = 0.0;
 
-    // Param layout: 0=px, 1=py, 2=pz, 3=sx, 4=r, 5=g, 6=b, 7=opacity,
-    // 8=qw, 9=qx, 10=qy, 11=qz, 12=sy, 13=shape_a, 14=shape_b, 15=sz
-    // lr per param
-    let lr_table    = array<f32, 16>(0.0005, 0.0005, 0.0005, 0.01, 0.02, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.005, 0.01, 0.01, 0.01, 0.01);
-    // max_update per param
-    let mu_table    = array<f32, 16>(0.005, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005, 0.005, 0.005, 0.005, 0.005, 0.005, 0.05, 0.05, 0.005);
-    // fp_scale: 10000 for pos/scale/quat/shape, 100000 for color
-    let fps_table   = array<f32, 16>(10000.0, 10000.0, 10000.0, 10000.0, 100000.0, 100000.0, 100000.0, 100000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0);
+    // Param indices 16–27: RGB degree-1 SH (packed as vec4 with .w padding), .w grads ignored in backward.
+    let lr_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+        0.0005, 0.0005, 0.0005, 0.01,
+        0.02, 0.02, 0.02, 0.01,
+        0.005, 0.005, 0.005, 0.005,
+        0.01, 0.01, 0.01, 0.01,
+        0.02, 0.02, 0.02, 0.0,
+        0.02, 0.02, 0.02, 0.0,
+        0.02, 0.02, 0.02, 0.0
+    );
+    let mu_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+        0.005, 0.005, 0.005, 0.005,
+        0.001, 0.001, 0.001, 0.0005,
+        0.005, 0.005, 0.005, 0.005,
+        0.005, 0.05, 0.05, 0.005,
+        0.005, 0.005, 0.005, 0.0,
+        0.005, 0.005, 0.005, 0.0,
+        0.005, 0.005, 0.005, 0.0
+    );
+    let fps_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+        10000.0, 10000.0, 10000.0, 10000.0,
+        100000.0, 100000.0, 100000.0, 100000.0,
+        10000.0, 10000.0, 10000.0, 10000.0,
+        10000.0, 10000.0, 10000.0, 10000.0,
+        100000.0, 100000.0, 100000.0, 100000.0,
+        100000.0, 100000.0, 100000.0, 100000.0,
+        100000.0, 100000.0, 100000.0, 100000.0
+    );
 
-    for (var lp = 0u; lp < 16u; lp++) {
+    for (var lp = 0u; lp < {@SPLAT_PARAMS_PER_SPLAT}u; lp++) {
         let param_idx = base_idx + lp;
         let raw_grad = atomicExchange(&grads.data[param_idx], 0);
         let fp_scale = fps_table[lp];
@@ -75,25 +98,45 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let max_update = mu_table[lp];
         let update = clamp(raw_update, -max_update, max_update);
 
-        // Unpack splat fields into a flat array, apply update, repack
-        var params_arr = array<f32, 16>(
+        var params_arr = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
             s.pos_sx.x, s.pos_sx.y, s.pos_sx.z, s.pos_sx.w,
             s.color.r,  s.color.g,  s.color.b,  s.color.a,
             s.quat.x,   s.quat.y,   s.quat.z,   s.quat.w,
-            s.sy_shape.x, s.sy_shape.y, s.sy_shape.z, s.sy_shape.w
+            s.sy_shape.x, s.sy_shape.y, s.sy_shape.z, s.sy_shape.w,
+            s.sh1_r.x, s.sh1_r.y, s.sh1_r.z, s.sh1_r.w,
+            s.sh1_g.x, s.sh1_g.y, s.sh1_g.z, s.sh1_g.w,
+            s.sh1_b.x, s.sh1_b.y, s.sh1_b.z, s.sh1_b.w
         );
-        let lo = array<f32, 16>(-1e9, -1e9, -1e9, 0.001, 0.05, 0.05, 0.05, 0.01, -1e9, -1e9, -1e9, -1e9, 0.001, 0.1, 0.01, 0.001);
-        let hi = array<f32, 16>( 1e9,  1e9,  1e9, 2.0,   1.0,  1.0,  1.0,  0.99,  1e9,  1e9,  1e9,  1e9,  2.0, 10.0, 5.0,  2.0);
+        let lo = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+            -1e9, -1e9, -1e9, 0.001,
+            -5.0, -5.0, -5.0, 0.01,
+            -1e9, -1e9, -1e9, -1e9,
+            0.001, 0.1, 0.01, 0.001,
+            -2.5, -2.5, -2.5, -1e9,
+            -2.5, -2.5, -2.5, -1e9,
+            -2.5, -2.5, -2.5, -1e9
+        );
+        let hi = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+            1e9,  1e9,  1e9, 2.0,
+            5.0,  5.0,  5.0, 0.99,
+            1e9,  1e9,  1e9,  1e9,
+            2.0, 10.0, 5.0,  2.0,
+            2.5,  2.5,  2.5,  1e9,
+            2.5,  2.5,  2.5,  1e9,
+            2.5,  2.5,  2.5,  1e9
+        );
         params_arr[lp] = clamp(params_arr[lp] - update, lo[lp], hi[lp]);
-        s.pos_sx   = vec4f(params_arr[0], params_arr[1], params_arr[2], params_arr[3]);
-        s.color    = vec4f(params_arr[4], params_arr[5], params_arr[6], params_arr[7]);
-        s.quat     = vec4f(params_arr[8], params_arr[9], params_arr[10], params_arr[11]);
+        s.pos_sx = vec4f(params_arr[0], params_arr[1], params_arr[2], params_arr[3]);
+        s.color = vec4f(params_arr[4], params_arr[5], params_arr[6], params_arr[7]);
+        s.quat = vec4f(params_arr[8], params_arr[9], params_arr[10], params_arr[11]);
         s.sy_shape = vec4f(params_arr[12], params_arr[13], params_arr[14], params_arr[15]);
+        s.sh1_r = vec4f(params_arr[16], params_arr[17], params_arr[18], params_arr[19]);
+        s.sh1_g = vec4f(params_arr[20], params_arr[21], params_arr[22], params_arr[23]);
+        s.sh1_b = vec4f(params_arr[24], params_arr[25], params_arr[26], params_arr[27]);
 
         if (lp <= 2u) { pos_grad_norm2 += grad * grad; }
     }
 
-    // Re-normalize quaternion
     let q_len = max(length(s.quat), 1e-8);
     s.quat = s.quat / q_len;
 

@@ -38,6 +38,8 @@ export const constants = {
     
     // Runner / Optimization config
     OPTIM_SHORT: 256,
+    /** Floats stored per Gaussian (pos, color DC, quat, shape, RGB degree-1 SH). */
+    SPLAT_PARAMS_PER_SPLAT: 28,
     NUM_GAUSSIAN_SPLATS: 512,
     NUM_EDGE_LAYER_BEZIERS: 4096,
     

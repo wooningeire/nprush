@@ -1,8 +1,34 @@
 struct Splat {
     pos_sx: vec4f,    // x, y, z, sx
-    color: vec4f,     // r, g, b, opacity
-    quat: vec4f,      // qw, qx, qy, qz
-    sy_shape: vec4f,  // sy, shape_a, shape_b, sz
+    color: vec4f,     // linear RGB base + opacity; SH1 adds directional residual
+    quat: vec4f,
+    sy_shape: vec4f,
+    sh1_r: vec4f,     // xyz: red directional SH coefficients (scaled by SH_C1 in shading)
+    sh1_g: vec4f,
+    sh1_b: vec4f,
+}
+
+const SH_C1: f32 = 0.4886025119029199;
+
+fn quat_conj(q: vec4f) -> vec4f {
+    return vec4f(q.x, -q.y, -q.z, -q.w);
+}
+
+fn splat_view_dir_local(cam_world: vec3f, pos: vec3f, q: vec4f) -> vec3f {
+    let v_w = cam_world - pos;
+    let inv_len = inverseSqrt(max(dot(v_w, v_w), 1e-18));
+    let dir_w = v_w * inv_len;
+    return quat_rotate(quat_conj(q), dir_w);
+}
+
+fn splat_rgb_sh1(s: Splat, dir_l: vec3f) -> vec3f {
+    let x = dir_l.x;
+    let y = dir_l.y;
+    let z = dir_l.z;
+    let rr = s.color.r + SH_C1 * (y * s.sh1_r.x + z * s.sh1_r.y + x * s.sh1_r.z);
+    let gg = s.color.g + SH_C1 * (y * s.sh1_g.x + z * s.sh1_g.y + x * s.sh1_g.z);
+    let bb = s.color.b + SH_C1 * (y * s.sh1_b.x + z * s.sh1_b.y + x * s.sh1_b.z);
+    return max(vec3f(rr, gg, bb), vec3f(0.0));
 }
 
 struct SplatArray {
@@ -15,6 +41,7 @@ struct ForwardUniforms {
     vp: mat4x4f,
     dims: vec2f,
     _pad: vec2f,
+    cam_world: vec4f,
 }
 @group(0) @binding(1) var<uniform> uniforms: ForwardUniforms;
 
@@ -26,6 +53,7 @@ struct VsOut {
     @location(1) @interpolate(flat) instance_idx: u32,
     @location(2) depth: f32,
     @location(3) @interpolate(flat) conic: vec3f,
+    @location(4) @interpolate(flat) rgb: vec3f,
 }
 
 fn quat_rotate(q: vec4f, v: vec3f) -> vec3f {
@@ -65,7 +93,12 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
     const DEPTH_NEAR_CULL = 0.1;
     if (w < DEPTH_NEAR_CULL) {
         var o_clip: VsOut;
-        o_clip.pos = vec4f(0.0, 0.0, 2.0, 1.0); // Clip it
+        o_clip.pos = vec4f(0.0, 0.0, 2.0, 1.0);
+        o_clip.d = vec2f(0.0);
+        o_clip.instance_idx = splat_idx;
+        o_clip.depth = 0.0;
+        o_clip.conic = vec3f(0.0);
+        o_clip.rgb = vec3f(0.0);
         return o_clip;
     }
     
@@ -112,12 +145,16 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
     clip.x += lx * w / aspect;
     clip.y += ly * w;
     
+    let dir_l = splat_view_dir_local(uniforms.cam_world.xyz, pos3, q);
+    let rgb = splat_rgb_sh1(s, dir_l);
+
     var o: VsOut;
     o.pos = clip;
     o.d = vec2f(lx, ly);
     o.instance_idx = splat_idx;
     o.depth = w;
     o.conic = vec3f(A, B, C);
+    o.rgb = rgb;
     return o;
 }
 
@@ -154,7 +191,7 @@ fn frag(v: VsOut) -> FragOut {
     let enc_depth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
 
     var out: FragOut;
-    out.color = vec4f(s.color.rgb, a);
+    out.color = vec4f(v.rgb, a);
     out.depth = vec4f(enc_depth, enc_depth, enc_depth, a);
     return out;
 }

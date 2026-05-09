@@ -15,7 +15,7 @@ import { RENDER_MODE_MULTIVIEW } from "./renderMode.ts";
 import { evaluateTurntablePath } from "./turntable/turntablePath.ts";
 import { compositeTurntableLayers } from "./turntable/turntableComposite.ts";
 import { TurntableFrameCaptureQueue } from "./turntable/turntableFrameCapture.ts";
-import type { Mat4 } from "wgpu-matrix";
+import { vec3, type Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants";
 import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
 import { readTextureToImageData, imageDataToBlob } from "$/gpu/file-save/readback.ts";
@@ -42,6 +42,8 @@ class MultiviewDataset {
     readonly viewMats: Float32Array[];
     /** Per-view invViewProjMat (16 f32 each). */
     readonly invViewProjMats: Float32Array[];
+    /** Per-view invViewMat — camera-from-world; origin maps to eye position for SH. */
+    readonly invViewMats: Float32Array[];
     readonly numViews: number;
 
     constructor(device: GPUDevice, numViews: number, width: number, height: number) {
@@ -51,6 +53,7 @@ class MultiviewDataset {
         this.viewProjMats = [];
         this.viewMats = [];
         this.invViewProjMats = [];
+        this.invViewMats = [];
         for (let i = 0; i < numViews; i++) {
             const tex = device.createTexture({
                 label: `multiview dataset slot ${i}`,
@@ -63,6 +66,7 @@ class MultiviewDataset {
             this.viewProjMats.push(new Float32Array(16));
             this.viewMats.push(new Float32Array(16));
             this.invViewProjMats.push(new Float32Array(16));
+            this.invViewMats.push(new Float32Array(16));
         }
     }
 
@@ -325,11 +329,7 @@ export class GpuRunner {
                 this.viewerState.meshSplatsEnabled,
                 this.viewerState.splatsEnabled,
             ));
-            $effect(() => {
-                if (this.viewerState.renderMode !== RENDER_MODE_MULTIVIEW) {
-                    this.splatOptimizerManager.writeSplatVPMatrix(this.camera.viewProjMat, this.camera.viewProjInvMat, this.viewerState.compareBlurred);
-                }
-            });
+            /** Splat view-projection + eye position (for SH) are written each frame inside loop(). */
             $effect(() => {
                 // Reset Adam on camera change for ordinary navigation. Multiview uses
                 // dataset views without moving the orbit. Single-view turntable export
@@ -341,7 +341,7 @@ export class GpuRunner {
                 this.baseColorLayerBezierManager.resetAdam();
                 this.colorLayerBezierManager.resetAdam();
             });
-            $effect(() => this.splatForwardManager.writeVPMatrix(this.camera.viewProjMat));
+            /** Bezier optimizers skip multiview; turntable+dataset assigns their VP inside loop(). */
             $effect(() => {
                 if (this.viewerState.renderMode !== RENDER_MODE_MULTIVIEW) {
                     this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
@@ -528,6 +528,7 @@ export class GpuRunner {
                 dataset.viewProjMats[i].set(this.camera.viewProjMat as Float32Array);
                 dataset.viewMats[i].set(this.camera.viewMat as Float32Array);
                 dataset.invViewProjMats[i].set(this.camera.viewProjInvMat as Float32Array);
+                dataset.invViewMats[i].set(this.camera.viewInvMat as Float32Array);
 
                 vs.multiviewPrerenderProgress = (i + 1) / numViews;
             }
@@ -874,20 +875,19 @@ export class GpuRunner {
             // render and optimizers see the correct camera for this frame.
             // This replaces the live PT dispatch for the optimizer target.
             let datasetView: GPUTextureView | null = null;
-            // Depth sort keys must use the same view-projection as the optimizer
-            // uniforms for this frame (dataset random view vs live camera).
             let sortVp: Mat4 = this.camera.viewProjMat as Mat4;
+            let vpInvForSplat = this.camera.viewProjInvMat as Mat4;
+            let invViewForCam = this.camera.viewInvMat as Mat4;
             if (this.viewerState.turntableTraining && this.viewerState.multiviewDatasetReady && this.multiviewDataset) {
                 const ds = this.multiviewDataset;
                 const idx = Math.floor(Math.random() * ds.numViews);
                 datasetView = ds.textureViews[idx];
                 sortVp = ds.viewProjMats[idx] as Mat4;
-                // Write camera matrices so the mesh render pass uses this view.
+                vpInvForSplat = ds.invViewProjMats[idx] as Mat4;
+                invViewForCam = ds.invViewMats[idx] as Mat4;
                 this.uniformsManager.writeViewProjMat(ds.viewProjMats[idx]);
                 this.uniformsManager.writeViewMat(ds.viewMats[idx]);
                 this.uniformsManager.writeInvViewProjMat(ds.invViewProjMats[idx]);
-                // Write VP to all optimizer uniforms.
-                this.splatOptimizerManager.writeSplatVPMatrix(ds.viewProjMats[idx], ds.invViewProjMats[idx], this.viewerState.compareBlurred);
                 this.edgeLayerBezierManager.writeVPMatrix(ds.viewProjMats[idx]);
                 this.baseColorLayerBezierManager.writeVPMatrix(ds.viewProjMats[idx]);
                 this.colorLayerBezierManager.writeVPMatrix(ds.viewProjMats[idx]);
@@ -895,6 +895,15 @@ export class GpuRunner {
                 this.baseColorLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
                 this.colorLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
             }
+
+            const camWorld = vec3.transformMat4(vec3.fromValues(0, 0, 0), invViewForCam);
+            this.splatOptimizerManager.writeSplatVPMatrix(sortVp, vpInvForSplat, this.viewerState.compareBlurred, [
+                camWorld[0],
+                camWorld[1],
+                camWorld[2],
+            ]);
+            this.splatForwardManager.writeVPMatrix(sortVp);
+            this.splatForwardManager.writeCameraWorld(camWorld[0], camWorld[1], camWorld[2]);
 
             // 1a. Render the model into the full-res target + depth textures (for visualization).
             if (!this.viewerState.viewportRenderingFrozen) {

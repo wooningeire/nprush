@@ -3,6 +3,9 @@ struct Splat {
     color: vec4f,
     quat: vec4f,
     sy_shape: vec4f,
+    sh1_r: vec4f,
+    sh1_g: vec4f,
+    sh1_b: vec4f,
 }
 
 struct SplatArray {
@@ -16,8 +19,8 @@ struct GradArray {
 struct SplatUniforms {
     vp: mat4x4f,
     vp_inv: mat4x4f,
-    blur_enabled: f32,
-    _pad: vec3f,
+    cam_world: vec4f,
+    extras: vec4f,
 }
 
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
@@ -43,6 +46,29 @@ fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32) -> vec2f {
 fn quat_rotate(q: vec4f, v: vec3f) -> vec3f {
     let t = 2.0 * cross(q.yzw, v);
     return v + q.x * t + cross(q.yzw, t);
+}
+
+const SH_C1: f32 = 0.4886025119029199;
+
+fn quat_conj(q: vec4f) -> vec4f {
+    return vec4f(q.x, -q.y, -q.z, -q.w);
+}
+
+fn splat_view_dir_local(cam_world: vec3f, pos: vec3f, q: vec4f) -> vec3f {
+    let v_w = cam_world - pos;
+    let inv_len = inverseSqrt(max(dot(v_w, v_w), 1e-18));
+    let dir_w = v_w * inv_len;
+    return quat_rotate(quat_conj(q), dir_w);
+}
+
+fn splat_rgb_sh1_linear(s: Splat, dir_l: vec3f) -> vec3f {
+    let x = dir_l.x;
+    let y = dir_l.y;
+    let z = dir_l.z;
+    let rr = s.color.r + SH_C1 * (y * s.sh1_r.x + z * s.sh1_r.y + x * s.sh1_r.z);
+    let gg = s.color.g + SH_C1 * (y * s.sh1_g.x + z * s.sh1_g.y + x * s.sh1_g.z);
+    let bb = s.color.b + SH_C1 * (y * s.sh1_b.x + z * s.sh1_b.y + x * s.sh1_b.z);
+    return vec3f(rr, gg, bb);
 }
 
 fn project_center(vp: mat4x4f, pos3: vec3f, aspect: f32) -> vec3f {
@@ -243,7 +269,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let power = -shape_b * pow(ps.r, shape_a);
         let a = clamp(select(0.0, exp(power) * s.color.a, power > -15.0), 0.0, 0.999);
         alphas[idx] = a;
-        C_pred += Ts[idx] * a * s.color.rgb;
+        let dir_v = splat_view_dir_local(splat_uniforms.cam_world.xyz, s.pos_sx.xyz, s.quat);
+        let rgb_lin = splat_rgb_sh1_linear(s, dir_v);
+        let rgb_vis = max(rgb_lin, vec3f(0.0));
+        C_pred += Ts[idx] * a * rgb_vis;
         let linear_depth = max(ps.w, DEPTH_NEAR);
         let depth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
         D_pred += Ts[idx] * a * depth;
@@ -269,7 +298,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let a = alphas[idx];
         if (a < 0.001) { continue; }
         let s = splats.splats[i];
-        let color = s.color.rgb;
+        let cam_xyz = splat_uniforms.cam_world.xyz;
+        let dir_l = splat_view_dir_local(cam_xyz, s.pos_sx.xyz, s.quat);
+        let lx = dir_l.x;
+        let ly = dir_l.y;
+        let lz = dir_l.z;
+        let rr_lin = s.color.r + SH_C1 * (ly * s.sh1_r.x + lz * s.sh1_r.y + lx * s.sh1_r.z);
+        let gg_lin = s.color.g + SH_C1 * (ly * s.sh1_g.x + lz * s.sh1_g.y + lx * s.sh1_g.z);
+        let bb_lin = s.color.b + SH_C1 * (ly * s.sh1_b.x + lz * s.sh1_b.y + lx * s.sh1_b.z);
+        let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
+        let color = rgb_vis;
         let opacity = s.color.a;
         let T_prev = Ts[idx];
         let ps = eval_splat(s, p, aspect);
@@ -443,14 +481,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let FP_SCALE_POS = f32({@SPLAT_FP_SCALE_POS});
         let FP_SCALE_COL = f32({@SPLAT_FP_SCALE_COL});
 
-        let base_idx = i * 16u;
+        let d_relu_r = select(0.0, dColor.r, rr_lin > 0.0);
+        let d_relu_g = select(0.0, dColor.g, gg_lin > 0.0);
+        let d_relu_b = select(0.0, dColor.b, bb_lin > 0.0);
+
+        let base_idx = i * {@SPLAT_PARAMS_PER_SPLAT}u;
         atomicAdd(&grads.data[base_idx + 0u], i32(d_pos.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 1u], i32(d_pos.y * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 2u], i32(d_pos.z * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 3u], i32(d_sx * FP_SCALE_POS));
-        atomicAdd(&grads.data[base_idx + 4u], i32(dColor.r * FP_SCALE_COL));
-        atomicAdd(&grads.data[base_idx + 5u], i32(dColor.g * FP_SCALE_COL));
-        atomicAdd(&grads.data[base_idx + 6u], i32(dColor.b * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 4u], i32(d_relu_r * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 5u], i32(d_relu_g * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 6u], i32(d_relu_b * FP_SCALE_COL));
         atomicAdd(&grads.data[base_idx + 7u], i32(d_opacity * FP_SCALE_COL));
         atomicAdd(&grads.data[base_idx + 8u], i32(d_qw_total * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 9u], i32(d_qx_total * FP_SCALE_POS));
@@ -460,5 +502,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         atomicAdd(&grads.data[base_idx + 13u], i32(d_shape_a * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 14u], i32(d_shape_b * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 15u], i32(d_sz * FP_SCALE_POS));
+
+        atomicAdd(&grads.data[base_idx + 16u], i32(d_relu_r * SH_C1 * ly * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 17u], i32(d_relu_r * SH_C1 * lz * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 18u], i32(d_relu_r * SH_C1 * lx * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 19u], i32(d_relu_g * SH_C1 * ly * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 20u], i32(d_relu_g * SH_C1 * lz * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 21u], i32(d_relu_g * SH_C1 * lx * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 22u], i32(d_relu_b * SH_C1 * ly * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 23u], i32(d_relu_b * SH_C1 * lz * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 24u], i32(d_relu_b * SH_C1 * lx * FP_SCALE_COL));
     }
 }

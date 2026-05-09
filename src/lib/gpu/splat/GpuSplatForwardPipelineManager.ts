@@ -31,10 +31,10 @@ export class GpuSplatForwardPipelineManager {
         this.sortOrderBuffer = sortOrderBuffer;
         this.numSplats = numSplats;
 
-        // VP matrix (64 bytes) + dims (8 bytes) + pad (8 bytes) = 80 bytes
+        // mat4x4 (64) + dims vec2 + pad (8) + cam_world vec4 (16) = 96
         this.uniformsBuffer = device.createBuffer({
             label: "splat forward uniforms buffer",
-            size: 80,
+            size: 96,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -107,13 +107,16 @@ export class GpuSplatForwardPipelineManager {
         );
     }
 
+    writeCameraWorld(x: number, y: number, z: number) {
+        this.device.queue.writeBuffer(this.uniformsBuffer, 80, new Float32Array([x, y, z, 1.0]));
+    }
+
     setTarget(targetColorView: GPUTextureView, targetDepthView: GPUTextureView, width: number, height: number) {
         this.targetColorView = targetColorView;
         this.targetDepthView = targetDepthView;
         if (this.dims.width !== width || this.dims.height !== height) {
             this.dims = { width, height };
-            // Write dims at offset 64 (after the mat4x4)
-            this.device.queue.writeBuffer(this.uniformsBuffer, 64, new Float32Array([width, height]));
+            this.device.queue.writeBuffer(this.uniformsBuffer, 64, new Float32Array([width, height, 0, 0]));
         }
     }
 
