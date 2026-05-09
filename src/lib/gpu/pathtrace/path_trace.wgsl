@@ -71,7 +71,7 @@ fn load_vert(idx: u32) -> Vertex {
     );
 }
 
-struct Hit { hit: bool, t: f32, norm: vec3f, color: vec4f }
+struct Hit { hit: bool, t: f32, norm: vec3f, gnorm: vec3f, color: vec4f }
 
 fn intersect_tri(ro: vec3f, rd: vec3f, i0: u32, i1: u32, i2: u32, t_max: f32) -> Hit {
     var res: Hit; res.hit = false;
@@ -98,8 +98,10 @@ fn intersect_tri(ro: vec3f, rd: vec3f, i0: u32, i1: u32, i2: u32, t_max: f32) ->
     if (t < 1e-4 || t >= t_max) { return res; }
     
     let w = 1.0 - u - v;
+    let gnorm = normalize(cross(edge1, edge2));
     res.hit = true;
     res.t = t;
+    res.gnorm = select(gnorm, -gnorm, dot(gnorm, rd) > 0.0);
     
     // Interpolate normal and handle potential zero-length result
     let n = u * v1.norm + v * v2.norm + w * v0.norm;
@@ -108,13 +110,34 @@ fn intersect_tri(ro: vec3f, rd: vec3f, i0: u32, i1: u32, i2: u32, t_max: f32) ->
         res.norm = n * inverseSqrt(len_sq);
     } else {
         // Fallback to geometric normal if vertex normals are degenerate
-        res.norm = normalize(cross(edge1, edge2));
-
-        if dot(res.norm, rd) > 0 { res.norm = -res.norm; }
+        res.norm = res.gnorm;
     }
     
     res.color = u * v1.color + v * v2.color + w * v0.color;
     return res;
+}
+
+// ── Robust Ray Offsetting ─────────────────────────────────────────────────────
+// Prevents self-intersection by offsetting the ray origin along the normal.
+// Scales with the magnitude of the position to maintain precision.
+fn offset_ray(p: vec3f, n: vec3f) -> vec3f {
+    let int_scale: f32 = 256.0;
+    let float_scale: f32 = 1.0 / 65536.0;
+    let origin: f32 = 1.0 / 32.0;
+
+    let of_i = vec3i(i32(int_scale * n.x), i32(int_scale * n.y), i32(int_scale * n.z));
+
+    let p_i = vec3f(
+        bitcast<f32>(bitcast<i32>(p.x) + select(of_i.x, -of_i.x, p.x < 0.0)),
+        bitcast<f32>(bitcast<i32>(p.y) + select(of_i.y, -of_i.y, p.y < 0.0)),
+        bitcast<f32>(bitcast<i32>(p.z) + select(of_i.z, -of_i.z, p.z < 0.0))
+    );
+
+    return vec3f(
+        select(p_i.x, p.x + float_scale * n.x, abs(p.x) < origin),
+        select(p_i.y, p.y + float_scale * n.y, abs(p.y) < origin),
+        select(p_i.z, p.z + float_scale * n.z, abs(p.z) < origin)
+    );
 }
 
 // ── AABB slab test ────────────────────────────────────────────────────────────
@@ -231,11 +254,15 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             radiance += throughput * sample_env(ray_d);
             break;
         }
-        let n = select(hit.norm, -hit.norm, dot(hit.norm, ray_d) > 0.0);
+        let gnorm = hit.gnorm;
+        var n = select(hit.norm, -hit.norm, dot(hit.norm, ray_d) > 0.0);
+        // Ensure shading normal is on the same side as geometric normal to prevent black spots
+        if (dot(n, gnorm) < 0.0) { n = gnorm; }
+
         let is_specular = hit.color.a < 0.5;
         if (is_specular) {
             // Perfect mirror: reflect ray, throughput unchanged (no albedo tint)
-            ray_o = ray_o + ray_d * hit.t + n * 5e-4;
+            ray_o = offset_ray(ray_o + ray_d * hit.t, gnorm);
             ray_d = reflect(ray_d, n);
         } else {
             var albedo = hit.color.rgb;
@@ -260,7 +287,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
             }
             
             throughput *= albedo; // diffuse: albedo (cos/pi and pdf cancel)
-            ray_o = ray_o + ray_d * hit.t + n * 1e-3;
+            ray_o = offset_ray(ray_o + ray_d * hit.t, gnorm);
             ray_d = cosine_hemisphere(n, &seed);
         }
     }
