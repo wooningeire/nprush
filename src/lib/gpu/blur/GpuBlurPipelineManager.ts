@@ -52,7 +52,8 @@ export class GpuBlurPipelineManager {
         height: number,
         radius: number,
         sigma: number,
-        isSrgb: boolean = false
+        isSrgb: boolean = false,
+        timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>,
     ) {
         // Horizontal pass
         const hFlags = isSrgb ? 1 : 0; // In: sRGB, Out: Linear
@@ -86,6 +87,7 @@ export class GpuBlurPipelineManager {
 
         const pass = commandEncoder.beginComputePass({
             label: "blur pass",
+            ...(timestampWrites ? { timestampWrites } : {}),
         });
         pass.setPipeline(this.pipeline);
         

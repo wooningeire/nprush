@@ -257,7 +257,7 @@ export class GpuPathTracePipelineManager {
         });
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder) {
+    dispatch(commandEncoder: GPUCommandEncoder, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
         if (!this.accumBuffer || !this.outputTextureView ||
             !this.vertexBuffer || !this.bvhNodeBuffer || !this.bvhTriBuffer) return;
 
@@ -271,7 +271,10 @@ export class GpuPathTracePipelineManager {
         this.frameCount++;
 
         const w = this.accumWidth, h = this.accumHeight;
-        const pass = commandEncoder.beginComputePass({ label: "path trace" });
+        const pass = commandEncoder.beginComputePass({
+            label: "path trace",
+            ...(timestampWrites ? { timestampWrites } : {}),
+        });
 
         pass.setPipeline(this.ptPipeline);
         pass.setBindGroup(0, this.ptBindGroup);

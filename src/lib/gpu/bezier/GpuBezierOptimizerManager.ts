@@ -539,7 +539,7 @@ export class GpuBezierOptimizerManager {
         });
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder) {
+    dispatch(commandEncoder: GPUCommandEncoder, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
         if (!this.backwardBindGroup) return;
 
         // Update pixel count for normalization in the step shader.
@@ -553,6 +553,7 @@ export class GpuBezierOptimizerManager {
 
         const pass = commandEncoder.beginComputePass({
             label: "bezier backward and step pass",
+            ...(timestampWrites ? { timestampWrites } : {}),
         });
 
         pass.setPipeline(this.backwardPipeline);

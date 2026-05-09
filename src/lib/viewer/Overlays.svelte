@@ -1,10 +1,11 @@
 <script lang="ts">
-import type { ViewerState } from "./ViewerState.svelte";
+import type { ViewerState } from "./ViewerState.svelte.ts";
 import {
     RENDER_MODE_MULTIVIEW,
     RENDER_MODE_SINGLE_VIEW_REALTIME,
     type RenderMode,
 } from "./renderMode.ts";
+import GpuProfilerCharts from "./GpuProfilerCharts.svelte";
 
 const {
     viewerState,
@@ -36,6 +37,16 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         <input type="checkbox" bind:checked={viewerState.viewportRenderingFrozen} />
         Freeze Viewport Render
     </label>
+
+    {#if viewerState.gpuTimestampQuerySupported}
+        <label class="gpu-profiler-toggle">
+            <input type="checkbox" bind:checked={viewerState.gpuProfilingEnabled} />
+            GPU pass timings
+        </label>
+        {#if viewerState.gpuProfilingEnabled}
+            <GpuProfilerCharts {viewerState} />
+        {/if}
+    {/if}
 
     <div class="separator"></div>
 

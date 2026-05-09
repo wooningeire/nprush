@@ -2,6 +2,7 @@
 import { onMount } from "svelte";
 
 import Canvas from "./Canvas.svelte";
+import GpuProfilerHud from "./GpuProfilerHud.svelte";
 import Overlays from "./Overlays.svelte";
 import { ViewerState } from "./ViewerState.svelte.ts";
 
@@ -24,6 +25,7 @@ onMount(() => {
     />
 
     <Overlays {viewerState} />
+    <GpuProfilerHud {viewerState} />
 </main>
 
 

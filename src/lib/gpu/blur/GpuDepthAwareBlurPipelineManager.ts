@@ -52,6 +52,7 @@ export class GpuDepthAwareBlurPipelineManager {
         width: number,
         height: number,
         radius: number,
+        timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>,
     ) {
         this.device.queue.writeBuffer(this.paramsBuffer, 0, new Int32Array([radius]));
 
@@ -69,6 +70,7 @@ export class GpuDepthAwareBlurPipelineManager {
 
         const pass = commandEncoder.beginComputePass({
             label: "depth aware blur pass",
+            ...(timestampWrites ? { timestampWrites } : {}),
         });
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, bindGroup);

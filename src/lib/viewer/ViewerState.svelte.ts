@@ -24,6 +24,7 @@ import {
 } from "./renderMode.ts";
 import { evaluateTurntablePath, type TurntablePathParams } from "./turntable/turntablePath.ts";
 import { runTurntableExport } from "./turntable/turntableExport.ts";
+import { GPU_PROFILER_PAIR_COUNT, GPU_PROFILER_HISTORY_FRAMES } from "$/gpu/performanceMeasurement/gpuProfilerPairs";
 
 export class ViewerState {
     width = $state(300);
@@ -52,6 +53,18 @@ export class ViewerState {
     
     renderMode = $state<RenderMode>(RENDER_MODE_SINGLE_VIEW_REALTIME);
     viewportRenderingFrozen = $state(false);
+
+    gpuTimestampQuerySupported = $state(false);
+    gpuProfilingEnabled = $state(false);
+    gpuProfilingMs = $state<number[]>(Array(GPU_PROFILER_PAIR_COUNT).fill(0));
+    gpuProfilingHistoryFrames = $state<number[][]>([]);
+
+    setGpuProfilingFrameMs(msPerPair: readonly number[]) {
+        this.gpuProfilingMs = [...msPerPair];
+        const next = [...this.gpuProfilingHistoryFrames, [...msPerPair]];
+        const cap = GPU_PROFILER_HISTORY_FRAMES;
+        this.gpuProfilingHistoryFrames = next.length > cap ? next.slice(-cap) : next;
+    }
 
     runner = $state<GpuRunner | null>(null);
     
@@ -289,6 +302,8 @@ export class ViewerState {
             ]);
             if (!gpu) return;
 
+            state.gpuTimestampQuerySupported = gpu.supportsTimestamp;
+
             state.meshVerts = new Float32Array(mesh.vertices);
             state.meshBvh = buildBvh(state.meshVerts, new Uint32Array(mesh.indices));
 
@@ -312,6 +327,7 @@ export class ViewerState {
                 brushTexture,
                 groundAlbedoTexture,
                 groundNormalTexture,
+                gpuTimestampSupported: gpu.supportsTimestamp,
             });
             state.runner = gpuRunner;
 

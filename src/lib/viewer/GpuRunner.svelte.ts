@@ -15,6 +15,8 @@ import { RENDER_MODE_MULTIVIEW } from "./renderMode.ts";
 import { evaluateTurntablePath } from "./turntable/turntablePath.ts";
 import { compositeTurntableLayers } from "./turntable/turntableComposite.ts";
 import { TurntableFrameCaptureQueue } from "./turntable/turntableFrameCapture.ts";
+import { GpuPerformanceMeasurementBufferManager } from "$/gpu/performanceMeasurement/GpuPerformanceMeasurementBufferManager";
+import { GpuProfilingPair } from "$/gpu/performanceMeasurement/gpuProfilerPairs";
 import { vec3, type Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants";
 import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
@@ -101,6 +103,7 @@ export class GpuRunner {
     private readonly matcapTextureView: GPUTextureView;
     private readonly envmapPipelineManager: GpuEnvmapPipelineManager;
     readonly pathTracePipelineManager: GpuPathTracePipelineManager;
+    private gpuPerfBuffers: GpuPerformanceMeasurementBufferManager | null = null;
 
     // Full-res textures (sized to the visible main panel area: half-width x height-minus-strip).
     // These match the camera projection aspect so the rendered model has the same pixel
@@ -186,12 +189,13 @@ export class GpuRunner {
         brushTexture,
         groundAlbedoTexture,
         groundNormalTexture,
+        gpuTimestampSupported,
     }: {
         device: GPUDevice,
         context: GPUCanvasContext,
         format: GPUTextureFormat,
         camera: Camera,
-        viewerState: any,
+        viewerState: ViewerState,
         mesh: MeshData,
         groundMesh: MeshData | null,
         groundPbrMesh: MeshData | null,
@@ -199,6 +203,7 @@ export class GpuRunner {
         brushTexture: GPUTexture,
         groundAlbedoTexture?: GPUTexture,
         groundNormalTexture?: GPUTexture,
+        gpuTimestampSupported: boolean,
     }) {
         this.device = device;
         this.context = context;
@@ -207,6 +212,10 @@ export class GpuRunner {
         this.viewerState = viewerState;
         this.matcapTexture = matcapTexture;
         this.matcapTextureView = matcapTexture.createView();
+
+        this.gpuPerfBuffers = gpuTimestampSupported
+            ? new GpuPerformanceMeasurementBufferManager({ device })
+            : null;
 
         this.uniformsManager = new GpuUniformsBufferManager({ device });
 
@@ -397,6 +406,7 @@ export class GpuRunner {
                 this.depthAwareBlurManager.destroy();
                 this.pathTracePipelineManager.destroy();
                 this.envmapPipelineManager.destroy?.();
+                this.gpuPerfBuffers?.destroy();
 
                 // Cleanup all textures owned by runner
                 this.targetTexture?.destroy();
@@ -712,7 +722,7 @@ export class GpuRunner {
         let handle = 0;
         let canceled = false;
 
-        const loop = () => {
+        const loop = async () => {
             const currentTexture = this.context.getCurrentTexture();
             const width = currentTexture.width;
             const height = currentTexture.height;
@@ -857,7 +867,7 @@ export class GpuRunner {
             }
 
             if (!this.targetTextureView || !this.targetDepthTextureView || !this.optimTextureView) {
-                if (!canceled) requestAnimationFrame(loop);
+                if (!canceled) requestAnimationFrame(() => void loop());
                 return;
             }
 
@@ -869,6 +879,8 @@ export class GpuRunner {
             const commandEncoder = this.device.createCommandEncoder({
                 label: "runner loop command encoder",
             });
+
+            const recordGpu = !!(this.gpuPerfBuffers && this.viewerState.gpuProfilingEnabled);
 
             // Frozen viewport skips full-resolution splat/bezier passes unless we must
             // refresh those textures for turntable PNG export (readback next enqueue).
@@ -927,6 +939,7 @@ export class GpuRunner {
             if (!this.viewerState.viewportRenderingFrozen) {
                 const spherePassEncoder = commandEncoder.beginRenderPass({
                     label: "mesh render pass (full res)",
+                    ...(recordGpu ? { timestampWrites: this.gpuPerfBuffers!.writes(GpuProfilingPair.MeshFullRaster) } : {}),
                     colorAttachments: [
                         {
                             clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
@@ -962,6 +975,7 @@ export class GpuRunner {
             // 1b. Render the model into the optim-res (aspect-matched) textures for gradient computation.
             const optimPassEncoder = commandEncoder.beginRenderPass({
                 label: "mesh render pass (optim res)",
+                ...(recordGpu ? { timestampWrites: this.gpuPerfBuffers!.writes(GpuProfilingPair.MeshOptimRaster) } : {}),
                 colorAttachments: [
                     {
                         clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
@@ -998,7 +1012,10 @@ export class GpuRunner {
             // the rasterized mesh render, giving a more physically-based training signal.
             // Skip during dataset-driven training — the prerendered textures are used directly.
             if (!datasetView) {
-                this.pathTracePipelineManager.dispatch(commandEncoder);
+                this.pathTracePipelineManager.dispatch(
+                    commandEncoder,
+                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.PathTrace) : undefined,
+                );
             }
 
             // Use dataset view if available, else PT output, else raster fallback.
@@ -1016,7 +1033,8 @@ export class GpuRunner {
                     this.optimHeight,
                     this.viewerState.blurRadius,
                     this.viewerState.blurRadius / 2,
-                    true // isSrgb
+                    true, // isSrgb
+                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BlurOptimTarget) : undefined,
                 );
                 this.blurManager.blur(
                     commandEncoder,
@@ -1027,7 +1045,8 @@ export class GpuRunner {
                     this.optimHeight,
                     this.viewerState.blurRadius,
                     this.viewerState.blurRadius / 2,
-                    false // isSrgb
+                    false, // isSrgb
+                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BlurOptimDepth) : undefined,
                 );
             }
             
@@ -1040,7 +1059,8 @@ export class GpuRunner {
                     this.optimDepthAwareBlurredTextureView!,
                     this.optimWidth,
                     this.optimHeight,
-                    15
+                    15,
+                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.DepthAwareBlur) : undefined,
                 );
             }
 
@@ -1049,7 +1069,12 @@ export class GpuRunner {
                 this.optimDepthTextureView!, 
                 this.optimEdgeTextureView!
             );
-            this.splatOptimizerManager.dispatchEdge(commandEncoder, this.optimWidth, this.optimHeight);
+            this.splatOptimizerManager.dispatchEdge(
+                commandEncoder,
+                this.optimWidth,
+                this.optimHeight,
+                recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatEdgeDetectOptim) : undefined,
+            );
 
             // 3. Dispatch Splat Optimizer Compute Passes (uses optim-res texture + edge map)
             this.splatOptimizerManager.setBackwardTarget(
@@ -1060,7 +1085,10 @@ export class GpuRunner {
             );
             const defaultPause = this.viewerState.renderMode === RENDER_MODE_MULTIVIEW && (!this.viewerState.turntableTraining || !this.viewerState.multiviewDatasetReady);
             if (this.viewerState.splatsEnabled && !(this.viewerState.splatTrainingPaused || defaultPause)) {
-                this.splatOptimizerManager.dispatch(commandEncoder);
+                this.splatOptimizerManager.dispatch(
+                    commandEncoder,
+                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatBackwardStep) : undefined,
+                );
             }
 
             // 3.1 Sort splats by depth for correct alpha blending order
@@ -1075,7 +1103,12 @@ export class GpuRunner {
                 this.optimWidth,
                 this.optimHeight
             );
-            this.splatForwardManager.dispatch(commandEncoder, true, this.viewerState.splatsEnabled);
+            this.splatForwardManager.dispatch(
+                commandEncoder,
+                true,
+                this.viewerState.splatsEnabled,
+                recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatRasterOptim) : undefined,
+            );
 
             // 3.2 Restore full-res target for visualization (or turntable readback textures)
             if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
@@ -1086,7 +1119,10 @@ export class GpuRunner {
             // edge texture, so the curves learn to trace the depth silhouette.
             if (this.viewerState.edgeBeziersEnabled) {
                 if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
-                    this.edgeLayerBezierManager.dispatch(commandEncoder);
+                    this.edgeLayerBezierManager.dispatch(
+                        commandEncoder,
+                        recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierEdgeOptim) : undefined,
+                    );
                 }
                 this.edgeLayerBezierManager.dispatchSort(commandEncoder, sortVp);
             }
@@ -1104,7 +1140,10 @@ export class GpuRunner {
                     this.optimHeight,
                 );
                 if (!(this.viewerState.baseColorBezierTrainingPaused || defaultPause)) {
-                    this.baseColorLayerBezierManager.dispatch(commandEncoder);
+                    this.baseColorLayerBezierManager.dispatch(
+                        commandEncoder,
+                        recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierCoarseOptim) : undefined,
+                    );
                 }
                 this.baseColorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
 
@@ -1127,7 +1166,10 @@ export class GpuRunner {
                     this.optimHeight,
                 );
                 if (!(this.viewerState.colorBezierTrainingPaused || defaultPause)) {
-                    this.colorLayerBezierManager.dispatch(commandEncoder);
+                    this.colorLayerBezierManager.dispatch(
+                        commandEncoder,
+                        recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierFineOptim) : undefined,
+                    );
                 }
                 this.colorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
             }
@@ -1136,22 +1178,44 @@ export class GpuRunner {
             // (skipped when viewport frozen unless turntable capture needs those textures)
             if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
                 this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);
-                this.splatOptimizerManager.dispatchEdge(commandEncoder, fullW, fullH);
+                this.splatOptimizerManager.dispatchEdge(
+                    commandEncoder,
+                    fullW,
+                    fullH,
+                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatEdgeDetectFull) : undefined,
+                );
                 // Restore optim-res edge bind group for next frame
                 this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!);
 
                 // 4.5. Compute views into textures
-                this.splatForwardManager.dispatch(commandEncoder, true, this.viewerState.splatsEnabled);
+                this.splatForwardManager.dispatch(
+                    commandEncoder,
+                    true,
+                    this.viewerState.splatsEnabled,
+                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatRasterFull) : undefined,
+                );
                 if (this.viewerState.edgeBeziersEnabled) {
-                    this.bezierForwardManager.dispatch(commandEncoder, true);
+                    this.bezierForwardManager.dispatch(
+                        commandEncoder,
+                        true,
+                        recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierEdgeRasterFull) : undefined,
+                    );
                 }
                 if (this.viewerState.baseColorBeziersEnabled) {
                     // For the full-res visualizer, we just want the coarse layer isolated, not drawn over splats
                     this.baseColorBezierForwardManager.setTarget(this.fullBaseColorBezierTextureView!, fullW, fullH);
-                    this.baseColorBezierForwardManager.dispatch(commandEncoder, true);
+                    this.baseColorBezierForwardManager.dispatch(
+                        commandEncoder,
+                        true,
+                        recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierCoarseRasterFull) : undefined,
+                    );
                 }
                 if (this.viewerState.colorBeziersEnabled) {
-                    this.colorBezierForwardManager.dispatch(commandEncoder, true);
+                    this.colorBezierForwardManager.dispatch(
+                        commandEncoder,
+                        true,
+                        recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierFineRasterFull) : undefined,
+                    );
                 }
             }
 
@@ -1171,6 +1235,7 @@ export class GpuRunner {
             const screenView = currentTexture.createView();
             const finalPassEncoder = commandEncoder.beginRenderPass({
                 label: "final render pass",
+                ...(recordGpu ? { timestampWrites: this.gpuPerfBuffers!.writes(GpuProfilingPair.FinalCompositor) } : {}),
                 colorAttachments: [
                     {
                         clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
@@ -1183,7 +1248,22 @@ export class GpuRunner {
             this.splatOptimizerManager.addDraw(finalPassEncoder);
             finalPassEncoder.end();
 
+            if (recordGpu && this.gpuPerfBuffers) {
+                this.gpuPerfBuffers.addResolve(commandEncoder);
+            }
+
             this.device.queue.submit([commandEncoder.finish()]);
+
+            if (recordGpu && this.gpuPerfBuffers) {
+                try {
+                    await this.device.queue.onSubmittedWorkDone();
+                    const deltasNs = await this.gpuPerfBuffers.mapDeltasNanoseconds();
+                    const msArr = deltasNs.map(ns => Number(ns) / 1e6);
+                    this.viewerState.setGpuProfilingFrameMs(msArr);
+                } catch (e) {
+                    console.warn("[gpu profiler]", e);
+                }
+            }
 
             if (canceled) return;
 
@@ -1237,10 +1317,10 @@ export class GpuRunner {
                 })();
             }
 
-            handle = requestAnimationFrame(loop);
+            handle = requestAnimationFrame(() => void loop());
         };
 
-        handle = requestAnimationFrame(loop);
+        handle = requestAnimationFrame(() => void loop());
 
         return () => {
             cancelAnimationFrame(handle);

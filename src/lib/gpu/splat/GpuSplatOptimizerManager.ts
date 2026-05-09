@@ -507,11 +507,12 @@ export class GpuSplatOptimizerManager {
         );
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder) {
+    dispatch(commandEncoder: GPUCommandEncoder, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
         if (!this.backwardBindGroup) return;
 
         const pass = commandEncoder.beginComputePass({
             label: "splat backward and step pass",
+            ...(timestampWrites ? { timestampWrites } : {}),
         });
         
         pass.setPipeline(this.backwardPipeline);
@@ -532,11 +533,12 @@ export class GpuSplatOptimizerManager {
         pass.end();
     }
 
-    dispatchEdge(commandEncoder: GPUCommandEncoder, width: number, height: number) {
+    dispatchEdge(commandEncoder: GPUCommandEncoder, width: number, height: number, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
         if (!this.edgeBindGroup) return;
         
         const pass = commandEncoder.beginComputePass({
             label: "splat edge pass",
+            ...(timestampWrites ? { timestampWrites } : {}),
         });
         pass.setPipeline(this.edgePipeline);
         pass.setBindGroup(0, this.edgeBindGroup);
