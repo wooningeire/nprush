@@ -4,6 +4,7 @@ import adcModuleSrc from "./bezier_adc.wgsl?raw";
 import sortModuleSrc from "./bezier_sort.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
 import { constants, injectWgslConstants } from "../constants";
+import { nextPowerOfTwoAtLeast } from "../nextPowerOfTwoAtLeast";
 
 // Each cubic bezier is 14 optimizable parameters but stored with 16-float
 // stride (4 vec4f) so the WGSL struct lays out cleanly without per-field
@@ -159,9 +160,7 @@ export class GpuBezierOptimizerManager {
         });
 
         // Sort Buffers
-        let n = 1;
-        while (n < this.numBeziers) n <<= 1;
-        this.sortN = n;
+        this.sortN = nextPowerOfTwoAtLeast(this.numBeziers);
 
         this.sortKeysBuffer = device.createBuffer({
             label: "bezier sort keys",

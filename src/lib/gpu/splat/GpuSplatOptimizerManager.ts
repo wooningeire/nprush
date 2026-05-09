@@ -6,6 +6,7 @@ import edgeModuleSrc from "./splat_edge.wgsl?raw";
 import sortModuleSrc from "./splat_sort.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
 import { constants, injectWgslConstants } from "../constants";
+import { nextPowerOfTwoAtLeast } from "../nextPowerOfTwoAtLeast";
 
 export class GpuSplatOptimizerManager {
     private readonly device: GPUDevice;
@@ -154,9 +155,7 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
-        let n = 1;
-        while (n < this.numSplats) n <<= 1;
-        const sortN = n;
+        const sortN = nextPowerOfTwoAtLeast(this.numSplats);
         this.sortN = sortN;
 
         const injectConstants = (src: string) => {

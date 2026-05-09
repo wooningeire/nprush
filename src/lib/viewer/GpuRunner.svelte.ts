@@ -13,6 +13,7 @@ import type { MeshData } from "../gpu/io/loadGlb.ts";
 import type { ViewerState } from "./ViewerState.svelte.ts";
 import type { Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants";
+import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
 import { readTextureToImageData, imageDataToBlob } from "$/gpu/io/readback.ts";
 
 const OPTIM_SHORT = constants.OPTIM_SHORT;
@@ -555,14 +556,7 @@ export class GpuRunner {
     private rebuildOptimTextures(panelAspect: number) {
         // Size optim textures to match the visible panel aspect ratio so the model
         // rendered into them has matching pixel proportions for the gradient pass.
-        let ow: number, oh: number;
-        if (panelAspect >= 1) {
-            oh = OPTIM_SHORT;
-            ow = Math.round(OPTIM_SHORT * panelAspect);
-        } else {
-            ow = OPTIM_SHORT;
-            oh = Math.round(OPTIM_SHORT / panelAspect);
-        }
+        const { width: ow, height: oh } = computeOptimTextureSize(OPTIM_SHORT, panelAspect);
 
         if (ow === this.optimWidth && oh === this.optimHeight) return;
         this.optimWidth = ow;

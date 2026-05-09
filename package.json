@@ -11,8 +11,10 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-		"test:unit": "vitest",
-		"test": "npm run test:unit -- --run"
+		"test:unit": "vitest --project server",
+		"test": "vitest run --project server",
+		"test:browser": "vitest run --project client",
+		"test:all": "vitest run --project server && vitest run --project client"
 	},
 	"dependencies": {
 		"@vaie/hui": "^0.1.0",
