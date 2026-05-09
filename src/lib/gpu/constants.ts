@@ -41,7 +41,7 @@ export const GPU_CONSTANTS = {
     SPLAT_EDGE_THRESHOLD_MAX: 0.06,
     
     // Runner / Optimization config
-    OPTIM_SHORT: 256,
+    OPTIM_SHORT: 128,
     NUM_GAUSSIAN_SPLATS: 1024,
     NUM_EDGE_LAYER_BEZIERS: 8192,
     
