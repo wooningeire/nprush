@@ -145,9 +145,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let p2 = proj2.xy;
         let p3 = proj3.xy;
         
+        let pm1 = bezier_at(p0, p1, p2, p3, 0.25);
+        let pm2 = bezier_at(p0, p1, p2, p3, 0.5);
+        let pm3 = bezier_at(p0, p1, p2, p3, 0.75);
+        
         let outer_cull = width + softness;
-        let min_p = min(min(p0, p1), min(p2, p3)) - vec2f(outer_cull);
-        let max_p = max(max(p0, p1), max(p2, p3)) + vec2f(outer_cull);
+        let min_p = min(min(min(p0, p3), min(pm1, pm2)), pm3) - vec2f(outer_cull);
+        let max_p = max(max(max(p0, p3), max(pm1, pm2)), pm3) + vec2f(outer_cull);
         
         if (!(min_p.x > tile_max_p.x || max_p.x < tile_min_p.x || 
               min_p.y > tile_max_p.y || max_p.y < tile_min_p.y)) {
@@ -213,7 +217,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let p2 = proj2.xy;
         let p3 = proj3.xy;
 
-        var min_d = 1e9;
+        var min_d2 = 1e9;
         var min_k = 1u;
         var min_u = 0.0;
         var prev = p0;
@@ -223,14 +227,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             let len2 = max(dot(seg, seg), 1e-8);
             let u = clamp(dot(p - prev, seg) / len2, 0.0, 1.0);
             let proj = prev + u * seg;
-            let d = length(p - proj);
-            if (d < min_d) {
-                min_d = d;
+            let diff = p - proj;
+            let d2 = dot(diff, diff);
+            if (d2 < min_d2) {
+                min_d2 = d2;
                 min_k = k;
                 min_u = u;
             }
             prev = curr;
         }
+        let min_d = sqrt(min_d2);
         let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
         let dt = t - 0.5;
         let pressure = 1.0 - 4.0 * dt * dt;
