@@ -1,8 +1,4 @@
-/**
- * Tunable constants for the GPU pipelines.
- * Extracted from WGSL and Manager files to allow easier experimentation.
- */
-export const GPU_CONSTANTS = {
+export const constants = {
     // Shared / Global
     ADAM_BETA1: 0.9,
     ADAM_BETA2: 0.999,

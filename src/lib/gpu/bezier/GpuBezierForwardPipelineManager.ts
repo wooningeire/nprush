@@ -1,5 +1,5 @@
 import forwardModuleSrc from "./bezier_forward.wgsl?raw";
-import { GPU_CONSTANTS, injectWgslConstants } from "../constants";
+import { constants, injectWgslConstants } from "../constants";
 
 export class GpuBezierForwardPipelineManager {
     private readonly device: GPUDevice;
@@ -61,7 +61,7 @@ export class GpuBezierForwardPipelineManager {
         });
 
         const code = injectWgslConstants(forwardModuleSrc, {
-            ...GPU_CONSTANTS,
+            ...constants,
             NUM_BEZIERS: numBeziers,
         });
         const module = device.createShaderModule({ label: "bezier forward", code });

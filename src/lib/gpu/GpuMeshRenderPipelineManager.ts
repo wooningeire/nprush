@@ -1,5 +1,5 @@
 import type { GpuUniformsBufferManager } from "./GpuUniformsBufferManager";
-import { GPU_CONSTANTS, injectWgslConstants } from "./constants";
+import { constants, injectWgslConstants } from "./constants";
 import type { MeshData } from "./io/loadGlb.ts";
 import meshModuleSrc from "./mesh.wgsl?raw";
 
@@ -63,7 +63,7 @@ export class GpuMeshRenderPipelineManager {
 
         const module = device.createShaderModule({
             label: "mesh module",
-            code: injectWgslConstants(meshModuleSrc, GPU_CONSTANTS),
+            code: injectWgslConstants(meshModuleSrc, constants),
         });
 
         const vertexBufferLayout: GPUVertexBufferLayout = {
@@ -96,7 +96,7 @@ export class GpuMeshRenderPipelineManager {
 
         this.numMeshSplats = 0;
 
-        const maxSplatsBytes = GPU_CONSTANTS.MESH_SPLAT_MAX_COUNT * 32; // 8 floats per splat
+        const maxSplatsBytes = constants.MESH_SPLAT_MAX_COUNT * 32; // 8 floats per splat
         this.meshSplatsBuffer = device.createBuffer({
             label: "mesh splats buffer",
             size: maxSplatsBytes,
@@ -215,7 +215,7 @@ export class GpuMeshRenderPipelineManager {
 
         const module = this.device.createShaderModule({
             label: "mesh pbr module",
-            code: injectWgslConstants(meshModuleSrc, GPU_CONSTANTS),
+            code: injectWgslConstants(meshModuleSrc, constants),
         });
 
         const pbrBgl = this.device.createBindGroupLayout({
@@ -292,7 +292,7 @@ export class GpuMeshRenderPipelineManager {
     }
 
     addSplat(p: [number, number, number], radius: number, color: [number, number, number]) {
-        if (this.numMeshSplats >= GPU_CONSTANTS.MESH_SPLAT_MAX_COUNT) return;
+        if (this.numMeshSplats >= constants.MESH_SPLAT_MAX_COUNT) return;
         const i = this.numMeshSplats;
         const data = new Float32Array([
             p[0], p[1], p[2], radius,

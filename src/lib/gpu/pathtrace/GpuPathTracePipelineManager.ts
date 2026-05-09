@@ -1,7 +1,7 @@
 import pathTraceSrc from "./path_trace.wgsl?raw";
 import resolveSrc from "./path_trace_resolve.wgsl?raw";
 import { buildBvh } from "../bvh.ts";
-import { GPU_CONSTANTS, injectWgslConstants } from "../constants";
+import { constants, injectWgslConstants } from "../constants";
 import type { MeshData } from "../io/loadGlb.ts";
 
 // Progressive path tracer with BVH acceleration.
@@ -56,7 +56,7 @@ export class GpuPathTracePipelineManager {
 
         const ptModule = this.device.createShaderModule({ 
             label: "path trace", 
-            code: injectWgslConstants(pathTraceSrc, GPU_CONSTANTS) 
+            code: injectWgslConstants(pathTraceSrc, constants) 
         });
         ptModule.getCompilationInfo().then(info => {
             for (const m of info.messages) console.warn(`[path_trace] ${m.type}: ${m.message} (line ${m.lineNum})`);

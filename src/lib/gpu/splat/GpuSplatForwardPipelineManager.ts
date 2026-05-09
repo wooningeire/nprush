@@ -1,6 +1,6 @@
 import forwardModuleSrc from "./splat_forward.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
-import { GPU_CONSTANTS, injectWgslConstants } from "../constants";
+import { constants, injectWgslConstants } from "../constants";
 
 export class GpuSplatForwardPipelineManager {
     private readonly device: GPUDevice;
@@ -48,7 +48,7 @@ export class GpuSplatForwardPipelineManager {
         });
 
         const code = injectWgslConstants(forwardModuleSrc, {
-            ...GPU_CONSTANTS,
+            ...constants,
             NUM_SPLATS: numSplats,
         });
         const module = device.createShaderModule({ label: "splat forward render", code });

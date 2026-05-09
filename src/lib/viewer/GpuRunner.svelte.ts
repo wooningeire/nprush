@@ -11,14 +11,14 @@ import { GpuEnvmapPipelineManager } from "../gpu/envmap/GpuEnvmapPipelineManager
 import { GpuPathTracePipelineManager } from "../gpu/pathtrace/GpuPathTracePipelineManager.ts";
 import type { MeshData } from "../gpu/io/loadGlb.ts";
 import type { ViewerState } from "./ViewerState.svelte.ts";
-import { GPU_CONSTANTS } from "$/gpu/constants";
+import { constants } from "$/gpu/constants";
 import { readTextureToImageData, imageDataToBlob } from "$/gpu/io/readback.ts";
 
-const OPTIM_SHORT = GPU_CONSTANTS.OPTIM_SHORT;
+const OPTIM_SHORT = constants.OPTIM_SHORT;
 
 // The edge layer is now cubic bezier curves. A handful is enough since each
 // curve is a 1D primitive that natively traces a contour.
-const NUM_EDGE_LAYER_BEZIERS = GPU_CONSTANTS.NUM_EDGE_LAYER_BEZIERS;
+const NUM_EDGE_LAYER_BEZIERS = constants.NUM_EDGE_LAYER_BEZIERS;
 
 /**
  * Fixed prerendered multiview dataset.
@@ -175,7 +175,7 @@ export class GpuRunner {
         brushTexture,
         groundAlbedoTexture,
         groundNormalTexture,
-        numSplats = GPU_CONSTANTS.NUM_GAUSSIAN_SPLATS,
+        numSplats = constants.NUM_GAUSSIAN_SPLATS,
     }: {
         device: GPUDevice,
         context: GPUCanvasContext,
@@ -357,15 +357,12 @@ export class GpuRunner {
                 // Fine color layer: less aggressive killing so thin strokes survive,
                 // but background penalty enabled to kill off-model curves.
                 this.colorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
-                this.colorLayerBezierManager.writeNoKill(true);
                 this.colorLayerBezierManager.writeBgPenalty(0.0);
                 // Base color layer: no background penalty (blurred target bleeds into bg).
                 // Enable no_kill so broad strokes aren't pruned before they settle —
                 // the ADC stuck+loss kill was the main source of base-layer jitter.
                 // Longer ADC period reduces clone/kill churn on broad strokes.
                 this.baseColorLayerBezierManager.writeMaxWidth(2);
-                this.baseColorLayerBezierManager.writeBgPenalty(0.0);
-                this.baseColorLayerBezierManager.writeNoKill(true);
                 this.baseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.baseColorLayerBezierManager.setAdcPeriod(150);
             });

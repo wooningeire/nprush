@@ -26,7 +26,7 @@ struct BezierUniforms {
     bg_penalty: f32,         // offset 80,  size 4
     _pad0: f32,              // offset 84,  size 4
     _pad1: f32,              // offset 88,  size 4
-    _pad2: f32,              // offset 92,  size 4
+    adc_period_steps: f32,   // offset 92, must match CPU ADC dispatch cadence (see GpuBezierOptimizerManager)
     vp_inv: mat4x4f,         // offset 96,  size 64
     // total: 160 bytes
 }

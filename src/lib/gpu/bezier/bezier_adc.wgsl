@@ -33,7 +33,7 @@ struct BezierUniforms {
     bg_penalty: f32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
+    adc_period_steps: f32,
     vp_inv: mat4x4f,
 }
 
@@ -82,7 +82,7 @@ fn main() {
         }
     }
     
-    let ADC_PERIOD = f32({@BEZIER_ADC_PERIOD});
+    let ADC_PERIOD = max(uniforms.adc_period_steps, 1.0);
     let TAU_POS = f32({@BEZIER_TAU_POS});
     let TAU_LOSS = f32({@BEZIER_TAU_LOSS});
     let SPLIT_LEN_THRESHOLD = f32({@BEZIER_SPLIT_LEN_THRESHOLD});

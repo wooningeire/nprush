@@ -3,7 +3,7 @@ import stepModuleSrc from "./bezier_step.wgsl?raw";
 import adcModuleSrc from "./bezier_adc.wgsl?raw";
 import sortModuleSrc from "./bezier_sort.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
-import { GPU_CONSTANTS, injectWgslConstants } from "../constants";
+import { constants, injectWgslConstants } from "../constants";
 
 // Each cubic bezier is 14 optimizable parameters but stored with 16-float
 // stride (4 vec4f) so the WGSL struct lays out cleanly without per-field
@@ -14,7 +14,7 @@ const FLOATS_PER_BEZIER = 20;
 // Optim resolution — must match GpuRunner's OPTIM_SHORT logic.
 // We use the square short-side; the actual pixel count is written at runtime.
 // The pixel_loss buffer is sized to the worst-case square (OPTIM_SHORT²).
-const PIXEL_LOSS_MAX = GPU_CONSTANTS.PIXEL_LOSS_MAX;
+const PIXEL_LOSS_MAX = constants.PIXEL_LOSS_MAX;
 
 export class GpuBezierOptimizerManager {
     private readonly device: GPUDevice;
@@ -51,7 +51,7 @@ export class GpuBezierOptimizerManager {
 
     private backwardBindGroup: GPUBindGroup | null = null;
     private stepCount: number = 0;
-    private adcPeriod: number = 50;
+    private adcPeriod: number = constants.BEZIER_ADC_PERIOD;
 
     private dims: { width: number, height: number } = { width: 0, height: 0 };
 
@@ -137,9 +137,14 @@ export class GpuBezierOptimizerManager {
 
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier VP uniforms buffer",
-            size: 160, // mat4x4f(64) + mode(4) + max_width(4) + prune_alpha(4) + prune_width(4) + bg_penalty(4) + pad(12) + vp_inv(64)
+            size: 160, // mat4x4f(64) + mode(4) + max_width(4) + prune_alpha(4) + prune_width(4) + bg_penalty(4) + pad(8) + adc_period_steps(4) + vp_inv(64)
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
+        device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            92,
+            new Float32Array([this.adcPeriod]),
+        );
 
         this.pixelLossBuffer = device.createBuffer({
             label: "bezier pixel loss buffer",
@@ -184,7 +189,7 @@ export class GpuBezierOptimizerManager {
         // writeOptimDims() before the first dispatch.
         const inject = (src: string, ow = 256, oh = 256) => {
             return injectWgslConstants(src, {
-                ...GPU_CONSTANTS,
+                ...constants,
                 NUM_BEZIERS: this.numBeziers,
                 NUM_BEZIERS_PLUS_ONE: this.numBeziers + 1,
                 NUM_BEZIERS_MINUS_ONE: this.numBeziers - 1,
@@ -441,6 +446,11 @@ export class GpuBezierOptimizerManager {
 
     setAdcPeriod(period: number) {
         this.adcPeriod = period;
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            92,
+            new Float32Array([period]),
+        );
     }
 
     writeNoKill(noKill: boolean) {
@@ -537,10 +547,8 @@ export class GpuBezierOptimizerManager {
         pass.setBindGroup(0, this.stepBindGroup);
         pass.dispatchWorkgroups(Math.ceil(this.numBeziers / 64));
 
-        // ADC fires every ADC_PERIOD steps. Period must match the ADC_PERIOD
-        // constant inside bezier_adc.wgsl (used there as the grad_accum
-        // averaging divisor). Less frequent ADC reduces churn so transient
-        // strays from clone+parent edge competition don't accumulate.
+        // ADC fires every adcPeriod steps; bezier_adc.wgsl reads the same value
+        // from uniforms.adc_period_steps for grad/loss averaging.
         this.stepCount++;
         if (this.stepCount % this.adcPeriod === 0) {
             pass.setPipeline(this.adcPipeline);

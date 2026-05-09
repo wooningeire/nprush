@@ -5,7 +5,7 @@ import adcModuleSrc from "./splat_adc.wgsl?raw";
 import edgeModuleSrc from "./splat_edge.wgsl?raw";
 import sortModuleSrc from "./splat_sort.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
-import { GPU_CONSTANTS, injectWgslConstants } from "../constants";
+import { constants, injectWgslConstants } from "../constants";
 
 export class GpuSplatOptimizerManager {
     private readonly device: GPUDevice;
@@ -161,7 +161,7 @@ export class GpuSplatOptimizerManager {
 
         const injectConstants = (src: string) => {
             return injectWgslConstants(src, {
-                ...GPU_CONSTANTS,
+                ...constants,
                 NUM_SPLATS: this.numSplats,
                 NUM_SPLATS_PLUS_ONE: this.numSplats + 1,
                 NUM_SPLATS_MINUS_ONE: this.numSplats - 1,
@@ -513,7 +513,7 @@ export class GpuSplatOptimizerManager {
         pass.dispatchWorkgroups(Math.ceil(this.numSplats / 64));
         
         this.stepCount++;
-        if (this.stepCount % 25 === 0) {
+        if (this.stepCount % constants.SPLAT_ADC_PERIOD === 0) {
             pass.setPipeline(this.adcPipeline);
             pass.setBindGroup(0, this.adcBindGroup);
             pass.dispatchWorkgroups(1);
