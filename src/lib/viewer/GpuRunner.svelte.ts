@@ -368,26 +368,28 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.writeMode(0); // Edge mode
                 this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
-                this.colorLayerBezierManager.writeMaxWidth(0.03); // finer strokes on fine bezier layer
+                this.colorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on fine bezier layer
                 // Fine bezier layer: less aggressive killing so thin strokes survive,
                 // but background penalty enabled to kill off-model curves.
                 this.colorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.colorLayerBezierManager.writeBgPenalty(0.0);
                 // Coarse bezier layer: no background penalty (blurred target bleeds into bg).
-                // Enable no_kill so broad strokes aren't pruned before they settle —
-                // the ADC stuck+loss kill was the main source of base-layer jitter.
-                // Longer ADC period reduces clone/kill churn on broad strokes.
-                this.baseColorLayerBezierManager.writeMaxWidth(2);
+                // Multiview/turntable sets adam no_kill separately (below) so off-frustum kills
+                // don't remove curves visible from other views. Longer ADC period here dampens
+                // clone/kill churn in ordinary single-view orbit where no_kill stays off.
+                this.baseColorLayerBezierManager.writeMaxWidth(0.1);
                 this.baseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.baseColorLayerBezierManager.setAdcPeriod(150);
             });
             $effect(() => {
                 // Multiview rotates the effective view each frame; single-view turntable
-                // export also moves the camera so silhouette curves should not be killed
-                // while they are temporarily off-screen.
-                this.edgeLayerBezierManager.writeNoKill(
-                    this.viewerState.renderMode === RENDER_MODE_MULTIVIEW || this.viewerState.isTurntableRendering,
-                );
+                // export also moves the camera. Skip step + ADC kills that treat
+                // "off this view's frustum" as dead so curves survive for other angles.
+                const noKillMv =
+                    this.viewerState.renderMode === RENDER_MODE_MULTIVIEW || this.viewerState.isTurntableRendering;
+                this.edgeLayerBezierManager.writeNoKill(noKillMv);
+                this.baseColorLayerBezierManager.writeNoKill(noKillMv);
+                this.colorLayerBezierManager.writeNoKill(noKillMv);
             });
 
             return () => {

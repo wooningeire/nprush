@@ -20,7 +20,7 @@ export const constants = {
     BEZIER_PRUNE_WIDTH_DEFAULT: 0.001,
     BEZIER_FP_SCALE_POS: 10000.0,
     BEZIER_FP_SCALE_COL: 100000.0,
-    BEZIER_MAX_TILE_BEZIERS: 256,
+    BEZIER_MAX_TILE_BEZIERS: 1024,
     /**
      * Screen-space polyline resolution for Bézier distance (fragment loop + backward pass).
      * Keep modest: each forward pixel still pays O(N_SEG) inside the hull quad.
