@@ -49,6 +49,8 @@ export class GpuBezierOptimizerManager {
     private adcPeriod: number = constants.BEZIER_ADC_PERIOD;
 
     private dims: { width: number, height: number } = { width: 0, height: 0 };
+    /** Last optim pixel count written into AdamState; avoids redundant queue writes each dispatch. */
+    private cachedAdamPixelCount: number | null = null;
 
     constructor({
         device,
@@ -545,11 +547,14 @@ export class GpuBezierOptimizerManager {
         // Update pixel count for normalization in the step shader.
         // AdamState layout: m [N], v [N], t [1], pixel_count [1], pad [2]
         const pixelCount = this.dims.width * this.dims.height;
-        this.device.queue.writeBuffer(
-            this.adamBuffer,
-            this.numParams * 8 + 4,
-            new Float32Array([pixelCount])
-        );
+        if (this.cachedAdamPixelCount !== pixelCount) {
+            this.cachedAdamPixelCount = pixelCount;
+            this.device.queue.writeBuffer(
+                this.adamBuffer,
+                this.numParams * 8 + 4,
+                new Float32Array([pixelCount])
+            );
+        }
 
         const pass = commandEncoder.beginComputePass({
             label: "bezier backward and step pass",

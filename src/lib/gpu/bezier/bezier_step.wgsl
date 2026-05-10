@@ -54,7 +54,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let bezier_id = global_id.x;
     let current_t = adam.t;
 
-    workgroupBarrier();
     if (bezier_id == 0u) {
         adam.t = current_t + 1.0;
     }
@@ -74,9 +73,49 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     let base_idx = bezier_id * {@BEZIER_PARAMS_PER}u;
     let t_opt = current_t + 1.0;
+    let beta1 = {@ADAM_BETA1};
+    let beta2 = {@ADAM_BETA2};
+    let epsilon = {@ADAM_EPS};
+    let denom_m = 1.0 - pow(beta1, t_opt);
+    let denom_v = 1.0 - pow(beta2, t_opt);
+    let pixel_norm = 1.0 / max(adam.pixel_count, 1.0);
     var pos_grad_norm2 = 0.0;
 
-    const lr_table = array<f32, {@BEZIER_PARAMS_PER}>(
+    var params_arr = array<f32, {@BEZIER_PARAMS_PER}>(
+        b.p0.x, b.p0.y, b.p0.z,
+        b.p1.x, b.p1.y, b.p1.z,
+        b.p2.x, b.p2.y, b.p2.z,
+        b.p3.x, b.p3.y, b.p3.z,
+        b.color.r, b.color.g, b.color.b, b.color.a,
+        b.p0.w, b.p1.w,
+        b.sh1_r.x, b.sh1_r.y, b.sh1_r.z,
+        b.sh1_g.x, b.sh1_g.y, b.sh1_g.z,
+        b.sh1_b.x, b.sh1_b.y, b.sh1_b.z,
+        b.sh1_a.x, b.sh1_a.y, b.sh1_a.z
+    );
+    let lo = array<f32, {@BEZIER_PARAMS_PER}>(
+        -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
+        -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
+        0.0, 0.0, 0.0, 0.00,
+        0.001, 0.001,
+        -2.5, -2.5, -2.5,
+        -2.5, -2.5, -2.5,
+        -2.5, -2.5, -2.5,
+        -2.5, -2.5, -2.5
+    );
+    let width_hi = uniforms.max_width;
+    let hi = array<f32, {@BEZIER_PARAMS_PER}>(
+        1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
+        1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
+        1.0, 1.0, 1.0, 0.99,
+        width_hi, 0.03,
+        2.5, 2.5, 2.5,
+        2.5, 2.5, 2.5,
+        2.5, 2.5, 2.5,
+        2.5, 2.5, 2.5
+    );
+
+    let lr_table = array<f32, {@BEZIER_PARAMS_PER}>(
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.01,  0.01,  0.01,  0.005,
@@ -85,7 +124,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         0.02, 0.02, 0.02,
         0.02, 0.02, 0.02
     );
-    const mu_table = array<f32, {@BEZIER_PARAMS_PER}>(
+    let mu_table = array<f32, {@BEZIER_PARAMS_PER}>(
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.005, 0.005, 0.005, 0.005, 0.005, 0.005,
         0.01,  0.01,  0.01,  0.005,
@@ -94,7 +133,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         0.005, 0.005, 0.005,
         0.005, 0.005, 0.005
     );
-    const fps_table = array<f32, {@BEZIER_PARAMS_PER}>(
+    let fps_table = array<f32, {@BEZIER_PARAMS_PER}>(
         10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0,
         10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0,
         100000.0, 100000.0, 100000.0, 100000.0,
@@ -110,14 +149,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let raw_grad = atomicExchange(&grads.data[param_idx], 0);
 
         let fp_scale = fps_table[lp];
-        let pixel_norm = 1.0 / max(adam.pixel_count, 1.0);
         let grad = f32(raw_grad) / fp_scale * pixel_norm;
 
         let lr = lr_table[lp];
-
-        let beta1 = {@ADAM_BETA1};
-        let beta2 = {@ADAM_BETA2};
-        let epsilon = {@ADAM_EPS};
 
         var m = adam.m[param_idx];
         var v = adam.v[param_idx];
@@ -127,60 +161,28 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         adam.m[param_idx] = m;
         adam.v[param_idx] = v;
 
-        let m_hat = m / (1.0 - pow(beta1, t_opt));
-        let v_hat = v / (1.0 - pow(beta2, t_opt));
+        let m_hat = m / denom_m;
+        let v_hat = v / denom_v;
 
         let raw_update = lr * m_hat / (sqrt(v_hat) + epsilon);
 
         let max_update = mu_table[lp];
         let update = clamp(raw_update, -max_update, max_update);
 
-        var params_arr = array<f32, {@BEZIER_PARAMS_PER}>(
-            b.p0.x, b.p0.y, b.p0.z,
-            b.p1.x, b.p1.y, b.p1.z,
-            b.p2.x, b.p2.y, b.p2.z,
-            b.p3.x, b.p3.y, b.p3.z,
-            b.color.r, b.color.g, b.color.b, b.color.a,
-            b.p0.w, b.p1.w,
-            b.sh1_r.x, b.sh1_r.y, b.sh1_r.z,
-            b.sh1_g.x, b.sh1_g.y, b.sh1_g.z,
-            b.sh1_b.x, b.sh1_b.y, b.sh1_b.z,
-            b.sh1_a.x, b.sh1_a.y, b.sh1_a.z
-        );
-        let lo = array<f32, {@BEZIER_PARAMS_PER}>(
-            -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
-            -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
-            0.0, 0.0, 0.0, 0.00,
-            0.001, 0.001,
-            -2.5, -2.5, -2.5,
-            -2.5, -2.5, -2.5,
-            -2.5, -2.5, -2.5,
-            -2.5, -2.5, -2.5
-        );
-        let width_hi = uniforms.max_width;
-        let hi = array<f32, {@BEZIER_PARAMS_PER}>(
-            1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
-            1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
-            1.0, 1.0, 1.0, 0.99,
-            width_hi, 0.03,
-            2.5, 2.5, 2.5,
-            2.5, 2.5, 2.5,
-            2.5, 2.5, 2.5,
-            2.5, 2.5, 2.5
-        );
         params_arr[lp] = clamp(params_arr[lp] - update, lo[lp], hi[lp]);
-        b.p0    = vec4f(params_arr[0],  params_arr[1],  params_arr[2],  params_arr[16]);
-        b.p1    = vec4f(params_arr[3],  params_arr[4],  params_arr[5],  params_arr[17]);
-        b.p2    = vec4f(params_arr[6],  params_arr[7],  params_arr[8],  b.p2.w);
-        b.p3    = vec4f(params_arr[9],  params_arr[10], params_arr[11], b.p3.w);
-        b.color = vec4f(params_arr[12], params_arr[13], params_arr[14], params_arr[15]);
-        b.sh1_r = vec4f(params_arr[18], params_arr[19], params_arr[20], b.sh1_r.w);
-        b.sh1_g = vec4f(params_arr[21], params_arr[22], params_arr[23], b.sh1_g.w);
-        b.sh1_b = vec4f(params_arr[24], params_arr[25], params_arr[26], b.sh1_b.w);
-        b.sh1_a = vec4f(params_arr[27], params_arr[28], params_arr[29], b.sh1_a.w);
 
         if (lp <= 11u) { pos_grad_norm2 += grad * grad; }
     }
+
+    b.p0    = vec4f(params_arr[0],  params_arr[1],  params_arr[2],  params_arr[16]);
+    b.p1    = vec4f(params_arr[3],  params_arr[4],  params_arr[5],  params_arr[17]);
+    b.p2    = vec4f(params_arr[6],  params_arr[7],  params_arr[8],  b.p2.w);
+    b.p3    = vec4f(params_arr[9],  params_arr[10], params_arr[11], b.p3.w);
+    b.color = vec4f(params_arr[12], params_arr[13], params_arr[14], params_arr[15]);
+    b.sh1_r = vec4f(params_arr[18], params_arr[19], params_arr[20], b.sh1_r.w);
+    b.sh1_g = vec4f(params_arr[21], params_arr[22], params_arr[23], b.sh1_g.w);
+    b.sh1_b = vec4f(params_arr[24], params_arr[25], params_arr[26], b.sh1_b.w);
+    b.sh1_a = vec4f(params_arr[27], params_arr[28], params_arr[29], b.sh1_a.w);
 
     adc.grad_accum[bezier_id] += sqrt(pos_grad_norm2);
 
