@@ -193,6 +193,8 @@ export class GpuBezierOptimizerManager {
                 NUM_BEZIERS_PLUS_ONE: this.numBeziers + 1,
                 NUM_BEZIERS_MINUS_ONE: this.numBeziers - 1,
                 NUM_BEZIERS_DIV_32: Math.ceil(this.numBeziers / 32),
+                /** Contiguous sort-index chunk per thread in backward tile compact (ceil(N/256)). */
+                BEZIER_SORT_CHUNK: Math.ceil(this.numBeziers / 256),
                 NUM_BEZIER_PARAMS: this.numParams,
                 PIXEL_LOSS_SIZE: PIXEL_LOSS_MAX,
                 SORT_N: this.sortN,

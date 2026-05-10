@@ -76,6 +76,10 @@ struct VsOut {
     @location(0) @interpolate(flat) bezier_idx: u32,
     // Bounding box in aspect-corrected screen space, passed to fragment
     @location(1) p_screen: vec2f,
+    @location(2) @interpolate(flat) proj0: vec3f,
+    @location(5) @interpolate(flat) proj1: vec3f,
+    @location(8) @interpolate(flat) proj2: vec3f,
+    @location(11) @interpolate(flat) proj3: vec3f,
 }
 
 @vertex
@@ -99,6 +103,10 @@ fn vs_main(
         out.pos = vec4f(0.0, 0.0, 2.0, 1.0);
         out.bezier_idx = bezier_idx;
         out.p_screen = vec2f(0.0);
+        out.proj0 = vec3f(0.0);
+        out.proj1 = vec3f(0.0);
+        out.proj2 = vec3f(0.0);
+        out.proj3 = vec3f(0.0);
         return out;
     }
 
@@ -135,6 +143,10 @@ fn vs_main(
     out.pos = vec4f(ndc, 0.0, 1.0);
     out.bezier_idx = bezier_idx;
     out.p_screen = c;
+    out.proj0 = proj0;
+    out.proj1 = proj1;
+    out.proj2 = proj2;
+    out.proj3 = proj3;
     return out;
 }
 
@@ -142,12 +154,11 @@ fn vs_main(
 fn fs_main(in: VsOut) -> @location(0) vec4f {
     let ii = in.bezier_idx;
     let b = beziers.items[ii];
-    let aspect = uniforms.dims.x / uniforms.dims.y;
 
-    let proj0 = project_to_screen(uniforms.vp, b.p0.xyz, aspect);
-    let proj1 = project_to_screen(uniforms.vp, b.p1.xyz, aspect);
-    let proj2 = project_to_screen(uniforms.vp, b.p2.xyz, aspect);
-    let proj3 = project_to_screen(uniforms.vp, b.p3.xyz, aspect);
+    let proj0 = in.proj0;
+    let proj1 = in.proj1;
+    let proj2 = in.proj2;
+    let proj3 = in.proj3;
 
     let p0 = proj0.xy;
     let p1 = proj1.xy;

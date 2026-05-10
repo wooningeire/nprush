@@ -132,9 +132,16 @@ fn bezier_rgb_linear_dl(b: Bezier, dl: vec3f) -> vec3f {
 }
 
 const MAX_TILE_BEZIERS = {@BEZIER_MAX_TILE_BEZIERS}u;
+const TILE_CACHE_DIM: u32 = 20u;
+const TILE_CACHE_SZ: u32 = 400u;
+const SORT_CHUNK: u32 = {@BEZIER_SORT_CHUNK}u;
 var<workgroup> tile_mask: array<atomic<u32>, {@NUM_BEZIERS_DIV_32}u>;
 var<workgroup> tile_beziers: array<u32, MAX_TILE_BEZIERS>;
 var<workgroup> tile_bezier_count: atomic<u32>;
+var<workgroup> compact_scan: array<u32, 256u>;
+var<workgroup> tile_tgt_luma: array<f32, TILE_CACHE_SZ>;
+var<workgroup> tile_tgt_gray: array<f32, TILE_CACHE_SZ>;
+var<workgroup> tile_norm_scalar: array<f32, TILE_CACHE_SZ>;
 
 fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32) -> vec2f {
     let uv = (vec2f(px) + vec2f(0.5)) / vec2f(dims);
@@ -154,9 +161,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     
     for (var i = local_idx; i < {@NUM_BEZIERS_DIV_32}; i += 256u) {
         atomicStore(&tile_mask[i], 0u);
-    }
-    if (local_idx == 0u) {
-        atomicStore(&tile_bezier_count, 0u);
     }
     workgroupBarrier();
     
@@ -204,27 +208,75 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         }
     }
     workgroupBarrier();
-    
-    if (local_idx == 0u) {
-        var count = 0u;
-        for (var idx = 0u; idx < {@NUM_BEZIERS}u; idx++) {
-            // Traverse front-to-back: sort_order has farthest at 0, nearest at NUM_BEZIERS - 1
+
+    // Parallel compact of tile hits in paint order (nearest sort index first).
+    var hit_chunk = 0u;
+    for (var j = 0u; j < SORT_CHUNK; j = j + 1u) {
+        let idx = local_idx * SORT_CHUNK + j;
+        if (idx < {@NUM_BEZIERS}u) {
             let bezier_id = sort_order[{@NUM_BEZIERS}u - 1u - idx];
             let word_idx = bezier_id / 32u;
             let bit_idx = bezier_id % 32u;
             let word = atomicLoad(&tile_mask[word_idx]);
             if ((word & (1u << bit_idx)) != 0u) {
-                if (count < MAX_TILE_BEZIERS) {
-                    tile_beziers[count] = bezier_id;
-                    count++;
-                }
+                hit_chunk = hit_chunk + 1u;
             }
         }
-        atomicStore(&tile_bezier_count, count);
+    }
+    compact_scan[local_idx] = hit_chunk;
+    workgroupBarrier();
+    if (local_idx == 0u) {
+        var prefix = 0u;
+        for (var i = 0u; i < 256u; i = i + 1u) {
+            let hits_i = compact_scan[i];
+            compact_scan[i] = prefix;
+            prefix = prefix + hits_i;
+        }
+        atomicStore(&tile_bezier_count, min(prefix, MAX_TILE_BEZIERS));
     }
     workgroupBarrier();
-    
+    let list_base = compact_scan[local_idx];
+    var sc = 0u;
+    for (var j2 = 0u; j2 < SORT_CHUNK; j2 = j2 + 1u) {
+        let idx2 = local_idx * SORT_CHUNK + j2;
+        if (idx2 < {@NUM_BEZIERS}u) {
+            let bezier_id2 = sort_order[{@NUM_BEZIERS}u - 1u - idx2];
+            let word_idx2 = bezier_id2 / 32u;
+            let bit_idx2 = bezier_id2 % 32u;
+            let word2 = atomicLoad(&tile_mask[word_idx2]);
+            if ((word2 & (1u << bit_idx2)) != 0u) {
+                let dst = list_base + sc;
+                if (dst < MAX_TILE_BEZIERS) {
+                    tile_beziers[dst] = bezier_id2;
+                }
+                sc = sc + 1u;
+            }
+        }
+    }
+    workgroupBarrier();
+
     let bezier_count = atomicLoad(&tile_bezier_count);
+
+    // Cooperatively cache target luma / fine gray / normal scalar for ±2 neighborhood.
+    let ox = i32(workgroup_id.x * 16u);
+    let oy = i32(workgroup_id.y * 16u);
+    let load_ox = ox - 2;
+    let load_oy = oy - 2;
+    let max_gx = i32(dims.x) - 1;
+    let max_gy = i32(dims.y) - 1;
+    let luma_w_cache = vec3f(0.2126, 0.7152, 0.0722);
+    for (var ti = local_idx; ti < TILE_CACHE_SZ; ti = ti + 256u) {
+        let lx = ti % TILE_CACHE_DIM;
+        let ly = ti / TILE_CACHE_DIM;
+        let gx = clamp(load_ox + i32(lx), 0, max_gx);
+        let gy = clamp(load_oy + i32(ly), 0, max_gy);
+        let rgb = textureLoad(targetTex, vec2u(u32(gx), u32(gy)), 0).rgb;
+        tile_tgt_luma[ti] = dot(rgb, luma_w_cache);
+        tile_tgt_gray[ti] = dot(rgb, vec3f(0.333));
+        let nrgb = textureLoad(normalTex, vec2u(u32(gx), u32(gy)), 0).rgb;
+        tile_norm_scalar[ti] = dot(nrgb, vec3f(0.333));
+    }
+    workgroupBarrier();
 
     // --- 2. PIXEL EVALUATION ---
     if (global_id.x >= dims.x || global_id.y >= dims.y) {
@@ -353,16 +405,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let luma_err = dot(dC_raw * 0.5, luma_w); // signed luma error (before *2)
     // 2. Local contrast: magnitude of spatial color gradient at this pixel.
     //    High contrast → loss matters more; flat regions → down-weight.
-    let px_i = vec2i(global_id.xy);
-    let px_dims_i = vec2i(dims);
-    let px_r2 = clamp(px_i + vec2i(1, 0), vec2i(0), px_dims_i - 1);
-    let px_l2 = clamp(px_i - vec2i(1, 0), vec2i(0), px_dims_i - 1);
-    let px_u2 = clamp(px_i + vec2i(0, 1), vec2i(0), px_dims_i - 1);
-    let px_d2 = clamp(px_i - vec2i(0, 1), vec2i(0), px_dims_i - 1);
-    let luma_r = dot(textureLoad(targetTex, px_r2, 0).rgb, luma_w);
-    let luma_l = dot(textureLoad(targetTex, px_l2, 0).rgb, luma_w);
-    let luma_u = dot(textureLoad(targetTex, px_u2, 0).rgb, luma_w);
-    let luma_d = dot(textureLoad(targetTex, px_d2, 0).rgb, luma_w);
+    let gxi = i32(global_id.x);
+    let gyi = i32(global_id.y);
+    let ci = u32((gyi - load_oy) * i32(TILE_CACHE_DIM) + (gxi - load_ox));
+    let luma_r = tile_tgt_luma[ci + 1u];
+    let luma_l = tile_tgt_luma[ci - 1u];
+    let luma_u = tile_tgt_luma[ci + TILE_CACHE_DIM];
+    let luma_d = tile_tgt_luma[ci - TILE_CACHE_DIM];
     let contrast = sqrt((luma_r - luma_l) * (luma_r - luma_l) + (luma_u - luma_d) * (luma_u - luma_d));
     // Contrast weight: 1.0 baseline + boost in high-contrast areas, capped.
     let contrast_weight = 1.0 + clamp(contrast * 8.0, 0.0, 3.0);
@@ -396,23 +445,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var dir_flow_dir = vec2f(0.0);
     var dir_flow_use = false;
     if (is_fine) {
-        let px = vec2i(global_id.xy);
-        let px_dims = vec2i(dims);
-        let px_r = clamp(px + vec2i(2, 0), vec2i(0), px_dims - 1);
-        let px_l = clamp(px - vec2i(2, 0), vec2i(0), px_dims - 1);
-        let px_u = clamp(px + vec2i(0, 2), vec2i(0), px_dims - 1);
-        let px_d = clamp(px - vec2i(0, 2), vec2i(0), px_dims - 1);
-        let cr = dot(textureLoad(targetTex, px_r, 0).rgb, vec3f(0.333));
-        let cl = dot(textureLoad(targetTex, px_l, 0).rgb, vec3f(0.333));
-        let cu = dot(textureLoad(targetTex, px_u, 0).rgb, vec3f(0.333));
-        let cd = dot(textureLoad(targetTex, px_d, 0).rgb, vec3f(0.333));
+        let cr = tile_tgt_gray[ci + 2u];
+        let cl = tile_tgt_gray[ci - 2u];
+        let cu = tile_tgt_gray[ci + 2u * TILE_CACHE_DIM];
+        let cd = tile_tgt_gray[ci - 2u * TILE_CACHE_DIM];
         let grad_x = (cr - cl) * 0.25 * aspect;
         let grad_y = -(cu - cd) * 0.25;
 
-        let nr_scalar = dot(textureLoad(normalTex, px_r, 0).rgb, vec3f(0.333));
-        let nl_scalar = dot(textureLoad(normalTex, px_l, 0).rgb, vec3f(0.333));
-        let nu_scalar = dot(textureLoad(normalTex, px_u, 0).rgb, vec3f(0.333));
-        let nd_scalar = dot(textureLoad(normalTex, px_d, 0).rgb, vec3f(0.333));
+        let nr_scalar = tile_norm_scalar[ci + 2u];
+        let nl_scalar = tile_norm_scalar[ci - 2u];
+        let nu_scalar = tile_norm_scalar[ci + 2u * TILE_CACHE_DIM];
+        let nd_scalar = tile_norm_scalar[ci - 2u * TILE_CACHE_DIM];
         let grad_norm_x = (nr_scalar - nl_scalar) * 0.25 * aspect;
         let grad_norm_y = -(nu_scalar - nd_scalar) * 0.25;
 
