@@ -128,18 +128,22 @@ export class ViewerState {
 
     // --- Turntable Animation ---
     turntableFrameCount = $state(120);
+    /** rAF ticks to wait before each PNG capture during turntable export (not GPU work). */
     turntableStepsPerFrame = $state(10);
+    /**
+     * Hold the sampled prerendered dataset view / camera across this many browser
+     * frames before picking another slot at random. (PT samples/view is unrelated — that is prerender convergence only.)
+     */
+    multiviewDisplayFramesPerView = $state(1);
     turntableProgress = $state(0);
     isTurntableRendering = $state(false);
     turntableCanceled = false;
 
-    // Multi-view training: when enabled, each frame trains from a random
-    // camera angle sampled from the turntable animation path.
+    // Multi-view training: trains from fixed prerendered views; GpuRunner lingers each
+    // sampled slot for {@link multiviewDisplayFramesPerView} display frames unless set to 1.
     turntableTraining = $state(false);
 
-    // Minimum number of path-tracer accumulation frames to hold each view
-    // before switching to the next random angle. Gives the PT enough time
-    // to converge before the optimizer sees the result.
+    // Minimum path-tracer samples accumulated when building each prerendered dataset slot.
     turntableMinSamplesPerView = $state(32);
 
     /** Frames accumulated on the current turntable training view. */
@@ -218,14 +222,12 @@ export class ViewerState {
 
     /**
      * Called each frame by the render loop while in Multiview mode
-     * AND the dataset is ready. No-op — view selection is handled directly in
-     * the GpuRunner frame loop by sampling a random dataset slot each frame.
+     * AND the dataset is ready. No-op — GpuRunner samples a dataset slot and may
+     * hold it for {@link multiviewDisplayFramesPerView} frames.
      */
     tickAnimationMode() {
-        // Dataset-driven: view selection happens in GpuRunner.loop() by picking
-        // a random slot and writing its matrices directly to the GPU buffers,
-        // without touching the reactive orbit state. This avoids triggering the
-        // resetAdam $effect on every frame.
+        // Dataset-driven: GpuRunner selects a dataset slot (held for displayFramesPerView)
+        // and writes its matrices directly to GPU buffers, without reactive orbit drift.
     }
 
     cancelTurntable() {

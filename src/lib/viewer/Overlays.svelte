@@ -162,6 +162,16 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
                 {/if}
             </button>
 
+            {#if viewerState.multiviewDatasetReady}
+                <div class="slider-group">
+                    <label title="Reuse the same prerendered camera and target texture for this many display frames before resampling another random dataset view. Separate from PT samples/view (build time).">
+                        Display frames before new view: {viewerState.multiviewDisplayFramesPerView}
+                        <input type="range" min="1" max="128" step="1" bind:value={viewerState.multiviewDisplayFramesPerView}
+                            disabled={viewerState.isTurntableRendering || !viewerState.turntableTraining} />
+                    </label>
+                </div>
+            {/if}
+
             {#if !viewerState.multiviewDatasetReady || viewerState.turntableTraining}
                 <div class="slider-group">
                     <label>
@@ -195,8 +205,8 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         </div>
 
         <div class="slider-group">
-            <label title="PNG export: rAF waits between frames. Multiview training (after prerender): GPU optim passes per display frame on the same view.">
-                Steps/frame: {viewerState.turntableStepsPerFrame}
+            <label title="PNG export only: number of requestAnimationFrame ticks to run after moving the camera, before capturing each frame.">
+                Export: rAF waits before capture: {viewerState.turntableStepsPerFrame}
                 <input type="range" min="1" max="200" step="1" bind:value={viewerState.turntableStepsPerFrame}
                     disabled={viewerState.isTurntableRendering} />
             </label>

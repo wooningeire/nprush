@@ -173,6 +173,9 @@ export class GpuRunner {
 
     // Prerendered multiview dataset — null until prerenderDataset() completes.
     private multiviewDataset: MultiviewDataset | null = null;
+    /** Dataset slot reused for consecutive frames before resampling; -1 means unset. */
+    private multiviewTrainingHeldDatasetIndex = -1;
+    private multiviewTrainingFramesHeldOnDataset = 0;
 
     readonly destroy: () => void;
 
@@ -562,6 +565,8 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.resetAdcState();
                 this.baseColorLayerBezierManager.resetAdcState();
                 this.colorLayerBezierManager.resetAdcState();
+                this.multiviewTrainingHeldDatasetIndex = -1;
+                this.multiviewTrainingFramesHeldOnDataset = 0;
             } else {
                 dataset.destroy();
             }
@@ -893,9 +898,8 @@ export class GpuRunner {
             // refresh those textures for turntable PNG export (readback next enqueue).
             const needsTurntableExportLayers = this.turntableCaptureQueue.hasPending();
 
-            // When the prerendered dataset is ready, pick a random view and
-            // write its stored matrices to the uniforms buffers so the mesh
-            // render and optimizers see the correct camera for this frame.
+            // When the prerendered dataset is ready, select a slot (see multiviewDisplayFramesPerView)
+            // and write its stored matrices so the mesh render and optimizers match the target image.
             // This replaces the live PT dispatch for the optimizer target.
             let datasetView: GPUTextureView | null = null;
             let sortVp: Mat4 = this.camera.viewProjMat as Mat4;
@@ -903,7 +907,20 @@ export class GpuRunner {
             let invViewForCam = this.camera.viewInvMat as Mat4;
             if (this.viewerState.turntableTraining && this.viewerState.multiviewDatasetReady && this.multiviewDataset) {
                 const ds = this.multiviewDataset;
-                const idx = Math.floor(Math.random() * ds.numViews);
+                const lingerFrames = Math.max(
+                    1,
+                    Math.floor(Number(this.viewerState.multiviewDisplayFramesPerView)) || 1,
+                );
+                if (
+                    this.multiviewTrainingHeldDatasetIndex < 0
+                    || this.multiviewTrainingFramesHeldOnDataset >= lingerFrames
+                    || this.multiviewTrainingHeldDatasetIndex >= ds.numViews
+                ) {
+                    this.multiviewTrainingHeldDatasetIndex = Math.floor(Math.random() * ds.numViews);
+                    this.multiviewTrainingFramesHeldOnDataset = 0;
+                }
+                const idx = this.multiviewTrainingHeldDatasetIndex;
+                this.multiviewTrainingFramesHeldOnDataset += 1;
                 datasetView = ds.textureViews[idx];
                 sortVp = ds.viewProjMats[idx] as Mat4;
                 vpInvForSplat = ds.invViewProjMats[idx] as Mat4;
@@ -921,6 +938,9 @@ export class GpuRunner {
                 this.bezierForwardManager.writeVPMatrix(sortVpFa);
                 this.baseColorBezierForwardManager.writeVPMatrix(sortVpFa);
                 this.colorBezierForwardManager.writeVPMatrix(sortVpFa);
+            } else {
+                this.multiviewTrainingHeldDatasetIndex = -1;
+                this.multiviewTrainingFramesHeldOnDataset = 0;
             }
 
             const camWorld = vec3.transformMat4(vec3.fromValues(0, 0, 0), invViewForCam);
@@ -1091,14 +1111,6 @@ export class GpuRunner {
                 this.optimHeight
             );
             const defaultPause = this.viewerState.renderMode === RENDER_MODE_MULTIVIEW && (!this.viewerState.turntableTraining || !this.viewerState.multiviewDatasetReady);
-            /** Multiview dataset training: N full optim rounds per rAF on the same random view (cuts view-switch noise). PNG export still uses this slider as "wait N frames" between captures. */
-            const multiviewOptimRounds =
-                this.viewerState.renderMode === RENDER_MODE_MULTIVIEW
-                && this.viewerState.turntableTraining
-                && this.viewerState.multiviewDatasetReady
-                && this.multiviewDataset != null
-                    ? Math.max(1, Math.floor(Number(this.viewerState.turntableStepsPerFrame)) || 1)
-                    : 1;
 
             if (this.viewerState.baseColorBeziersEnabled) {
                 this.baseColorLayerBezierManager.setBackwardTarget(
@@ -1123,73 +1135,71 @@ export class GpuRunner {
                 );
             }
 
-            for (let optimRound = 0; optimRound < multiviewOptimRounds; optimRound++) {
-                const profileRound = recordGpu && optimRound === 0;
+            const profileRound = recordGpu;
 
-                if (this.viewerState.splatsEnabled && !(this.viewerState.splatTrainingPaused || defaultPause)) {
-                    this.splatOptimizerManager.dispatch(
+            if (this.viewerState.splatsEnabled && !(this.viewerState.splatTrainingPaused || defaultPause)) {
+                this.splatOptimizerManager.dispatch(
+                    commandEncoder,
+                    profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatBackwardStep) : undefined,
+                );
+            }
+
+            // 3.1 Sort splats by depth for correct alpha blending order
+            if (this.viewerState.splatsEnabled) {
+                this.splatOptimizerManager.dispatchSort(commandEncoder, sortVp);
+            }
+
+            // 3.1b Render current splats at optim-res to use as background for bezier layers.
+            this.splatForwardManager.setTarget(
+                this.optimSplatTextureView!,
+                this.optimSplatDepthTextureView!,
+                this.optimWidth,
+                this.optimHeight
+            );
+            this.splatForwardManager.dispatch(
+                commandEncoder,
+                true,
+                this.viewerState.splatsEnabled,
+                profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatRasterOptim) : undefined,
+            );
+
+            // 3b. Train the bezier edge layer: its target is the freshly-computed
+            // edge texture, so the curves learn to trace the depth silhouette.
+            if (this.viewerState.edgeBeziersEnabled) {
+                if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
+                    this.edgeLayerBezierManager.dispatch(
                         commandEncoder,
-                        profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatBackwardStep) : undefined,
+                        profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierEdgeOptim) : undefined,
                     );
                 }
+                this.edgeLayerBezierManager.dispatchSort(commandEncoder, sortVp);
+            }
 
-                // 3.1 Sort splats by depth for correct alpha blending order
-                if (this.viewerState.splatsEnabled) {
-                    this.splatOptimizerManager.dispatchSort(commandEncoder, sortVp);
+            // Train coarse beziers against depth-aware blurred target
+            if (this.viewerState.baseColorBeziersEnabled) {
+                if (!(this.viewerState.baseColorBezierTrainingPaused || defaultPause)) {
+                    this.baseColorLayerBezierManager.dispatch(
+                        commandEncoder,
+                        profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierCoarseOptim) : undefined,
+                    );
                 }
+                this.baseColorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
 
-                // 3.1b Render current splats at optim-res to use as background for bezier layers.
-                this.splatForwardManager.setTarget(
-                    this.optimSplatTextureView!,
-                    this.optimSplatDepthTextureView!,
-                    this.optimWidth,
-                    this.optimHeight
-                );
-                this.splatForwardManager.dispatch(
-                    commandEncoder,
-                    true,
-                    this.viewerState.splatsEnabled,
-                    profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatRasterOptim) : undefined,
-                );
+                // Render coarse beziers into optimSplatTextureView (loadOp: "load")
+                // This makes it the background for the NEXT layer!
+                this.baseColorBezierForwardManager.setTarget(this.optimSplatTextureView!, this.optimWidth, this.optimHeight);
+                this.baseColorBezierForwardManager.dispatch(commandEncoder, false);
+            }
 
-                // 3b. Train the bezier edge layer: its target is the freshly-computed
-                // edge texture, so the curves learn to trace the depth silhouette.
-                if (this.viewerState.edgeBeziersEnabled) {
-                    if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
-                        this.edgeLayerBezierManager.dispatch(
-                            commandEncoder,
-                            profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierEdgeOptim) : undefined,
-                        );
-                    }
-                    this.edgeLayerBezierManager.dispatchSort(commandEncoder, sortVp);
+            // Train fine beziers against sharp target
+            if (this.viewerState.colorBeziersEnabled) {
+                if (!(this.viewerState.colorBezierTrainingPaused || defaultPause)) {
+                    this.colorLayerBezierManager.dispatch(
+                        commandEncoder,
+                        profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierFineOptim) : undefined,
+                    );
                 }
-
-                // Train coarse beziers against depth-aware blurred target
-                if (this.viewerState.baseColorBeziersEnabled) {
-                    if (!(this.viewerState.baseColorBezierTrainingPaused || defaultPause)) {
-                        this.baseColorLayerBezierManager.dispatch(
-                            commandEncoder,
-                            profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierCoarseOptim) : undefined,
-                        );
-                    }
-                    this.baseColorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
-
-                    // Render coarse beziers into optimSplatTextureView (loadOp: "load")
-                    // This makes it the background for the NEXT layer!
-                    this.baseColorBezierForwardManager.setTarget(this.optimSplatTextureView!, this.optimWidth, this.optimHeight);
-                    this.baseColorBezierForwardManager.dispatch(commandEncoder, false);
-                }
-
-                // Train fine beziers against sharp target
-                if (this.viewerState.colorBeziersEnabled) {
-                    if (!(this.viewerState.colorBezierTrainingPaused || defaultPause)) {
-                        this.colorLayerBezierManager.dispatch(
-                            commandEncoder,
-                            profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierFineOptim) : undefined,
-                        );
-                    }
-                    this.colorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
-                }
+                this.colorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
             }
 
             // 3.2 Restore full-res target for visualization (or turntable readback textures)
