@@ -52,6 +52,8 @@ export class GpuSplatOptimizerManager {
     private stepCount: number = 0;
 
     private dims: { width: number, height: number } = { width: 0, height: 0 };
+    /** Last optim pixel count written into AdamState; avoids redundant queue writes each dispatch. */
+    private cachedAdamPixelCount: number | null = null;
 
     constructor({
         device,
@@ -108,7 +110,7 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
-        // m (numParams * 4) + v (numParams * 4) + t (4) + pad (12) + extra padding (16)
+        // m (numParams * 4) + v (numParams * 4) + t (4) + pixel_count (4) + pad (8) + extra padding (16)
         this.adamBuffer = device.createBuffer({
             label: "splat adam buffer",
             size: this.numParams * 8 + 32,
@@ -491,13 +493,16 @@ export class GpuSplatOptimizerManager {
      * the gradient step for the new viewpoint.
      */
     resetAdam() {
-        // adamBuffer layout: m[numParams * f32] | v[numParams * f32] | t(f32) | pad(12)
-        // Zero m and v, reset t to 0. Preserve splat parameters (splatBuffer).
+        // adamBuffer layout: m[numParams * f32] | v[numParams * f32] | t(f32) | pixel_count(f32) | pad(8)
+        // Zero m and v, reset t to 0. pixel_count is written each dispatch so
+        // we don't need to preserve it, but we invalidate the cache so it gets
+        // re-written on the next dispatch.
         this.device.queue.writeBuffer(
             this.adamBuffer,
             0,
             new Float32Array(this.numParams * 2 + 1) // m + v + t, all zeros
         );
+        this.cachedAdamPixelCount = null;
         // Also reset ADC grad_accum so stale positional gradient norms from the
         // previous view don't trigger spurious clone/kill decisions.
         this.device.queue.writeBuffer(
@@ -509,6 +514,18 @@ export class GpuSplatOptimizerManager {
 
     dispatch(commandEncoder: GPUCommandEncoder, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
         if (!this.backwardBindGroup) return;
+
+        // Update pixel count for gradient normalization in the step shader.
+        // AdamState layout: m [N], v [N], t [1], pixel_count [1], pad [2]
+        const pixelCount = this.dims.width * this.dims.height;
+        if (this.cachedAdamPixelCount !== pixelCount) {
+            this.cachedAdamPixelCount = pixelCount;
+            this.device.queue.writeBuffer(
+                this.adamBuffer,
+                this.numParams * 8 + 4,
+                new Float32Array([pixelCount])
+            );
+        }
 
         const pass = commandEncoder.beginComputePass({
             label: "splat backward and step pass",
