@@ -390,6 +390,7 @@ export class GpuRunner {
                 // "off this view's frustum" as dead so curves survive for other angles.
                 const noKillMv =
                     this.viewerState.renderMode === RENDER_MODE_MULTIVIEW || this.viewerState.isTurntableRendering;
+                this.splatOptimizerManager.writeNoKill(noKillMv);
                 this.edgeLayerBezierManager.writeNoKill(noKillMv);
                 this.baseColorLayerBezierManager.writeNoKill(noKillMv);
                 this.colorLayerBezierManager.writeNoKill(noKillMv);

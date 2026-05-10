@@ -202,6 +202,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
             ],
         });
         const stepModule = device.createShaderModule({ label: "splat step", code: injectConstants(stepModuleSrc) });
@@ -225,6 +226,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 1, resource: { buffer: this.gradBuffer } },
                 { binding: 2, resource: { buffer: this.adamBuffer } },
                 { binding: 3, resource: { buffer: this.adcBuffer } },
+                { binding: 4, resource: { buffer: this.splatUniformsBuffer } },
             ],
         });
 
@@ -509,6 +511,15 @@ export class GpuSplatOptimizerManager {
             this.adcBuffer,
             0,
             new Float32Array(this.numSplats)
+        );
+    }
+
+    writeNoKill(noKill: boolean) {
+        // adamBuffer layout: m[N*4] | v[N*4] | t(4) | pixel_count(4) | no_kill(4) | pad(4)
+        this.device.queue.writeBuffer(
+            this.adamBuffer,
+            this.numParams * 8 + 8, // offset after t and pixel_count
+            new Float32Array([noKill ? 1 : 0])
         );
     }
 

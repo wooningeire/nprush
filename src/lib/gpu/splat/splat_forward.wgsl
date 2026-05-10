@@ -89,12 +89,11 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
     let sx = max(s.pos_sx.w, 0.0001);
     let sy = max(s.sy_shape.x, 0.0001);
     let sz = max(s.sy_shape.w, 0.0001);
-    let shape_a = s.sy_shape.y;
-    let shape_b = s.sy_shape.z;
     let q = s.quat;
     
-    let safe_shape_b = max(shape_b, 0.0001);
-    let R = pow(15.0 / safe_shape_b, 1.0 / shape_a);
+    // 3DGS cutoff radius. Increased to 4.5 sigma so exp(-0.5 * 4.5^2) < 0.001
+    // preventing hard quad edges from being visible before discard.
+    let R = 4.5;
     
     let clip_center = uniforms.vp * vec4f(pos3, 1.0);
     let w = clip_center.w;
@@ -178,18 +177,15 @@ struct FragOut {
 
 @fragment
 fn frag(v: VsOut) -> FragOut {
-    let s = splats.splats[v.instance_idx];
-    let shape_a = s.sy_shape.y;
-    let shape_b = s.sy_shape.z;
-    
     let A = v.conic.x;
     let B = v.conic.y;
     let C = v.conic.z;
     let dx = v.d.x;
     let dy = v.d.y;
     let r2 = A * dx * dx + 2.0 * B * dx * dy + C * dy * dy;
-    let r = sqrt(max(r2, 0.0001));
-    let pw = -shape_b * pow(r, shape_a);
+    
+    // Standard 3DGS Gaussian falloff
+    let pw = -0.5 * r2;
 
     var a = select(0.0, exp(pw) * v.opacity_view, pw > -15.0);
     a = clamp(a, 0.0, 0.999);

@@ -17,7 +17,9 @@ struct AdamState {
     m: array<f32, {@NUM_PARAMS}u>,
     v: array<f32, {@NUM_PARAMS}u>,
     t: f32,
-    pad: vec3f,
+    pixel_count: f32,
+    no_kill: f32,
+    pad: f32,
 }
 
 struct ADCArray {

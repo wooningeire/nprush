@@ -92,22 +92,7 @@ fn project_axis(vp: mat4x4f, ax_world: vec3f, clip_xy: vec2f, w: f32, aspect: f3
     );
 }
 
-// Reconstruct world-space position from reciprocal-encoded depth and aspect-corrected screen coords.
-// depth = 1 - DEPTH_NEAR/w  =>  w = DEPTH_NEAR / (1 - depth)
-// For WebGPU perspective (zNear=0.01, zFar=100): z_clip ≈ w (close approximation for w >> zNear).
-// world = VP_inv * clip
-fn reconstruct_world_pos(p: vec2f, depth: f32, aspect: f32) -> vec3f {
-    const DEPTH_NEAR_R = 0.1;
-    // Recover view-space depth w from reciprocal encoding
-    let w = DEPTH_NEAR_R / max(1.0 - depth, 1e-5);
-    // p is aspect-corrected: p.x = ndc_x * aspect, p.y = ndc_y
-    let ndc_x = p.x / aspect;
-    let ndc_y = p.y;
-    // Approximate z_clip ≈ w (valid for zFar >> zNear, which holds for zNear=0.01, zFar=100)
-    let clip = vec4f(ndc_x * w, ndc_y * w, w, w);
-    let world = splat_uniforms.vp_inv * clip;
-    return world.xyz / world.w;
-}
+
 
 struct ProjectedSplat {
     screen: vec2f,
@@ -197,7 +182,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let sy = max(s.sy_shape.x, 0.0001);
         let sz = max(s.sy_shape.w, 0.0001);
         let safe_sb = max(s.sy_shape.z, 0.0001);
-        let R = pow(15.0 / safe_sb, 1.0 / s.sy_shape.y);
+        // 3DGS cutoff radius. Increased to 4.5 sigma so exp(-0.5 * 4.5^2) < 0.001
+        // preventing hard quad edges from being visible before discard.
+        let R = 4.5;
         let q = s.quat;
         let ax_w = quat_rotate(q, vec3f(1.0, 0.0, 0.0));
         let ay_w = quat_rotate(q, vec3f(0.0, 1.0, 0.0));
@@ -256,25 +243,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
     let p = pixel_to_p(global_id.xy, dims, aspect);
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
-    let tgt_depth = textureLoad(targetDepthTex, global_id.xy, 0).r;
 
     var alphas = array<f32, MAX_TILE_SPLATS>();
     var Ts = array<f32, MAX_TILE_SPLATS + 1u>();
     Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
-    var D_pred = 0.0;
-
-    // Reciprocal depth encoding matching mesh.wgsl: 1 - DEPTH_NEAR / depth
-    // This gives high precision for nearby objects stored in the 8-bit depth texture.
-    const DEPTH_NEAR = 0.1;
 
     for (var idx = 0u; idx < splat_count; idx++) {
         let i = tile_splats[idx];
         let s = splats.splats[i];
         let ps = eval_splat(s, p, aspect);
-        let shape_a = s.sy_shape.y;
-        let shape_b = s.sy_shape.z;
-        let power = -shape_b * pow(ps.r, shape_a);
+        // Standard Gaussian: power = -0.5 * r²
+        let power = -0.5 * ps.r * ps.r;
         let dir_v = splat_view_dir_local(splat_uniforms.cam_world.xyz, s.pos_sx.xyz, s.quat);
         let opacity_lin = splat_opacity_lin(s, dir_v);
         let opacity_v = clamp(opacity_lin, 0.0, 1.0);
@@ -283,24 +263,14 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let rgb_lin = splat_rgb_sh1_linear(s, dir_v);
         let rgb_vis = max(rgb_lin, vec3f(0.0));
         C_pred += Ts[idx] * a * rgb_vis;
-        let linear_depth = max(ps.w, DEPTH_NEAR);
-        let depth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
-        D_pred += Ts[idx] * a * depth;
         Ts[idx+1] = Ts[idx] * (1.0 - a);
     }
 
     let background = vec3f(0.05);
     C_pred += Ts[splat_count] * background;
-    D_pred += Ts[splat_count] * 1.0;
     
     let dC = 2.0 * (C_pred - tgt_color);
-    // Only apply depth loss on foreground pixels — background depth (1.0) would
-    // fight the color loss and prevent splats from covering the model.
-    // With reciprocal encoding, mesh surface pixels are well below 1.0.
-    let is_foreground = tgt_depth < 0.99;
-    let dD = select(0.0, 2.0 * (D_pred - tgt_depth), is_foreground);
     var dT_C = dot(dC, background);
-    var dT_D = dD * 1.0;
 
     for (var j = 0u; j < splat_count; j++) {
         let idx = splat_count - 1u - j;
@@ -325,29 +295,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let ps = eval_splat(s, p, aspect);
 
         let dColor = dC * (T_prev * a);
-        let linear_depth_bwd = max(ps.w, DEPTH_NEAR);
-        let depth = clamp(1.0 - DEPTH_NEAR / linear_depth_bwd, 0.0, 1.0);
-        let da_C = dT_C * (-T_prev) + dot(dC, T_prev * color);
-        let da_D = dT_D * (-T_prev) + dD * T_prev * depth;
-        let da = da_C + da_D;
+        let da = dT_C * (-T_prev) + dot(dC, T_prev * color);
         
         dT_C = dT_C * (1.0 - a) + dot(dC, a * color);
-        dT_D = dT_D * (1.0 - a) + dD * a * depth;
-        
-        let d_depth = dD * T_prev * a;
         let sx = max(s.pos_sx.w, 0.0001);
         let sy = max(s.sy_shape.x, 0.0001);
         let sz = max(s.sy_shape.w, 0.0001);
-        let shape_a = s.sy_shape.y;
-        let shape_b = s.sy_shape.z;
-        let power = -shape_b * pow(ps.r, shape_a);
+        // Standard Gaussian: power = -0.5 * r²
+        let power = -0.5 * ps.r * ps.r;
 
         var d_screen = vec2f(0.0);
         var d_sx = 0.0;
         var d_sy = 0.0;
         var d_sz = 0.0;
-        var d_shape_a = 0.0;
-        var d_shape_b = 0.0;
         var d_ax_screen = vec2f(0.0);
         var d_ay_screen = vec2f(0.0);
         var d_az_screen = vec2f(0.0);
@@ -356,12 +316,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let a_un = select(0.0, exp(power), above_floor);
         let d_opacity_lin = select(0.0, da * a_un * clamp_gate_o, above_floor);
         let d_power = select(0.0, da * opacity * a_un, above_floor);
-        let r_pow_a   = pow(ps.r, shape_a);
-        let r_pow_a_m2 = pow(ps.r, shape_a - 2.0);
-        d_shape_a = select(0.0, d_power * (-shape_b * r_pow_a * log(ps.r)), above_floor);
-        d_shape_b = select(0.0, d_power * (-r_pow_a), above_floor);
-        let d_sp_raw = d_power * (-shape_b * shape_a * r_pow_a_m2) * ps.sp;
-        let d_d = select(vec2f(0.0), d_sp_raw, above_floor);
+        // Standard Gaussian gradient: d(power)/d(r²) = -0.5, d(r²)/d(d) = 2*sp
+        // So d_d = d_power * (-0.5) * 2 * sp = -d_power * sp
+        let d_d = select(vec2f(0.0), -d_power * ps.sp, above_floor);
         d_screen = -d_d;
 
         let sp_dot_m0 = ps.sp.x * ps.m0x + ps.sp.y * ps.m0y;
@@ -389,6 +346,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         // d_screen.y/d_pos_j = (VP[1][j]*w - clip.y*VP[3][j]) / w^2
         let w = ps.w;
         let w2 = w * w;
+        // Standard 3DGS position gradient: only d(screen)/d(pos), no d(cov2d)/d(pos).
+        // This matches gsplat / diff-gaussian-rasterization and is numerically stable.
         var d_pos = vec3f(0.0);
         for (var ax = 0u; ax < 3u; ax++) {
             let vp_0j = splat_uniforms.vp[ax][0];
@@ -397,23 +356,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             let ds_dx = aspect * (vp_0j * w - ps.clip_xy.x * vp_3j) / w2;
             let ds_dy = (vp_1j * w - ps.clip_xy.y * vp_3j) / w2;
             d_pos[ax] = d_screen.x * ds_dx + d_screen.y * ds_dy;
-            // d(depth)/d(w) for reciprocal encoding: depth = 1 - DEPTH_NEAR/w => d/dw = DEPTH_NEAR/w²
-            // d(w)/d(pos[ax]) = VP[3][ax] (homogeneous row)
-            let d_depth_d_w = DEPTH_NEAR / (w * w);
-            d_pos[ax] += select(0.0, vp_3j * d_depth_d_w * d_depth, ps.w > DEPTH_NEAR);
-        }
-
-        // 3D position loss: reconstruct the mesh surface point in world space and pull
-        // the splat center toward it. This constrains all 3 DOF of position (not just
-        // depth), making the depth loss view-consistent across camera rotations.
-        // Only applied on foreground pixels where the mesh surface is visible.
-        if (is_foreground) {
-            let surf_pos = reconstruct_world_pos(p, tgt_depth, aspect);
-            let pos_err = s.pos_sx.xyz - surf_pos;
-            // Weight by splat contribution T_prev * a so only visible splats are pulled.
-            let POS3D_WEIGHT = 0.3;
-            let d_pos3d = POS3D_WEIGHT * 2.0 * pos_err * (T_prev * a);
-            d_pos += d_pos3d;
         }
 
         // d_ax_screen -> d_quat (approximate: ignore Jacobian's dependence on quat)
@@ -481,14 +423,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let d_qy_total = d_qy_ax + d_qy_ay + d_qy_az;
         let d_qz_total = d_qz_ax + d_qz_ay + d_qz_az;
 
-        // Shape regularization: push toward flat-topped profile (gouache-like)
-        // shape_a=6 → flat plateau, shape_b=0.3 → wide coverage before falloff
-        let REG_SHAPE_STRENGTH = 0.005;
-        let target_shape_a = 6.0;
-        let target_shape_b = 0.3;
-        d_shape_a += REG_SHAPE_STRENGTH * 2.0 * (shape_a - target_shape_a);
-        d_shape_b += REG_SHAPE_STRENGTH * 2.0 * (shape_b - target_shape_b);
-
         let FP_SCALE_POS = f32({@SPLAT_FP_SCALE_POS});
         let FP_SCALE_COL = f32({@SPLAT_FP_SCALE_COL});
 
@@ -510,8 +444,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         atomicAdd(&grads.data[base_idx + 10u], i32(d_qy_total * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 11u], i32(d_qz_total * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 12u], i32(d_sy * FP_SCALE_POS));
-        atomicAdd(&grads.data[base_idx + 13u], i32(d_shape_a * FP_SCALE_POS));
-        atomicAdd(&grads.data[base_idx + 14u], i32(d_shape_b * FP_SCALE_POS));
+        // shape_a (idx 13) and shape_b (idx 14) are frozen at standard Gaussian values
         atomicAdd(&grads.data[base_idx + 15u], i32(d_sz * FP_SCALE_POS));
 
         atomicAdd(&grads.data[base_idx + 16u], i32(d_relu_r * SH_C1 * ly * FP_SCALE_COL));

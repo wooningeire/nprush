@@ -22,7 +22,8 @@ struct AdamState {
     v: array<f32, {@NUM_PARAMS}u>,
     t: f32,
     pixel_count: f32,
-    pad: vec2f,
+    no_kill: f32,
+    pad: f32,
 }
 
 struct ADCArray {
@@ -33,6 +34,14 @@ struct ADCArray {
 @group(0) @binding(1) var<storage, read_write> grads: GradArray;
 @group(0) @binding(2) var<storage, read_write> adam: AdamState;
 @group(0) @binding(3) var<storage, read_write> adc: ADCArray;
+
+struct SplatUniforms {
+    vp: mat4x4f,
+    vp_inv: mat4x4f,
+    cam_world: vec4f,
+    extras: vec4f,
+}
+@group(0) @binding(4) var<uniform> splat_uniforms: SplatUniforms;
 
 @compute @workgroup_size(64, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3u) {
@@ -49,24 +58,24 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     // Param indices 16–31: RGB + opacity degree-1 SH (vec4-packed; backward writes xyz only).
     let lr_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
-        0.0005, 0.0005, 0.0005, 0.01,
-        0.02, 0.02, 0.02, 0.01,
-        0.005, 0.005, 0.005, 0.005,
-        0.01, 0.01, 0.01, 0.01,
-        0.02, 0.02, 0.02, 0.0,
-        0.02, 0.02, 0.02, 0.0,
-        0.02, 0.02, 0.02, 0.0,
-        0.02, 0.02, 0.02, 0.0
+        0.0003, 0.0003, 0.0003, 0.005,  // pos + scale_x
+        0.0025, 0.0025, 0.0025, 0.05,   // color + opacity
+        0.001, 0.001, 0.001, 0.001,     // quat
+        0.005, 0.0, 0.0, 0.005,         // scale_y, shape_a, shape_b, scale_z
+        0.0001, 0.0001, 0.0001, 0.0,    // sh1_r
+        0.0001, 0.0001, 0.0001, 0.0,    // sh1_g
+        0.0001, 0.0001, 0.0001, 0.0,    // sh1_b
+        0.0001, 0.0001, 0.0001, 0.0     // sh1_a
     );
     let mu_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
-        0.005, 0.005, 0.005, 0.005,
-        0.001, 0.001, 0.001, 0.0005,
-        0.005, 0.005, 0.005, 0.005,
-        0.005, 0.05, 0.05, 0.005,
-        0.005, 0.005, 0.005, 0.0,
-        0.005, 0.005, 0.005, 0.0,
-        0.005, 0.005, 0.005, 0.0,
-        0.005, 0.005, 0.005, 0.0
+        0.05, 0.05, 0.05, 0.05,
+        0.1, 0.1, 0.1, 0.1,
+        0.05, 0.05, 0.05, 0.05,
+        0.05, 0.0, 0.0, 0.05,
+        0.1, 0.1, 0.1, 0.0,
+        0.1, 0.1, 0.1, 0.0,
+        0.1, 0.1, 0.1, 0.0,
+        0.1, 0.1, 0.1, 0.0
     );
     let fps_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
         10000.0, 10000.0, 10000.0, 10000.0,
@@ -161,7 +170,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     adc.grad_accum[splat_id] += sqrt(pos_grad_norm2);
 
     let volume = s.pos_sx.w * s.sy_shape.x * s.sy_shape.w;
-    s.color.a = select(s.color.a, 0.0, s.color.a < f32({@SPLAT_OPACITY_KILL_THRESH}) || volume < f32({@SPLAT_VOLUME_KILL_THRESH}));
+    
+    // Standard 3DGS kill: opacity and volume thresholds
+    let base_kill = s.color.a < f32({@SPLAT_OPACITY_KILL_THRESH}) || volume < f32({@SPLAT_VOLUME_KILL_THRESH});
+    s.color.a = select(s.color.a, 0.0, base_kill);
+
+    // Single-view offscreen culling (guarded by no_kill for multiview/turntable)
+    if (s.color.a > 0.0 && adam.no_kill < 0.5) {
+        let c = splat_uniforms.vp * vec4f(s.pos_sx.xyz, 1.0);
+        let margin = 1.2;
+        let offscreen = c.x < -margin*c.w || c.x > margin*c.w || c.y < -margin*c.w || c.y > margin*c.w || c.w < 0.1;
+        s.color.a = select(s.color.a, 0.0, offscreen);
+    }
 
     splats.splats[splat_id] = s;
 }
