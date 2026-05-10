@@ -195,7 +195,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         </div>
 
         <div class="slider-group">
-            <label>
+            <label title="PNG export: rAF waits between frames. Multiview training (after prerender): GPU optim passes per display frame on the same view.">
                 Steps/frame: {viewerState.turntableStepsPerFrame}
                 <input type="range" min="1" max="200" step="1" bind:value={viewerState.turntableStepsPerFrame}
                     disabled={viewerState.isTurntableRendering} />

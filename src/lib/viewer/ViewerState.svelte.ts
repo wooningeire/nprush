@@ -260,6 +260,7 @@ export class ViewerState {
         const origRadius = this.orbit.radius;
 
         const baseLong = this.turntableTraining ? this.turntableBaseLong : origLong;
+        const turntableParams = this.getTurntablePathParams();
 
         try {
             await runTurntableExport({
@@ -270,7 +271,11 @@ export class ViewerState {
                 writer,
                 orbit: this.orbit,
                 restoreOrbit: { long: origLong, lat: origLat, radius: origRadius },
-                evalAtT: t => evaluateTurntablePath(t, baseLong, this.getTurntablePathParams()),
+                evalAtT: t => {
+                    const p = evaluateTurntablePath(t, baseLong, turntableParams);
+                    // Orbit.lat can differ from turntableLatCenter while multiview uses the dataset.
+                    return { ...p, lat: origLat + (p.lat - turntableParams.latCenter) };
+                },
                 onProgress: p => {
                     this.turntableProgress = p;
                 },
