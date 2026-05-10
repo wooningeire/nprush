@@ -53,7 +53,7 @@ struct ADCArray {
 @group(0) @binding(9) var<storage, read_write> pixel_loss: array<atomic<i32>, {@PIXEL_LOSS_SIZE}u>;
 @group(0) @binding(10) var<storage, read> sort_order: array<u32, {@NUM_BEZIERS}u>;
 
-const N_SEG: u32 = 16u;
+const N_SEG: u32 = {@BEZIER_POLY_SEG}u;
 // Reciprocal depth near-plane constant — must match mesh.wgsl and splat_forward.wgsl.
 const DEPTH_NEAR_BEZ: f32 = 0.1;
 
@@ -186,15 +186,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let p1 = proj1.xy;
         let p2 = proj2.xy;
         let p3 = proj3.xy;
-        
+
         let pm1 = bezier_at(p0, p1, p2, p3, 0.25);
         let pm2 = bezier_at(p0, p1, p2, p3, 0.5);
         let pm3 = bezier_at(p0, p1, p2, p3, 0.75);
-        
+
         let outer_cull = width + softness;
         let min_p = min(min(min(p0, p3), min(pm1, pm2)), pm3) - vec2f(outer_cull);
         let max_p = max(max(max(p0, p3), max(pm1, pm2)), pm3) + vec2f(outer_cull);
-        
+
         if (!(min_p.x > tile_max_p.x || max_p.x < tile_min_p.x || 
               min_p.y > tile_max_p.y || max_p.y < tile_min_p.y)) {
             let word_idx = bezier_id / 32u;

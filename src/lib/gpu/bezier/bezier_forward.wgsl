@@ -26,7 +26,7 @@ struct ForwardUniforms {
 @group(0) @binding(3) var brush_texture: texture_2d<f32>;
 @group(0) @binding(4) var<storage, read> sort_order: array<u32, {@NUM_BEZIERS}u>;
 
-const N_SEG: u32 = 16u;
+const N_SEG: u32 = {@BEZIER_POLY_SEG}u;
 const SH_C1_B: f32 = 0.4886025119029199;
 
 fn bezier_pos_world(b: Bezier, tt: f32) -> vec3f {
@@ -116,14 +116,10 @@ fn vs_main(
     let pad = width + softness;
 
     // Tight AABB around the bezier hull + padding.
-    // Clamp to a generous screen-space bound so a single off-screen control
-    // point can never produce a quad that covers the entire viewport.
-    let SCREEN_BOUND = 4.0; // aspect-corrected NDC units; well beyond any visible pixel
+    let SCREEN_BOUND = 4.0;
     let min_p = max(min(min(p0, p1), min(p2, p3)) - vec2f(pad), vec2f(-SCREEN_BOUND));
-    let max_p = min(max(max(p0, p1), max(p2, p3)) + vec2f(pad), vec2f( SCREEN_BOUND));
+    let max_p = min(max(max(p0, p1), max(p2, p3)) + vec2f(pad), vec2f(SCREEN_BOUND));
 
-    // Emit a quad (triangle-strip: 4 verts) covering the AABB
-    // vi: 0=(min_x,max_y), 1=(min_x,min_y), 2=(max_x,max_y), 3=(max_x,min_y)
     let corners = array<vec2f, 4>(
         vec2f(min_p.x, max_p.y),
         vec2f(min_p.x, min_p.y),
@@ -159,7 +155,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 
     let p = in.p_screen;
 
-    // Walk segments to find closest point — identical to backward pass
     var min_d2 = 1e9;
     var min_k = 1u;
     var min_u = 0.0;
@@ -179,10 +174,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
         }
         prev = curr;
     }
-    
+
     let min_d = sqrt(min_d2);
 
-    // Compute signed cross distance only once for the winning segment
     let t_prev = f32(min_k - 1u) / f32(N_SEG);
     let t_curr = f32(min_k) / f32(N_SEG);
     let best_prev = bezier_at(p0, p1, p2, p3, t_prev);
@@ -198,12 +192,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     let dt = t - 0.5;
     let pressure = 1.0 - 4.0 * dt * dt;
 
-    // Perspective scaling: interpolate depth (w) along the curve
     let omt = 1.0 - t;
-    let w = omt*omt*omt * proj0.z
-          + 3.0 * omt*omt * t * proj1.z
-          + 3.0 * omt * t*t * proj2.z
-          + t*t*t * proj3.z;
+    let w = omt * omt * omt * proj0.z
+        + 3.0 * omt * omt * t * proj1.z
+        + 3.0 * omt * t * t * proj2.z
+        + t * t * t * proj3.z;
     let inv_w = 1.0 / max(w, 0.001);
 
     let width = max(b.p0.w, 0.0001) * inv_w;
@@ -216,8 +209,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     let outer = local_width + local_softness;
     let a_geom = 1.0 - smoothstep(inner, outer, min_d);
 
-    // Sample brush texture: u = t (along stroke), v = signed cross distance normalized to [0,1]
-    // Cross distance is normalized by local_width so the brush fills the stroke width.
     let brush_u = t;
     let brush_v = clamp(min_signed_cross / max(local_width + local_softness, 1e-6) * 0.5 + 0.5, 0.0, 1.0);
     let brush_alpha = textureSample(brush_texture, brush_sampler, vec2f(brush_u, brush_v)).r;
@@ -231,9 +222,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     let lx_b = dl_b.x;
     let ly_b = dl_b.y;
     let lz_b = dl_b.z;
-    let rr_lin = b.color.r + SH_C1_B * (ly_b*b.sh1_r.x + lz_b*b.sh1_r.y + lx_b*b.sh1_r.z);
-    let gg_lin = b.color.g + SH_C1_B * (ly_b*b.sh1_g.x + lz_b*b.sh1_g.y + lx_b*b.sh1_g.z);
-    let bb_lin = b.color.b + SH_C1_B * (ly_b*b.sh1_b.x + lz_b*b.sh1_b.y + lx_b*b.sh1_b.z);
+    let rr_lin = b.color.r + SH_C1_B * (ly_b * b.sh1_r.x + lz_b * b.sh1_r.y + lx_b * b.sh1_r.z);
+    let gg_lin = b.color.g + SH_C1_B * (ly_b * b.sh1_g.x + lz_b * b.sh1_g.y + lx_b * b.sh1_g.z);
+    let bb_lin = b.color.b + SH_C1_B * (ly_b * b.sh1_b.x + lz_b * b.sh1_b.y + lx_b * b.sh1_b.z);
     let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
 
     return vec4f(rgb_vis * a, a);

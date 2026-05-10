@@ -21,6 +21,11 @@ export const constants = {
     BEZIER_FP_SCALE_POS: 10000.0,
     BEZIER_FP_SCALE_COL: 100000.0,
     BEZIER_MAX_TILE_BEZIERS: 1024,
+    /**
+     * Screen-space polyline resolution for Bézier distance (fragment loop + backward pass).
+     * Keep modest: each forward pixel still pays O(N_SEG) inside the hull quad.
+     */
+    BEZIER_POLY_SEG: 16,
     /** Optimizer params per curve (XYZ×4 CPs + RGBA + width/soft + degree-1 SH×9). */
     BEZIER_PARAMS_PER: 27,
     /** GPU storage floats per curve (9 × vec4: CPs + color + SH). */
