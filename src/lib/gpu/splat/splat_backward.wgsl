@@ -6,6 +6,7 @@ struct Splat {
     sh1_r: vec4f,
     sh1_g: vec4f,
     sh1_b: vec4f,
+    sh1_a: vec4f,
 }
 
 struct SplatArray {
@@ -69,6 +70,13 @@ fn splat_rgb_sh1_linear(s: Splat, dir_l: vec3f) -> vec3f {
     let gg = s.color.g + SH_C1 * (y * s.sh1_g.x + z * s.sh1_g.y + x * s.sh1_g.z);
     let bb = s.color.b + SH_C1 * (y * s.sh1_b.x + z * s.sh1_b.y + x * s.sh1_b.z);
     return vec3f(rr, gg, bb);
+}
+
+fn splat_opacity_lin(s: Splat, dir_l: vec3f) -> f32 {
+    let x = dir_l.x;
+    let y = dir_l.y;
+    let z = dir_l.z;
+    return s.color.a + SH_C1 * (y * s.sh1_a.x + z * s.sh1_a.y + x * s.sh1_a.z);
 }
 
 fn project_center(vp: mat4x4f, pos3: vec3f, aspect: f32) -> vec3f {
@@ -267,9 +275,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let shape_a = s.sy_shape.y;
         let shape_b = s.sy_shape.z;
         let power = -shape_b * pow(ps.r, shape_a);
-        let a = clamp(select(0.0, exp(power) * s.color.a, power > -15.0), 0.0, 0.999);
-        alphas[idx] = a;
         let dir_v = splat_view_dir_local(splat_uniforms.cam_world.xyz, s.pos_sx.xyz, s.quat);
+        let opacity_lin = splat_opacity_lin(s, dir_v);
+        let opacity_v = clamp(opacity_lin, 0.0, 1.0);
+        let a = clamp(select(0.0, exp(power) * opacity_v, power > -15.0), 0.0, 0.999);
+        alphas[idx] = a;
         let rgb_lin = splat_rgb_sh1_linear(s, dir_v);
         let rgb_vis = max(rgb_lin, vec3f(0.0));
         C_pred += Ts[idx] * a * rgb_vis;
@@ -308,7 +318,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let bb_lin = s.color.b + SH_C1 * (ly * s.sh1_b.x + lz * s.sh1_b.y + lx * s.sh1_b.z);
         let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
         let color = rgb_vis;
-        let opacity = s.color.a;
+        let opacity_lin_b = s.color.a + SH_C1 * (ly * s.sh1_a.x + lz * s.sh1_a.y + lx * s.sh1_a.z);
+        let opacity = clamp(opacity_lin_b, 0.0, 1.0);
+        let clamp_gate_o = select(0.0, 1.0, opacity_lin_b > 1e-6 && opacity_lin_b < 1.0 - 1e-6);
         let T_prev = Ts[idx];
         let ps = eval_splat(s, p, aspect);
 
@@ -330,7 +342,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let shape_b = s.sy_shape.z;
         let power = -shape_b * pow(ps.r, shape_a);
 
-        var d_opacity = 0.0;
         var d_screen = vec2f(0.0);
         var d_sx = 0.0;
         var d_sy = 0.0;
@@ -343,7 +354,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
         let above_floor = power > -15.0;
         let a_un = select(0.0, exp(power), above_floor);
-        d_opacity = select(0.0, da * a_un, above_floor);
+        let d_opacity_lin = select(0.0, da * a_un * clamp_gate_o, above_floor);
         let d_power = select(0.0, da * opacity * a_un, above_floor);
         let r_pow_a   = pow(ps.r, shape_a);
         let r_pow_a_m2 = pow(ps.r, shape_a - 2.0);
@@ -493,7 +504,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         atomicAdd(&grads.data[base_idx + 4u], i32(d_relu_r * FP_SCALE_COL));
         atomicAdd(&grads.data[base_idx + 5u], i32(d_relu_g * FP_SCALE_COL));
         atomicAdd(&grads.data[base_idx + 6u], i32(d_relu_b * FP_SCALE_COL));
-        atomicAdd(&grads.data[base_idx + 7u], i32(d_opacity * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 7u], i32(d_opacity_lin * FP_SCALE_COL));
         atomicAdd(&grads.data[base_idx + 8u], i32(d_qw_total * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 9u], i32(d_qx_total * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 10u], i32(d_qy_total * FP_SCALE_POS));
@@ -512,5 +523,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         atomicAdd(&grads.data[base_idx + 22u], i32(d_relu_b * SH_C1 * ly * FP_SCALE_COL));
         atomicAdd(&grads.data[base_idx + 23u], i32(d_relu_b * SH_C1 * lz * FP_SCALE_COL));
         atomicAdd(&grads.data[base_idx + 24u], i32(d_relu_b * SH_C1 * lx * FP_SCALE_COL));
+
+        atomicAdd(&grads.data[base_idx + 28u], i32(d_opacity_lin * SH_C1 * ly * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 29u], i32(d_opacity_lin * SH_C1 * lz * FP_SCALE_COL));
+        atomicAdd(&grads.data[base_idx + 30u], i32(d_opacity_lin * SH_C1 * lx * FP_SCALE_COL));
     }
 }

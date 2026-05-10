@@ -6,6 +6,7 @@ struct Splat {
     sh1_r: vec4f,
     sh1_g: vec4f,
     sh1_b: vec4f,
+    sh1_a: vec4f,
 }
 
 struct SplatArray {
@@ -45,12 +46,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let t = current_t + 1.0;
     var pos_grad_norm2 = 0.0;
 
-    // Param indices 16–27: RGB degree-1 SH (packed as vec4 with .w padding), .w grads ignored in backward.
+    // Param indices 16–31: RGB + opacity degree-1 SH (vec4-packed; backward writes xyz only).
     let lr_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
         0.0005, 0.0005, 0.0005, 0.01,
         0.02, 0.02, 0.02, 0.01,
         0.005, 0.005, 0.005, 0.005,
         0.01, 0.01, 0.01, 0.01,
+        0.02, 0.02, 0.02, 0.0,
         0.02, 0.02, 0.02, 0.0,
         0.02, 0.02, 0.02, 0.0,
         0.02, 0.02, 0.02, 0.0
@@ -62,6 +64,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         0.005, 0.05, 0.05, 0.005,
         0.005, 0.005, 0.005, 0.0,
         0.005, 0.005, 0.005, 0.0,
+        0.005, 0.005, 0.005, 0.0,
         0.005, 0.005, 0.005, 0.0
     );
     let fps_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
@@ -69,6 +72,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         100000.0, 100000.0, 100000.0, 100000.0,
         10000.0, 10000.0, 10000.0, 10000.0,
         10000.0, 10000.0, 10000.0, 10000.0,
+        100000.0, 100000.0, 100000.0, 100000.0,
         100000.0, 100000.0, 100000.0, 100000.0,
         100000.0, 100000.0, 100000.0, 100000.0,
         100000.0, 100000.0, 100000.0, 100000.0
@@ -105,13 +109,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
             s.sy_shape.x, s.sy_shape.y, s.sy_shape.z, s.sy_shape.w,
             s.sh1_r.x, s.sh1_r.y, s.sh1_r.z, s.sh1_r.w,
             s.sh1_g.x, s.sh1_g.y, s.sh1_g.z, s.sh1_g.w,
-            s.sh1_b.x, s.sh1_b.y, s.sh1_b.z, s.sh1_b.w
+            s.sh1_b.x, s.sh1_b.y, s.sh1_b.z, s.sh1_b.w,
+            s.sh1_a.x, s.sh1_a.y, s.sh1_a.z, s.sh1_a.w
         );
         let lo = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
             -1e9, -1e9, -1e9, 0.001,
             -5.0, -5.0, -5.0, 0.01,
             -1e9, -1e9, -1e9, -1e9,
             0.001, 0.1, 0.01, 0.001,
+            -2.5, -2.5, -2.5, -1e9,
             -2.5, -2.5, -2.5, -1e9,
             -2.5, -2.5, -2.5, -1e9,
             -2.5, -2.5, -2.5, -1e9
@@ -121,6 +127,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
             5.0,  5.0,  5.0, 0.99,
             1e9,  1e9,  1e9,  1e9,
             2.0, 10.0, 5.0,  2.0,
+            2.5,  2.5,  2.5,  1e9,
             2.5,  2.5,  2.5,  1e9,
             2.5,  2.5,  2.5,  1e9,
             2.5,  2.5,  2.5,  1e9
@@ -133,6 +140,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         s.sh1_r = vec4f(params_arr[16], params_arr[17], params_arr[18], params_arr[19]);
         s.sh1_g = vec4f(params_arr[20], params_arr[21], params_arr[22], params_arr[23]);
         s.sh1_b = vec4f(params_arr[24], params_arr[25], params_arr[26], params_arr[27]);
+        s.sh1_a = vec4f(params_arr[28], params_arr[29], params_arr[30], params_arr[31]);
 
         if (lp <= 2u) { pos_grad_norm2 += grad * grad; }
     }

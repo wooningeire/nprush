@@ -26,9 +26,9 @@ export const constants = {
      * Keep modest: each forward pixel still pays O(N_SEG) inside the hull quad.
      */
     BEZIER_POLY_SEG: 16,
-    /** Optimizer params per curve (XYZ×4 CPs + RGBA + width/soft + degree-1 SH×9). */
-    BEZIER_PARAMS_PER: 27,
-    /** GPU storage floats per curve (9 × vec4: CPs + color + SH). */
+    /** Optimizer params per curve (XYZ×4 CPs + RGBA + width/soft + degree-1 SH×9 + opacity SH×3). */
+    BEZIER_PARAMS_PER: 30,
+    /** GPU storage floats per curve (9 × vec4: CPs + color + RGB SH + opacity SH). */
     BEZIER_FLOATS_PER: 36,
 
     // Splat ADC & Optimization
@@ -47,8 +47,8 @@ export const constants = {
     
     // Runner / Optimization config
     OPTIM_SHORT: 256,
-    /** Floats stored per Gaussian (pos, color DC, quat, shape, RGB degree-1 SH). */
-    SPLAT_PARAMS_PER_SPLAT: 28,
+    /** Floats stored per Gaussian (pos, color DC, quat, shape, RGB + opacity degree-1 SH, vec4-packed). */
+    SPLAT_PARAMS_PER_SPLAT: 32,
     NUM_GAUSSIAN_SPLATS: 512,
     NUM_EDGE_LAYER_BEZIERS: 4096,
     

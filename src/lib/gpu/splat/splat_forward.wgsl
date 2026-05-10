@@ -1,11 +1,12 @@
 struct Splat {
     pos_sx: vec4f,    // x, y, z, sx
-    color: vec4f,     // linear RGB base + opacity; SH1 adds directional residual
+    color: vec4f,     // linear RGB base + opacity DC; SH1 adds directional residual on RGB and opacity
     quat: vec4f,
     sy_shape: vec4f,
     sh1_r: vec4f,     // xyz: red directional SH coefficients (scaled by SH_C1 in shading)
     sh1_g: vec4f,
     sh1_b: vec4f,
+    sh1_a: vec4f,     // xyz: degree-1 opacity SH in local frame (same layout as RGB SH)
 }
 
 const SH_C1: f32 = 0.4886025119029199;
@@ -31,6 +32,14 @@ fn splat_rgb_sh1(s: Splat, dir_l: vec3f) -> vec3f {
     return max(vec3f(rr, gg, bb), vec3f(0.0));
 }
 
+fn splat_opacity_sh1(s: Splat, dir_l: vec3f) -> f32 {
+    let x = dir_l.x;
+    let y = dir_l.y;
+    let z = dir_l.z;
+    let o_lin = s.color.a + SH_C1 * (y * s.sh1_a.x + z * s.sh1_a.y + x * s.sh1_a.z);
+    return clamp(o_lin, 0.0, 1.0);
+}
+
 struct SplatArray {
     splats: array<Splat, {@NUM_SPLATS}u>,
 }
@@ -54,6 +63,7 @@ struct VsOut {
     @location(2) depth: f32,
     @location(3) @interpolate(flat) conic: vec3f,
     @location(4) @interpolate(flat) rgb: vec3f,
+    @location(5) @interpolate(flat) opacity_view: f32,
 }
 
 fn quat_rotate(q: vec4f, v: vec3f) -> vec3f {
@@ -99,6 +109,7 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
         o_clip.depth = 0.0;
         o_clip.conic = vec3f(0.0);
         o_clip.rgb = vec3f(0.0);
+        o_clip.opacity_view = 0.0;
         return o_clip;
     }
     
@@ -147,6 +158,7 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
     
     let dir_l = splat_view_dir_local(uniforms.cam_world.xyz, pos3, q);
     let rgb = splat_rgb_sh1(s, dir_l);
+    let opacity_view = splat_opacity_sh1(s, dir_l);
 
     var o: VsOut;
     o.pos = clip;
@@ -155,6 +167,7 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
     o.depth = w;
     o.conic = vec3f(A, B, C);
     o.rgb = rgb;
+    o.opacity_view = opacity_view;
     return o;
 }
 
@@ -178,7 +191,7 @@ fn frag(v: VsOut) -> FragOut {
     let r = sqrt(max(r2, 0.0001));
     let pw = -shape_b * pow(r, shape_a);
 
-    var a = select(0.0, exp(pw) * s.color.a, pw > -15.0);
+    var a = select(0.0, exp(pw) * v.opacity_view, pw > -15.0);
     a = clamp(a, 0.0, 0.999);
     
     if (a < 0.001) {

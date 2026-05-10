@@ -69,7 +69,7 @@ export class GpuSplatOptimizerManager {
         const floatsPer = constants.SPLAT_PARAMS_PER_SPLAT;
         this.numParams = numSplats * floatsPer;
 
-        // Structured splat buffer; see WGSL `Splat` (SH degree-1 = 28 floats total).
+        // Structured splat buffer; see WGSL `Splat` (RGB + opacity SH degree-1 = 32 floats total).
         const splatData = new Float32Array(this.numSplats * floatsPer);
         for (let i = 0; i < this.numSplats; i++) {
             const o = i * floatsPer;

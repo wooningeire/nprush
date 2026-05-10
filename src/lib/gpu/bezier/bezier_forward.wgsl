@@ -7,6 +7,7 @@ struct Bezier {
     sh1_r: vec4f,
     sh1_g: vec4f,
     sh1_b: vec4f,
+    sh1_a: vec4f,
 }
 
 struct BezierArray {
@@ -203,7 +204,15 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     let softness = max(b.p1.w, 0.0001) * inv_w;
     let local_width = width * pressure;
     let local_softness = softness * pressure;
-    let local_opacity = b.color.a * pressure;
+
+    let pos_w = bezier_pos_world(b, t);
+    let dl_b = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w, bezier_deriv_world(b, t));
+    let lx_b = dl_b.x;
+    let ly_b = dl_b.y;
+    let lz_b = dl_b.z;
+    let o_lin = b.color.a + SH_C1_B * (ly_b * b.sh1_a.x + lz_b * b.sh1_a.y + lx_b * b.sh1_a.z);
+    let opacity = clamp(o_lin, 0.0, 1.0);
+    let local_opacity = opacity * pressure;
 
     let inner = local_width - local_softness;
     let outer = local_width + local_softness;
@@ -217,11 +226,6 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 
     if (a < 0.001) { discard; }
 
-    let pos_w = bezier_pos_world(b, t);
-    let dl_b = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w, bezier_deriv_world(b, t));
-    let lx_b = dl_b.x;
-    let ly_b = dl_b.y;
-    let lz_b = dl_b.z;
     let rr_lin = b.color.r + SH_C1_B * (ly_b * b.sh1_r.x + lz_b * b.sh1_r.y + lx_b * b.sh1_r.z);
     let gg_lin = b.color.g + SH_C1_B * (ly_b * b.sh1_g.x + lz_b * b.sh1_g.y + lx_b * b.sh1_g.z);
     let bb_lin = b.color.b + SH_C1_B * (ly_b * b.sh1_b.x + lz_b * b.sh1_b.y + lx_b * b.sh1_b.z);

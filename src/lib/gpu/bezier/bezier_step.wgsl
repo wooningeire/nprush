@@ -7,6 +7,7 @@ struct Bezier {
     sh1_r: vec4f,
     sh1_g: vec4f,
     sh1_b: vec4f,
+    sh1_a: vec4f,
 }
 
 struct BezierArray {
@@ -81,6 +82,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         0.01,  0.01,  0.01,  0.005,
         0.002, 0.002,
         0.02, 0.02, 0.02,  0.02, 0.02, 0.02,
+        0.02, 0.02, 0.02,
         0.02, 0.02, 0.02
     );
     const mu_table = array<f32, {@BEZIER_PARAMS_PER}>(
@@ -89,6 +91,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         0.01,  0.01,  0.01,  0.005,
         0.003, 0.003,
         0.005, 0.005, 0.005,  0.005, 0.005, 0.005,
+        0.005, 0.005, 0.005,
         0.005, 0.005, 0.005
     );
     const fps_table = array<f32, {@BEZIER_PARAMS_PER}>(
@@ -96,6 +99,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         10000.0, 10000.0, 10000.0, 10000.0, 10000.0, 10000.0,
         100000.0, 100000.0, 100000.0, 100000.0,
         10000.0, 10000.0,
+        100000.0, 100000.0, 100000.0,
         100000.0, 100000.0, 100000.0,
         100000.0, 100000.0, 100000.0,
         100000.0, 100000.0, 100000.0
@@ -140,13 +144,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
             b.p0.w, b.p1.w,
             b.sh1_r.x, b.sh1_r.y, b.sh1_r.z,
             b.sh1_g.x, b.sh1_g.y, b.sh1_g.z,
-            b.sh1_b.x, b.sh1_b.y, b.sh1_b.z
+            b.sh1_b.x, b.sh1_b.y, b.sh1_b.z,
+            b.sh1_a.x, b.sh1_a.y, b.sh1_a.z
         );
         let lo = array<f32, {@BEZIER_PARAMS_PER}>(
             -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
             -1e9, -1e9, -1e9, -1e9, -1e9, -1e9,
             0.0, 0.0, 0.0, 0.00,
             0.001, 0.001,
+            -2.5, -2.5, -2.5,
             -2.5, -2.5, -2.5,
             -2.5, -2.5, -2.5,
             -2.5, -2.5, -2.5
@@ -157,6 +163,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
             1e9, 1e9, 1e9, 1e9, 1e9, 1e9,
             1.0, 1.0, 1.0, 0.99,
             width_hi, 0.03,
+            2.5, 2.5, 2.5,
             2.5, 2.5, 2.5,
             2.5, 2.5, 2.5,
             2.5, 2.5, 2.5
@@ -170,6 +177,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         b.sh1_r = vec4f(params_arr[18], params_arr[19], params_arr[20], b.sh1_r.w);
         b.sh1_g = vec4f(params_arr[21], params_arr[22], params_arr[23], b.sh1_g.w);
         b.sh1_b = vec4f(params_arr[24], params_arr[25], params_arr[26], b.sh1_b.w);
+        b.sh1_a = vec4f(params_arr[27], params_arr[28], params_arr[29], b.sh1_a.w);
 
         if (lp <= 11u) { pos_grad_norm2 += grad * grad; }
     }

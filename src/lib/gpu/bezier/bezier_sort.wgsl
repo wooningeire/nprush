@@ -10,6 +10,7 @@ struct Bezier {
     sh1_r: vec4f,
     sh1_g: vec4f,
     sh1_b: vec4f,
+    sh1_a: vec4f,
 }
 
 struct BezierArray {

@@ -10,6 +10,7 @@ struct Bezier {
     sh1_r: vec4f,
     sh1_g: vec4f,
     sh1_b: vec4f,
+    sh1_a: vec4f,
 }
 
 struct BezierArray {
@@ -249,7 +250,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         
         let width = max(b.p0.w, 0.001);
         let softness = max(b.p1.w, 0.001);
-        let opacity = b.color.a;
         
         let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
         let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
@@ -291,7 +291,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
         let local_width = width * pressure * inv_w;
         let local_softness = softness * pressure * inv_w;
-        let local_opacity = opacity * pressure;
+
+        let pos_w_f = bezier_pos_world(b, t);
+        let tang_f = bezier_deriv_world(b, t);
+        let dl_f = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w_f, tang_f);
+        let lx_f = dl_f.x;
+        let ly_f = dl_f.y;
+        let lz_f = dl_f.z;
+        let o_lin_f = b.color.a + SH_C1_B * (ly_f * b.sh1_a.x + lz_f * b.sh1_a.y + lx_f * b.sh1_a.z);
+        let opacity_f = clamp(o_lin_f, 0.0, 1.0);
+        let local_opacity = opacity_f * pressure;
 
         let inner = local_width - local_softness;
         let outer = local_width + local_softness;
@@ -308,9 +317,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         depths[idx] = d_val;
         curve_t_vals[idx] = t;
 
-        let pos_w_f = bezier_pos_world(b, t);
-        let tang_f = bezier_deriv_world(b, t);
-        let dl_f = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w_f, tang_f);
         let rgb_lin_f = bezier_rgb_linear_dl(b, dl_f);
         let rgb_vis_f = max(rgb_lin_f, vec3f(0.0));
 
@@ -394,7 +400,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let b = beziers.items[i];
         let width = max(b.p0.w, 0.001);
         let softness = max(b.p1.w, 0.001);
-        let opacity = b.color.a;
 
         let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
         let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
@@ -430,6 +435,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let lx_b = dl_b.x;
         let ly_b = dl_b.y;
         let lz_b = dl_b.z;
+        let opacity_lin_b = b.color.a + SH_C1_B * (ly_b*b.sh1_a.x + lz_b*b.sh1_a.y + lx_b*b.sh1_a.z);
+        let opacity = clamp(opacity_lin_b, 0.0, 1.0);
+        let clamp_gate_o = select(0.0, 1.0, opacity_lin_b > 1e-6 && opacity_lin_b < 1.0 - 1e-6);
         let rr_lin = b.color.r + SH_C1_B * (ly_b*b.sh1_r.x + lz_b*b.sh1_r.y + lx_b*b.sh1_r.z);
         let gg_lin = b.color.g + SH_C1_B * (ly_b*b.sh1_g.x + lz_b*b.sh1_g.y + lx_b*b.sh1_g.z);
         let bb_lin = b.color.b + SH_C1_B * (ly_b*b.sh1_b.x + lz_b*b.sh1_b.y + lx_b*b.sh1_b.z);
@@ -460,7 +468,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         // Direct background penalty: push opacity to zero on background pixels.
         // Weight is per-layer (0 = disabled for coarse bezier, >0 for fine bezier layer).
         let bg_opacity_penalty = uniforms.bg_penalty * is_background;
-        var d_opacity = da * a_geom * pressure + bg_opacity_penalty;
+        let d_opacity_lin_only = da * a_geom * pressure * clamp_gate_o;
+        var d_opacity = d_opacity_lin_only + bg_opacity_penalty;
 
         // da/d(d): chain through smoothstep
         // da/d(width) and da/d(softness): chain through inner/outer
@@ -660,6 +669,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         atomicAdd(&grads.data[base + 24u], i32(ly_b * k_b));
         atomicAdd(&grads.data[base + 25u], i32(lz_b * k_b));
         atomicAdd(&grads.data[base + 26u], i32(lx_b * k_b));
+
+        let k_o = SH_C1_B * d_opacity_lin_only * FP_SCALE_COL;
+        atomicAdd(&grads.data[base + 27u], i32(ly_b * k_o));
+        atomicAdd(&grads.data[base + 28u], i32(lz_b * k_o));
+        atomicAdd(&grads.data[base + 29u], i32(lx_b * k_o));
 
         // Accumulate this bezier's contribution to the color loss for ADC pruning.
         let color_loss_contrib = dot(dC * dC, vec3f(1.0)) * (T_prev * a);

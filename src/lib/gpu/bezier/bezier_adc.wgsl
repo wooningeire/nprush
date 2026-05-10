@@ -7,6 +7,7 @@ struct Bezier {
     sh1_r: vec4f,
     sh1_g: vec4f,
     sh1_b: vec4f,
+    sh1_a: vec4f,
 }
 
 struct BezierArray {
@@ -244,6 +245,7 @@ fn main() {
         nb.sh1_r = vec4f(0.0);
         nb.sh1_g = vec4f(0.0);
         nb.sh1_b = vec4f(0.0);
+        nb.sh1_a = vec4f(0.0);
 
         beziers.items[slot] = nb;
         for (var p = 0u; p < {@BEZIER_PARAMS_PER}u; p = p + 1u) {
