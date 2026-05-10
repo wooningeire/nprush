@@ -38,6 +38,8 @@ struct BezierUniforms {
     _pad0: f32,
     _pad1: f32,
     adc_period_steps: f32,
+    optim_width: f32,
+    optim_height: f32,
     vp_inv: mat4x4f,
 }
 
@@ -53,12 +55,14 @@ struct BezierUniforms {
 // We use depth_enc = 0.5 (mid-range) as a neutral spawn depth when no depth info
 // is available — the optimizer will pull the curve to the correct depth quickly.
 fn pixel_to_world(px_idx: u32, spawn_depth: f32) -> vec3f {
-    let px_x = px_idx % {@OPTIM_WIDTH}u;
-    let px_y = px_idx / {@OPTIM_WIDTH}u;
-    let uv = (vec2f(f32(px_x), f32(px_y)) + 0.5) / vec2f(f32({@OPTIM_WIDTH}u), f32({@OPTIM_HEIGHT}u));
+    let ow = u32(uniforms.optim_width);
+    let oh = u32(uniforms.optim_height);
+    let px_x = px_idx % ow;
+    let px_y = px_idx / ow;
+    let uv = (vec2f(f32(px_x), f32(px_y)) + 0.5) / vec2f(f32(ow), f32(oh));
     // NDC: y flipped (texture y=0 is top, NDC y=1 is top)
     let ndc = vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    let aspect = f32({@OPTIM_WIDTH}u) / f32({@OPTIM_HEIGHT}u);
+    let aspect = f32(ow) / f32(oh);
     // Recover w from reciprocal depth encoding
     let w = 0.1 / max(1.0 - spawn_depth, 1e-5);
     // Approximate z_clip ≈ w (valid for zFar=100 >> zNear=0.01)
@@ -101,7 +105,10 @@ fn main() {
         let grad_norm = adc.grad_accum[i] / ADC_PERIOD;
         let loss_norm = adc.loss_accum[i] / ADC_PERIOD;
 
-        if (adam.no_kill < 0.5 && grad_norm <= TAU_POS && loss_norm > TAU_LOSS) {
+        // Kill curves that are contributing to loss but not moving (low gradient).
+        // Standard 3DGS allows this even during multiview training; only off-screen
+        // culling is strictly disabled for multiview.
+        if (grad_norm <= TAU_POS && loss_norm > TAU_LOSS) {
             beziers.items[i].color.a = 0.0;
             dead_indices[dead_count] = i;
             dead_count = dead_count + 1u;
@@ -215,10 +222,12 @@ fn main() {
         // always get filled (important for fine layers with near-zero residual).
         var spawn_px = best_px;
         if (best_val <= 0) {
+            let ow = u32(uniforms.optim_width);
+            let oh = u32(uniforms.optim_height);
             let seed_fb = f32(spawn_i) * 1234.5678 + adam.t * 0.1;
-            let rx = u32(fract(sin(seed_fb * 12.9898) * 43758.5453) * f32({@OPTIM_WIDTH}));
-            let ry = u32(fract(sin(seed_fb * 78.233)  * 43758.5453) * f32({@OPTIM_HEIGHT}));
-            spawn_px = ry * {@OPTIM_WIDTH}u + rx;
+            let rx = u32(fract(sin(seed_fb * 12.9898) * 43758.5453) * f32(ow));
+            let ry = u32(fract(sin(seed_fb * 78.233)  * 43758.5453) * f32(oh));
+            spawn_px = ry * ow + rx;
         } else {
             // Claim this pixel so the next pass finds a different peak
             atomicStore(&pixel_loss[best_px], 0);

@@ -20,7 +20,7 @@ export const constants = {
     BEZIER_PRUNE_WIDTH_DEFAULT: 0.001,
     BEZIER_FP_SCALE_POS: 10000.0,
     BEZIER_FP_SCALE_COL: 100000.0,
-    BEZIER_MAX_TILE_BEZIERS: 1024,
+    BEZIER_MAX_TILE_BEZIERS: 4096,
     /**
      * Screen-space polyline resolution for Bézier distance (fragment loop + backward pass).
      * Keep modest: each forward pixel still pays O(N_SEG) inside the hull quad.
@@ -37,7 +37,7 @@ export const constants = {
     SPLAT_OPACITY_KILL_THRESH: 0.05,
     SPLAT_MAX_SPAWNS: 1024,
     SPLAT_VOLUME_KILL_THRESH: 1e-4,
-    SPLAT_MAX_TILE_SPLATS: 512,
+    SPLAT_MAX_TILE_SPLATS: 4096,
     SPLAT_FP_SCALE_POS: 10000.0,
     SPLAT_FP_SCALE_COL: 100000.0,
     SPLAT_RENDER_STRIP_HEIGHT: 0.18,
@@ -48,8 +48,8 @@ export const constants = {
     OPTIM_SHORT: 128,
     /** Floats stored per Gaussian (pos, color DC, quat, shape, RGB + opacity degree-1 SH, vec4-packed). */
     SPLAT_PARAMS_PER_SPLAT: 32,
-    NUM_GAUSSIAN_SPLATS: 512,
-    NUM_EDGE_LAYER_BEZIERS: 4096,
+    NUM_GAUSSIAN_SPLATS: 4096,
+    NUM_EDGE_LAYER_BEZIERS: 16384,
     
     MESH_SPLAT_MAX_COUNT: 4096,
     

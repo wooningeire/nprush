@@ -40,7 +40,12 @@ struct StepUniforms {
     bg_penalty: f32,
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
+    adc_period_steps: f32,
+    optim_width: f32,
+    optim_height: f32,
+    _pad_res: vec2f,
+    vp_inv: mat4x4f,
+    cam_world: vec4f,
 }
 
 @group(0) @binding(0) var<storage, read_write> beziers: BezierArray;

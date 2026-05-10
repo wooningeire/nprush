@@ -138,7 +138,7 @@ export class GpuBezierOptimizerManager {
 
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier VP uniforms buffer",
-            size: 176, // BezierUniforms through cam_world (+ optional tail pad)
+            size: 208, // BezierUniforms through cam_world (+ optional tail pad)
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         device.queue.writeBuffer(
@@ -180,13 +180,11 @@ export class GpuBezierOptimizerManager {
 
         // NUM_BEZIERS_PLUS_ONE / NUM_BEZIERS_MINUS_ONE must come before
         // NUM_BEZIERS for the same substring reason as the splat shaders.
-        // OPTIM_WIDTH/HEIGHT are injected at dispatch time when dims are known;
-        // PIXEL_LOSS_SIZE = OPTIM_WIDTH * OPTIM_HEIGHT is also injected then.
+        // PIXEL_LOSS_SIZE = OPTIM_WIDTH * OPTIM_HEIGHT is injected then.
         // For the shader module we use placeholder values that get replaced
         // via a separate per-dispatch inject — here we bake in the max size
-        // so the buffer declaration compiles. The actual dims are written via
-        // writeOptimDims() before the first dispatch.
-        const inject = (src: string, ow = 256, oh = 256) => {
+        // so the buffer declaration compiles.
+        const inject = (src: string) => {
             return injectWgslConstants(src, {
                 ...constants,
                 NUM_BEZIERS: this.numBeziers,
@@ -198,8 +196,6 @@ export class GpuBezierOptimizerManager {
                 NUM_BEZIER_PARAMS: this.numParams,
                 PIXEL_LOSS_SIZE: PIXEL_LOSS_MAX,
                 SORT_N: this.sortN,
-                OPTIM_WIDTH: ow,
-                OPTIM_HEIGHT: oh,
             });
         };
 
@@ -397,21 +393,31 @@ export class GpuBezierOptimizerManager {
     }
 
     writeVPInvMatrix(mat: Mat4) {
-        // vp_inv is at offset 96 in BezierUniforms
+        // vp_inv is at offset 112 in BezierUniforms (after optim_width/height + padding)
         this.device.queue.writeBuffer(
             this.bezierUniformsBuffer,
-            96,
+            112,
             (mat as Float32Array).buffer,
             (mat as Float32Array).byteOffset,
             (mat as Float32Array).byteLength
         );
     }
 
-    /** Camera world position (`invView * (0,0,0,1)`), for degree-1 SH view dependence. */
-    writeCamWorld(x: number, y: number, z: number, w: number = 1) {
+    writeOptimDims(width: number, height: number) {
+        // Writes optim_width (96) and optim_height (100)
         this.device.queue.writeBuffer(
             this.bezierUniformsBuffer,
-            160,
+            96,
+            new Float32Array([width, height]),
+        );
+    }
+
+    /** Camera world position (`invView * (0,0,0,1)`), for degree-1 SH view dependence. */
+    writeCamWorld(x: number, y: number, z: number, w: number = 1) {
+        // cam_world is at offset 176
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            176,
             new Float32Array([x, y, z, w]),
         );
     }
@@ -523,6 +529,7 @@ export class GpuBezierOptimizerManager {
         height: number,
     ) {
         this.dims = { width, height };
+        this.writeOptimDims(width, height);
 
         this.backwardBindGroup = this.device.createBindGroup({
             label: "bezier backward bind group",

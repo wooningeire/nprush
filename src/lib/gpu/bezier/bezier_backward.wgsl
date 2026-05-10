@@ -31,6 +31,9 @@ struct BezierUniforms {
     _pad0: f32,
     _pad1: f32,
     adc_period_steps: f32,
+    optim_width: f32,
+    optim_height: f32,
+    _pad_res: vec2f,
     vp_inv: mat4x4f,
     cam_world: vec4f,
 }
