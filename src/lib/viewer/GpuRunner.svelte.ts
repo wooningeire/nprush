@@ -705,7 +705,6 @@ export class GpuRunner {
             this.optimEdgeTextureView,
             this.optimEdgeTextureView,
             this.dummyTextureView!,
-            this.dummyTextureView!,
             this.optimTextureView!,
             ow, oh
         );
@@ -715,7 +714,6 @@ export class GpuRunner {
             this.optimDepthAwareBlurredTextureView!,
             this.optimDepthTextureView!,
             this.optimSplatTextureView!,
-            this.optimSplatDepthTextureView!,
             this.optimTextureView!,
             ow, oh
         );
@@ -725,7 +723,6 @@ export class GpuRunner {
             this.optimTextureView!,
             this.optimDepthTextureView!,
             this.optimSplatTextureView!,
-            this.optimSplatDepthTextureView!,
             this.optimTextureView!,
             ow, oh
         );
@@ -1118,7 +1115,6 @@ export class GpuRunner {
                     this.optimDepthAwareBlurredTextureView!,
                     this.optimDepthTextureView!,
                     this.optimSplatTextureView!,
-                    this.optimSplatDepthTextureView!,
                     this.optimTextureView!,
                     this.optimWidth,
                     this.optimHeight,
@@ -1129,7 +1125,6 @@ export class GpuRunner {
                     optimTargetView,
                     this.optimDepthTextureView!,
                     this.optimSplatTextureView!,
-                    this.optimSplatDepthTextureView!,
                     this.optimTextureView!,
                     this.optimWidth,
                     this.optimHeight,

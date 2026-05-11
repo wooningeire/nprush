@@ -49,7 +49,6 @@ struct ADCArray {
 @group(0) @binding(3) var targetDepthTex: texture_2d<f32>;
 @group(0) @binding(4) var<uniform> uniforms: BezierUniforms;
 @group(0) @binding(5) var bgTex: texture_2d<f32>;
-@group(0) @binding(6) var bgDepthTex: texture_2d<f32>;
 @group(0) @binding(7) var<storage, read_write> adc: ADCArray;
 @group(0) @binding(8) var normalTex: texture_2d<f32>;
 // Per-pixel residual loss map: accumulated as fixed-point i32 (scale 10000).
@@ -292,12 +291,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
     var alphas = array<f32, MAX_TILE_BEZIERS>();
     var min_seg = array<u32, MAX_TILE_BEZIERS>();
-    var depths = array<f32, MAX_TILE_BEZIERS>();
     var curve_t_vals = array<f32, MAX_TILE_BEZIERS>();
     var Ts = array<f32, MAX_TILE_BEZIERS + 1u>();
     Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
-    var D_pred = 0.0;
 
     for (var idx = 0u; idx < bezier_count; idx++) {
         let i = tile_beziers[idx];
@@ -362,44 +359,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let a_geom = 1.0 - smoothstep(inner, outer, min_d);
         var a = clamp(a_geom * local_opacity, 0.0, 0.999);
 
-        // Compute depth value for visualization / depth-ordered compositing.
-        // Uses the same reciprocal encoding as mesh.wgsl so that
-        // D_pred is in the same [0,1) space as tgt_depth.
-        let d_val = clamp(1.0 - DEPTH_NEAR_BEZ / linear_w, 0.0, 1.0);
-
         alphas[idx] = a;
         min_seg[idx] = min_k;
-        depths[idx] = d_val;
         curve_t_vals[idx] = t;
 
         let rgb_lin_f = bezier_rgb_linear_dl(b, dl_f);
         let rgb_vis_f = max(rgb_lin_f, vec3f(0.0));
 
         C_pred += Ts[idx] * a * rgb_vis_f;
-        D_pred += Ts[idx] * a * d_val;
         Ts[idx + 1u] = Ts[idx] * (1.0 - a);
     }
 
     let background_sample = textureLoad(bgTex, global_id.xy, 0).rgb;
-    let bg_depth_sample = textureLoad(bgDepthTex, global_id.xy, 0).r;
-    
     var background = vec3f(0.0);
-    var bg_depth = 1.0;
     let color_mode = uniforms.mode > 0.5;
     background = select(vec3f(0.0), background_sample, color_mode);
-    bg_depth   = select(1.0, bg_depth_sample, color_mode);
 
     C_pred += Ts[bezier_count] * background;
-    D_pred += Ts[bezier_count] * bg_depth;
 
     let dC_raw = 2.0 * (C_pred - tgt_color);
 
-    // Depth loss in color mode: constrain beziers to lie on the mesh surface.
-    // Only applied on foreground pixels (tgt_depth < 0.99) to avoid fighting
-    // the color loss on background. Weight is small so color dominates.
-    let DEPTH_LOSS_WEIGHT = 0.5;
-    let is_foreground_bez = tgt_depth < 0.99;
-    let dD_depth = select(0.0, DEPTH_LOSS_WEIGHT * 2.0 * (D_pred - tgt_depth), is_foreground_bez && color_mode);
 
     // Luminance/contrast-weighted color loss.
     // 1. Decompose error into luminance and chrominance components.
@@ -423,9 +402,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let dC_luma = luma_err * luma_w * 6.0; // 2 (from MSE) * 3 (luma boost)
     let dC_chroma = dC_raw - dot(dC_raw, luma_w) * luma_w; // chroma residual
     let dC = (dC_luma + dC_chroma) * contrast_weight;
-    // let dD_total = 2.0 * (D_pred - tgt_depth);
-    let dD_total = dD_depth;
-    var dT = dot(dC, background) + dD_total * bg_depth;
+    var dT = dot(dC, background);
 
     // Edge mode: coverage loss driving total alpha to match the edge map.
     let EDGE_LOSS_WEIGHT = 2.0;
@@ -488,7 +465,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let p3 = proj3.xy;
 
         let T_prev = Ts[idx];
-        let d_val = depths[idx];
 
         let k = min_seg[idx];
         let t_prev = f32(k - 1u) / f32(N_SEG);
@@ -522,8 +498,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let color = rgb_vis;
 
         let dColor = dC * (T_prev * a);
-        let da = dT * (-T_prev) + dot(dC, T_prev * color) + dD_total * (T_prev * d_val);
-        dT = dT * (1.0 - a) + dot(dC, a * color) + dD_total * (a * d_val);
+        let da = dT * (-T_prev) + dot(dC, T_prev * color);
+        dT = dT * (1.0 - a) + dot(dC, a * color);
 
         let raw_w = dot(B_pixel, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
         let linear_w = max(raw_w, DEPTH_NEAR_BEZ);
@@ -548,10 +524,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let d_opacity_lin_only = da * a_geom * pressure * clamp_gate_o;
         var d_opacity = d_opacity_lin_only + bg_opacity_penalty;
 
-        // Depth w.r.t. clip.w weights: reuse linear_w from raw_w = dot(B_pixel, proj*.z); same as the
-        // extra project_center chain that previously recomputed clip.w four times here.
-        let d_dval_d_w = DEPTH_NEAR_BEZ / (linear_w * linear_w);
-        let dDepth_dZs = dD_total * (T_prev * a) * d_dval_d_w * B_pixel;
 
         // da/d(d): chain through smoothstep
         // da/d(width) and da/d(softness): chain through inner/outer
@@ -650,19 +622,19 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
         atomicAdd(&grads.data[base + 0u], i32(dP0_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 1u], i32(dP0_3d.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 2u], i32((dP0_3d.z + dDepth_dZs.x) * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 2u], i32(dP0_3d.z * FP_SCALE_POS));
         
         atomicAdd(&grads.data[base + 3u], i32(dP1_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 4u], i32(dP1_3d.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 5u], i32((dP1_3d.z + dDepth_dZs.y) * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 5u], i32(dP1_3d.z * FP_SCALE_POS));
         
         atomicAdd(&grads.data[base + 6u], i32(dP2_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 7u], i32(dP2_3d.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 8u], i32((dP2_3d.z + dDepth_dZs.z) * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 8u], i32(dP2_3d.z * FP_SCALE_POS));
         
         atomicAdd(&grads.data[base + 9u], i32(dP3_3d.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base + 10u], i32(dP3_3d.y * FP_SCALE_POS));
-        atomicAdd(&grads.data[base + 11u], i32((dP3_3d.z + dDepth_dZs.w) * FP_SCALE_POS));
+        atomicAdd(&grads.data[base + 11u], i32(dP3_3d.z * FP_SCALE_POS));
 
         let d_relu_r = select(0.0, dColor.r, rr_lin > 0.0);
         let d_relu_g = select(0.0, dColor.g, gg_lin > 0.0);
