@@ -56,10 +56,10 @@ export class ViewerState {
 
     gpuTimestampQuerySupported = $state(false);
     gpuProfilingEnabled = $state(false);
-    gpuProfilingMs = $state<number[]>(Array(GPU_PROFILER_PAIR_COUNT).fill(0));
-    gpuProfilingHistoryFrames = $state<number[][]>([]);
+    gpuProfilingMs = $state<(number | null)[]>(Array(GPU_PROFILER_PAIR_COUNT).fill(null));
+    gpuProfilingHistoryFrames = $state<(number | null)[][]>([]);
 
-    setGpuProfilingFrameMs(msPerPair: readonly number[]) {
+    setGpuProfilingFrameMs(msPerPair: readonly (number | null)[]) {
         this.gpuProfilingMs = [...msPerPair];
         const next = [...this.gpuProfilingHistoryFrames, [...msPerPair]];
         const cap = GPU_PROFILER_HISTORY_FRAMES;

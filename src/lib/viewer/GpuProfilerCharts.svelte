@@ -5,8 +5,8 @@ import {
 } from "$/gpu/performanceMeasurement/gpuProfilerPairs";
 import type { ViewerState } from "./ViewerState.svelte.ts";
 
-function rowSum(row: readonly number[]): number {
-    return row.reduce((a, b) => a + b, 0);
+function rowSum(row: readonly (number | null)[]): number {
+    return row.reduce((a, b) => a + (b ?? 0), 0);
 }
 
 const {
@@ -43,11 +43,10 @@ const sparkPoints = $derived.by(() => {
         .join(" ");
 });
 
-const barMaxMs = $derived(
-    viewerState.gpuProfilingMs.length === GPU_PROFILER_PAIR_COUNT
-        ? Math.max(...viewerState.gpuProfilingMs, 1e-6)
-        : 1e-6,
-);
+const barMaxMs = $derived.by(() => {
+    const msValues = viewerState.gpuProfilingMs.filter((v): v is number => v !== null);
+    return msValues.length > 0 ? Math.max(...msValues, 1e-6) : 1e-6;
+});
 </script>
 
 {#if viewerState.gpuTimestampQuerySupported && viewerState.gpuProfilingEnabled}
@@ -98,13 +97,13 @@ const barMaxMs = $derived(
                 {#each viewerState.gpuProfilingMs as ms, idx (idx)}
                     <div class="gpu-pass-row" role="listitem">
                         <div class="gpu-pass-label">{GPU_PROFILER_LABELS[idx] ?? idx}</div>
-                        <div class="gpu-pass-bar-track" aria-valuemin={0} aria-valuemax={barMaxMs} aria-valuenow={ms}>
+                        <div class="gpu-pass-bar-track" aria-valuemin={0} aria-valuemax={barMaxMs} aria-valuenow={ms ?? 0}>
                             <div
                                 class="gpu-pass-bar-fill"
-                                style={`width: ${Math.min((ms / barMaxMs) * 100, 100)}%;`}
+                                style={`width: ${ms === null ? 0 : Math.min((ms / barMaxMs) * 100, 100)}%; opacity: ${ms === null ? 0.2 : 1};`}
                             />
                         </div>
-                        <div class="gpu-pass-ms">{ms.toFixed(2)} ms</div>
+                        <div class="gpu-pass-ms">{ms === null ? "-.--" : ms.toFixed(2)} ms</div>
                     </div>
                 {/each}
             </div>

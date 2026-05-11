@@ -70,16 +70,20 @@ export class GpuPerformanceMeasurementBufferManager {
      * Per-pair deltas (newest end − newest begin). Runs after queue submit so
      * the GPU finishes recording query values before resolve.
      */
-    async mapDeltasNanoseconds(): Promise<bigint[]> {
+    async mapDeltasNanoseconds(activeIndices?: Set<number>): Promise<(bigint | null)[]> {
         if (this.resultBuffer.mapState === "pending") {
-            return Array.from({ length: this.pairCount }, () => 0n);
+            return Array.from({ length: this.pairCount }, () => null);
         }
 
         await this.resultBuffer.mapAsync(GPUMapMode.READ);
         try {
             const raw = new BigUint64Array(this.resultBuffer.getMappedRange());
-            const out = new Array<bigint>(this.pairCount);
+            const out = new Array<bigint | null>(this.pairCount);
             for (let i = 0; i < this.pairCount; i++) {
+                if (activeIndices && !activeIndices.has(i)) {
+                    out[i] = null;
+                    continue;
+                }
                 const begin = raw[i * 2];
                 const end = raw[i * 2 + 1];
                 out[i] = end >= begin ? end - begin : 0n;

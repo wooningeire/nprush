@@ -16,7 +16,7 @@ import { evaluateTurntablePath } from "./turntable/turntablePath.ts";
 import { compositeTurntableLayers } from "./turntable/turntableComposite.ts";
 import { TurntableFrameCaptureQueue } from "./turntable/turntableFrameCapture.ts";
 import { GpuPerformanceMeasurementBufferManager } from "$/gpu/performanceMeasurement/GpuPerformanceMeasurementBufferManager";
-import { GpuProfilingPair } from "$/gpu/performanceMeasurement/gpuProfilerPairs";
+import { GpuProfilingPair, GPU_PROFILER_PAIR_COUNT } from "$/gpu/performanceMeasurement/gpuProfilerPairs";
 import { vec3, type Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants";
 import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
@@ -890,7 +890,12 @@ export class GpuRunner {
                 label: "runner loop command encoder",
             });
 
+            const activeProfilerIndices = new Set<number>();
             const recordGpu = !!(this.gpuPerfBuffers && this.viewerState.gpuProfilingEnabled);
+            const profWrites = (idx: number) => {
+                if (recordGpu) activeProfilerIndices.add(idx);
+                return recordGpu ? this.gpuPerfBuffers!.writes(idx) : undefined;
+            };
 
             // Frozen viewport skips full-resolution splat/bezier passes unless we must
             // refresh those textures for turntable PNG export (readback next enqueue).
@@ -964,7 +969,7 @@ export class GpuRunner {
             if (!this.viewerState.viewportRenderingFrozen) {
                 const spherePassEncoder = commandEncoder.beginRenderPass({
                     label: "mesh render pass (full res)",
-                    ...(recordGpu ? { timestampWrites: this.gpuPerfBuffers!.writes(GpuProfilingPair.MeshFullRaster) } : {}),
+                    ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.MeshFullRaster) } : {}),
                     colorAttachments: [
                         {
                             clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
@@ -1000,7 +1005,7 @@ export class GpuRunner {
             // 1b. Render the model into the optim-res (aspect-matched) textures for gradient computation.
             const optimPassEncoder = commandEncoder.beginRenderPass({
                 label: "mesh render pass (optim res)",
-                ...(recordGpu ? { timestampWrites: this.gpuPerfBuffers!.writes(GpuProfilingPair.MeshOptimRaster) } : {}),
+                ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.MeshOptimRaster) } : {}),
                 colorAttachments: [
                     {
                         clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
@@ -1039,7 +1044,7 @@ export class GpuRunner {
             if (!datasetView) {
                 this.pathTracePipelineManager.dispatch(
                     commandEncoder,
-                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.PathTrace) : undefined,
+                    profWrites(GpuProfilingPair.PathTrace),
                 );
             }
 
@@ -1059,7 +1064,7 @@ export class GpuRunner {
                     this.viewerState.blurRadius,
                     this.viewerState.blurRadius / 2,
                     true, // isSrgb
-                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BlurOptimTarget) : undefined,
+                    profWrites(GpuProfilingPair.BlurOptimTarget),
                 );
                 this.blurManager.blur(
                     commandEncoder,
@@ -1071,7 +1076,7 @@ export class GpuRunner {
                     this.viewerState.blurRadius,
                     this.viewerState.blurRadius / 2,
                     false, // isSrgb
-                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BlurOptimDepth) : undefined,
+                    profWrites(GpuProfilingPair.BlurOptimDepth),
                 );
             }
             
@@ -1085,7 +1090,7 @@ export class GpuRunner {
                     this.optimWidth,
                     this.optimHeight,
                     15,
-                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.DepthAwareBlur) : undefined,
+                    profWrites(GpuProfilingPair.DepthAwareBlur),
                 );
             }
 
@@ -1098,7 +1103,7 @@ export class GpuRunner {
                 commandEncoder,
                 this.optimWidth,
                 this.optimHeight,
-                recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatEdgeDetectOptim) : undefined,
+                profWrites(GpuProfilingPair.SplatEdgeDetectOptim),
             );
 
             // 3. Dispatch Splat Optimizer Compute Passes (uses optim-res texture + edge map)
@@ -1136,7 +1141,7 @@ export class GpuRunner {
             if (this.viewerState.splatsEnabled && !(this.viewerState.splatTrainingPaused || defaultPause)) {
                 this.splatOptimizerManager.dispatch(
                     commandEncoder,
-                    profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatBackwardStep) : undefined,
+                    profWrites(GpuProfilingPair.SplatBackwardStep),
                 );
             }
 
@@ -1156,7 +1161,7 @@ export class GpuRunner {
                 commandEncoder,
                 true,
                 this.viewerState.splatsEnabled,
-                profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatRasterOptim) : undefined,
+                profWrites(GpuProfilingPair.SplatRasterOptim),
             );
 
             // 3b. Train the bezier edge layer: its target is the freshly-computed
@@ -1165,7 +1170,7 @@ export class GpuRunner {
                 if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
                     this.edgeLayerBezierManager.dispatch(
                         commandEncoder,
-                        profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierEdgeOptim) : undefined,
+                        profWrites(GpuProfilingPair.BezierEdgeOptim),
                     );
                 }
                 this.edgeLayerBezierManager.dispatchSort(commandEncoder, sortVp);
@@ -1176,7 +1181,7 @@ export class GpuRunner {
                 if (!(this.viewerState.baseColorBezierTrainingPaused || defaultPause)) {
                     this.baseColorLayerBezierManager.dispatch(
                         commandEncoder,
-                        profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierCoarseOptim) : undefined,
+                        profWrites(GpuProfilingPair.BezierCoarseOptim),
                     );
                 }
                 this.baseColorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
@@ -1192,7 +1197,7 @@ export class GpuRunner {
                 if (!(this.viewerState.colorBezierTrainingPaused || defaultPause)) {
                     this.colorLayerBezierManager.dispatch(
                         commandEncoder,
-                        profileRound ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierFineOptim) : undefined,
+                        profWrites(GpuProfilingPair.BezierFineOptim),
                     );
                 }
                 this.colorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
@@ -1211,7 +1216,7 @@ export class GpuRunner {
                     commandEncoder,
                     fullW,
                     fullH,
-                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatEdgeDetectFull) : undefined,
+                    profWrites(GpuProfilingPair.SplatEdgeDetectFull),
                 );
                 // Restore optim-res edge bind group for next frame
                 this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!);
@@ -1221,13 +1226,13 @@ export class GpuRunner {
                     commandEncoder,
                     true,
                     this.viewerState.splatsEnabled,
-                    recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.SplatRasterFull) : undefined,
+                    profWrites(GpuProfilingPair.SplatRasterFull),
                 );
                 if (this.viewerState.edgeBeziersEnabled) {
                     this.bezierForwardManager.dispatch(
                         commandEncoder,
                         true,
-                        recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierEdgeRasterFull) : undefined,
+                        profWrites(GpuProfilingPair.BezierEdgeRasterFull),
                     );
                 }
                 if (this.viewerState.baseColorBeziersEnabled) {
@@ -1236,14 +1241,14 @@ export class GpuRunner {
                     this.baseColorBezierForwardManager.dispatch(
                         commandEncoder,
                         true,
-                        recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierCoarseRasterFull) : undefined,
+                        profWrites(GpuProfilingPair.BezierCoarseRasterFull),
                     );
                 }
                 if (this.viewerState.colorBeziersEnabled) {
                     this.colorBezierForwardManager.dispatch(
                         commandEncoder,
                         true,
-                        recordGpu ? this.gpuPerfBuffers!.writes(GpuProfilingPair.BezierFineRasterFull) : undefined,
+                        profWrites(GpuProfilingPair.BezierFineRasterFull),
                     );
                 }
             }
@@ -1264,7 +1269,7 @@ export class GpuRunner {
             const screenView = currentTexture.createView();
             const finalPassEncoder = commandEncoder.beginRenderPass({
                 label: "final render pass",
-                ...(recordGpu ? { timestampWrites: this.gpuPerfBuffers!.writes(GpuProfilingPair.FinalCompositor) } : {}),
+                ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.FinalCompositor) } : {}),
                 colorAttachments: [
                     {
                         clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
@@ -1286,12 +1291,15 @@ export class GpuRunner {
             if (recordGpu && this.gpuPerfBuffers) {
                 try {
                     await this.device.queue.onSubmittedWorkDone();
-                    const deltasNs = await this.gpuPerfBuffers.mapDeltasNanoseconds();
-                    const msArr = deltasNs.map(ns => Number(ns) / 1e6);
+                    const deltasNs = await this.gpuPerfBuffers.mapDeltasNanoseconds(activeProfilerIndices);
+                    const msArr = deltasNs.map(ns => ns === null ? null : Number(ns) / 1e6);
                     this.viewerState.setGpuProfilingFrameMs(msArr);
                 } catch (e) {
                     console.warn("[gpu profiler]", e);
                 }
+            } else {
+                // If profiling is disabled, wipe with nulls to avoid stale charts
+                this.viewerState.setGpuProfilingFrameMs(Array(GPU_PROFILER_PAIR_COUNT).fill(null));
             }
 
             if (canceled) return;
