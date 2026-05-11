@@ -2,6 +2,7 @@ import backwardModuleSrc from "./bezier_backward.wgsl?raw";
 import stepModuleSrc from "./bezier_step.wgsl?raw";
 import adcModuleSrc from "./bezier_adc.wgsl?raw";
 import sortModuleSrc from "./bezier_sort.wgsl?raw";
+import initModuleSrc from "./bezier_init.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
 import { constants, injectWgslConstants } from "../constants";
 import { nextPowerOfTwoAtLeast } from "../nextPowerOfTwoAtLeast";
@@ -30,10 +31,12 @@ export class GpuBezierOptimizerManager {
     private readonly backwardPipeline: GPUComputePipeline;
     private readonly stepPipeline: GPUComputePipeline;
     private readonly adcPipeline: GPUComputePipeline;
+    private readonly initPipeline: GPUComputePipeline;
 
     private readonly backwardBindGroupLayout: GPUBindGroupLayout;
     private readonly stepBindGroup: GPUBindGroup;
     private readonly adcBindGroup: GPUBindGroup;
+    private readonly initBindGroup: GPUBindGroup;
     private readonly adcBindGroupLayout: GPUBindGroupLayout;
 
     private readonly adcScratchBuffer: GPUBuffer;
@@ -63,56 +66,11 @@ export class GpuBezierOptimizerManager {
         this.numBeziers = numBeziers;
         this.numParams = numBeziers * constants.BEZIER_PARAMS_PER;
 
-        // Initialize curves as short, randomly oriented squiggles clustered
-        // near the origin. Bright grayscale colors give them an immediate
-        // contribution to the silhouette image they're trying to reconstruct.
-        const data = new Float32Array(numBeziers * constants.BEZIER_FLOATS_PER);
-        for (let i = 0; i < numBeziers; i++) {
-            const o = i * constants.BEZIER_FLOATS_PER;
-            const cx = (Math.random() * 2 - 1);
-            const cy = (Math.random() * 2 - 1);
-            const len = 0.2 + Math.random() * 0.2;
-            const angle = Math.random() * Math.PI * 2;
-            const dx = Math.cos(angle) * len;
-            const dy = Math.sin(angle) * len;
-            const jitter = () => (Math.random() - 0.5) * 0.08;
-            // P0 (xyz, width)
-            data[o + 0] = cx - dx * 0.5;
-            data[o + 1] = cy - dy * 0.5;
-            data[o + 2] = (Math.random() * 2 - 1) * 0.3;
-            data[o + 3] = 0.02;
-            // P1 (xyz, softness)
-            data[o + 4] = cx - dx * 0.15 + jitter();
-            data[o + 5] = cy - dy * 0.15 + jitter();
-            data[o + 6] = (Math.random() * 2 - 1) * 0.3;
-            data[o + 7] = 0.005;
-            // P2 (xyz, pad)
-            data[o + 8] = cx + dx * 0.15 + jitter();
-            data[o + 9] = cy + dy * 0.15 + jitter();
-            data[o + 10] = (Math.random() * 2 - 1) * 0.3;
-            data[o + 11] = 0.0;
-            // P3 (xyz, pad)
-            data[o + 12] = cx + dx * 0.5;
-            data[o + 13] = cy + dy * 0.5;
-            data[o + 14] = (Math.random() * 2 - 1) * 0.3;
-            data[o + 15] = 0.0;
-            // color rgba
-            data[o + 16] = Math.random();
-            data[o + 17] = Math.random();
-            data[o + 18] = Math.random();
-            data[o + 19] = 0.5;
-            // Degree-1 SH (vec4 .xyz; .w unused) — start at DC-only.
-            for (let k = 20; k < constants.BEZIER_FLOATS_PER; k++) {
-                data[o + k] = 0;
-            }
-        }
-
         this.bezierBuffer = device.createBuffer({
             label: "bezier buffer",
-            size: data.byteLength,
+            size: this.numBeziers * constants.BEZIER_FLOATS_PER * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-        device.queue.writeBuffer(this.bezierBuffer, 0, data);
 
         this.gradBuffer = device.createBuffer({
             label: "bezier grad buffer",
@@ -324,6 +282,45 @@ export class GpuBezierOptimizerManager {
         sortModule.getCompilationInfo().then(info => {
             for (const msg of info.messages) console.warn(`[bezier_sort] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
+
+        const initBindGroupLayout = device.createBindGroupLayout({
+            label: "bezier init bind group layout",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+            ],
+        });
+        const initModule = device.createShaderModule({
+            label: "bezier init",
+            code: inject(initModuleSrc),
+        });
+        initModule.getCompilationInfo().then(info => {
+            for (const m of info.messages) console.warn(`[bezier_init] ${m.type}: ${m.message} (line ${m.lineNum})`);
+        });
+        this.initPipeline = device.createComputePipeline({
+            label: "bezier init pipeline",
+            layout: device.createPipelineLayout({
+                label: "bezier init pipeline layout",
+                bindGroupLayouts: [initBindGroupLayout],
+            }),
+            compute: { module: initModule, entryPoint: "main" },
+        });
+        this.initBindGroup = device.createBindGroup({
+            label: "bezier init bind group",
+            layout: initBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.bezierBuffer } },
+            ],
+        });
+
+        // Run initialization pass immediately
+        const initEncoder = device.createCommandEncoder({ label: "bezier init encoder" });
+        const initPass = initEncoder.beginComputePass({ label: "bezier init pass" });
+        initPass.setPipeline(this.initPipeline);
+        initPass.setBindGroup(0, this.initBindGroup);
+        initPass.dispatchWorkgroups(Math.ceil(this.numBeziers / 64));
+        initPass.end();
+        device.queue.submit([initEncoder.finish()]);
+
         this.sortInitPipeline = device.createComputePipeline({
             label: "bezier sort init pipeline",
             layout: device.createPipelineLayout({

@@ -4,6 +4,7 @@ import renderModuleSrc from "./splat_render.wgsl?raw";
 import adcModuleSrc from "./splat_adc.wgsl?raw";
 import edgeModuleSrc from "./splat_edge.wgsl?raw";
 import sortModuleSrc from "./splat_sort.wgsl?raw";
+import initModuleSrc from "./splat_init.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
 import { constants, injectWgslConstants } from "../constants";
 import { nextPowerOfTwoAtLeast } from "../nextPowerOfTwoAtLeast";
@@ -33,7 +34,9 @@ export class GpuSplatOptimizerManager {
     private readonly renderPipeline: GPURenderPipeline;
     private readonly sortInitPipeline: GPUComputePipeline;
     private readonly sortStepPipeline: GPUComputePipeline;
+    private readonly initPipeline: GPUComputePipeline;
     private sortInitBindGroup: GPUBindGroup;
+    private initBindGroup: GPUBindGroup;
     private sortStepBindGroups: GPUBindGroup[] = [];
     private sortStepUniformBuffers: GPUBuffer[] = [];
     private sortN: number = 0;
@@ -71,38 +74,11 @@ export class GpuSplatOptimizerManager {
         const floatsPer = constants.SPLAT_PARAMS_PER_SPLAT;
         this.numParams = numSplats * floatsPer;
 
-        // Structured splat buffer; see WGSL `Splat` (RGB + opacity SH degree-1 = 32 floats total).
-        const splatData = new Float32Array(this.numSplats * floatsPer);
-        for (let i = 0; i < this.numSplats; i++) {
-            const o = i * floatsPer;
-            // pos_sx: x, y, z, sx
-            splatData[o + 0] = (Math.random() * 2 - 1) * 0.3;
-            splatData[o + 1] = (Math.random() * 2 - 1) * 0.3;
-            splatData[o + 2] = (Math.random() * 2 - 1) * 0.3;
-            splatData[o + 3] = 0.1 + Math.random() * 0.15;
-            splatData[o + 4] = Math.random();
-            splatData[o + 5] = Math.random();
-            splatData[o + 6] = Math.random();
-            splatData[o + 7] = i < 512 ? 0.3 + Math.random() * 0.4 : 0.0;
-            splatData[o + 8] = 1.0;
-            splatData[o + 9] = 0.0;
-            splatData[o + 10] = 0.0;
-            splatData[o + 11] = 0.0;
-            splatData[o + 12] = 0.1 + Math.random() * 0.15;
-            splatData[o + 13] = 2.0;
-            splatData[o + 14] = 0.5;
-            splatData[o + 15] = 0.1 + Math.random() * 0.15;
-            for (let j = 16; j < floatsPer; j++) {
-                splatData[o + j] = 0.0;
-            }
-        }
-
         this.splatBuffer = device.createBuffer({
             label: "splat buffer",
-            size: splatData.byteLength,
+            size: this.numSplats * floatsPer * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-        device.queue.writeBuffer(this.splatBuffer, 0, splatData);
 
         this.gradBuffer = device.createBuffer({
             label: "splat grad buffer",
@@ -343,6 +319,44 @@ export class GpuSplatOptimizerManager {
             }),
             compute: { module: sortModule, entryPoint: "sort_step" },
         });
+
+        const initBindGroupLayout = device.createBindGroupLayout({
+            label: "splat init bind group layout",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+            ],
+        });
+        const initModule = device.createShaderModule({
+            label: "splat init",
+            code: injectConstants(initModuleSrc),
+        });
+        initModule.getCompilationInfo().then(info => {
+            for (const m of info.messages) console.warn(`[splat_init] ${m.type}: ${m.message} (line ${m.lineNum})`);
+        });
+        this.initPipeline = device.createComputePipeline({
+            label: "splat init pipeline",
+            layout: device.createPipelineLayout({
+                label: "splat init pipeline layout",
+                bindGroupLayouts: [initBindGroupLayout],
+            }),
+            compute: { module: initModule, entryPoint: "main" },
+        });
+        this.initBindGroup = device.createBindGroup({
+            label: "splat init bind group",
+            layout: initBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.splatBuffer } },
+            ],
+        });
+
+        // Run initialization pass immediately
+        const initEncoder = device.createCommandEncoder({ label: "splat init encoder" });
+        const initPass = initEncoder.beginComputePass({ label: "splat init pass" });
+        initPass.setPipeline(this.initPipeline);
+        initPass.setBindGroup(0, this.initBindGroup);
+        initPass.dispatchWorkgroups(Math.ceil(this.numSplats / 64));
+        initPass.end();
+        device.queue.submit([initEncoder.finish()]);
 
         // Pre-create init bind group (uses sortUniformsBuffer for VP only)
         this.sortInitBindGroup = device.createBindGroup({
