@@ -289,12 +289,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
     let tgt_depth = textureLoad(targetDepthTex, global_id.xy, 0).r;
 
-    var alphas = array<f32, MAX_TILE_BEZIERS>();
-    var min_seg = array<u32, MAX_TILE_BEZIERS>();
-    var curve_t_vals = array<f32, MAX_TILE_BEZIERS>();
-    var Ts = array<f32, MAX_TILE_BEZIERS + 1u>();
-    Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
+    var T_final = 1.0;
 
     for (var idx = 0u; idx < bezier_count; idx++) {
         let i = tile_beziers[idx];
@@ -359,15 +355,13 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let a_geom = 1.0 - smoothstep(inner, outer, min_d);
         var a = clamp(a_geom * local_opacity, 0.0, 0.999);
 
-        alphas[idx] = a;
-        min_seg[idx] = min_k;
-        curve_t_vals[idx] = t;
+
 
         let rgb_lin_f = bezier_rgb_linear_dl(b, dl_f);
         let rgb_vis_f = max(rgb_lin_f, vec3f(0.0));
 
-        C_pred += Ts[idx] * a * rgb_vis_f;
-        Ts[idx + 1u] = Ts[idx] * (1.0 - a);
+        C_pred += T_final * a * rgb_vis_f;
+        T_final *= (1.0 - a);
     }
 
     let background_sample = textureLoad(bgTex, global_id.xy, 0).rgb;
@@ -375,7 +369,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let color_mode = uniforms.mode > 0.5;
     background = select(vec3f(0.0), background_sample, color_mode);
 
-    C_pred += Ts[bezier_count] * background;
+    C_pred += T_final * background;
 
     let dC_raw = 2.0 * (C_pred - tgt_color);
 
@@ -402,14 +396,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let dC_luma = luma_err * luma_w * 6.0; // 2 (from MSE) * 3 (luma boost)
     let dC_chroma = dC_raw - dot(dC_raw, luma_w) * luma_w; // chroma residual
     let dC = (dC_luma + dC_chroma) * contrast_weight;
-    var dT = dot(dC, background);
 
     // Edge mode: coverage loss driving total alpha to match the edge map.
     let EDGE_LOSS_WEIGHT = 2.0;
-    let coverage = 1.0 - Ts[bezier_count];
+    let coverage = 1.0 - T_final;
     let edge_target = tgt_color.r;
     let d_coverage_edge = select(0.0, EDGE_LOSS_WEIGHT * 2.0 * (coverage - edge_target), uniforms.mode < 0.5);
-    dT += -d_coverage_edge;
 
     // Color mode: penalize opacity directly on background pixels (tgt_depth ≈ 1 = no geometry).
     // With reciprocal depth encoding, mesh surface pixels are well below 1.0 and
@@ -445,11 +437,10 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         dir_flow_dir = select(vec2f(0.0), flow_raw / flow_len, dir_flow_use);
     }
 
-    for (var j = 0u; j < bezier_count; j++) {
-        let idx = bezier_count - 1u - j;
-        let a = alphas[idx];
-        if (a < 0.001) { continue; }
-        
+    var C_accum = vec3f(0.0);
+    var T_accum = 1.0;
+
+    for (var idx = 0u; idx < bezier_count; idx++) {
         let i = tile_beziers[idx];
         let b = beziers.items[i];
         let width = max(b.p0.w, 0.001);
@@ -464,16 +455,34 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let p2 = proj2.xy;
         let p3 = proj3.xy;
 
-        let T_prev = Ts[idx];
+        var min_d2 = 1e9;
+        var min_k = 1u;
+        var min_u = 0.0;
+        var prev = p0;
+        for (var k_idx = 1u; k_idx <= N_SEG; k_idx = k_idx + 1u) {
+            let curr = bezier_at(p0, p1, p2, p3, f32(k_idx) / f32(N_SEG));
+            let seg_curr = curr - prev;
+            let len2_curr = max(dot(seg_curr, seg_curr), 1e-8);
+            let u = clamp(dot(p - prev, seg_curr) / len2_curr, 0.0, 1.0);
+            let proj = prev + u * seg_curr;
+            let diff = p - proj;
+            let d2 = dot(diff, diff);
+            if (d2 < min_d2) {
+                min_d2 = d2;
+                min_k = k_idx;
+                min_u = u;
+            }
+            prev = curr;
+        }
 
-        let k = min_seg[idx];
+        let k = min_k;
+        let u_clamped = min_u;
         let t_prev = f32(k - 1u) / f32(N_SEG);
         let t_curr = f32(k) / f32(N_SEG);
         let prev_pt = bezier_at(p0, p1, p2, p3, t_prev);
         let curr_pt = bezier_at(p0, p1, p2, p3, t_curr);
         let seg = curr_pt - prev_pt;
         let len2 = max(dot(seg, seg), 1e-8);
-        let u_clamped = clamp(dot(p - prev_pt, seg) / len2, 0.0, 1.0);
         let proj = prev_pt + u_clamped * seg;
         let d_vec = p - proj;
         let d = max(length(d_vec), 1e-6);
@@ -490,16 +499,44 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let lz_b = dl_b.z;
         let opacity_lin_b = b.color.a + SH_C1_B * (ly_b*b.sh1_a.x + lz_b*b.sh1_a.y + lx_b*b.sh1_a.z);
         let opacity = clamp(opacity_lin_b, 0.0, 1.0);
-        let clamp_gate_o = select(0.0, 1.0, opacity_lin_b > 1e-6 && opacity_lin_b < 1.0 - 1e-6);
+        
+        let local_opacity_tmp = opacity * pressure;
+        let raw_w_tmp = dot(B_pixel, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
+        let linear_w_tmp = max(raw_w_tmp, DEPTH_NEAR_BEZ);
+        let inv_w_tmp = 1.0 / linear_w_tmp;
+        let local_width_tmp = width * pressure * inv_w_tmp;
+        let local_softness_tmp = softness * pressure * inv_w_tmp;
+        let inner_tmp = local_width_tmp - local_softness_tmp;
+        let outer_tmp = local_width_tmp + local_softness_tmp;
+        let a_geom_tmp = 1.0 - smoothstep(inner_tmp, outer_tmp, d);
+        let a = clamp(a_geom_tmp * local_opacity_tmp, 0.0, 0.999);
+
         let rr_lin = b.color.r + SH_C1_B * (ly_b*b.sh1_r.x + lz_b*b.sh1_r.y + lx_b*b.sh1_r.z);
         let gg_lin = b.color.g + SH_C1_B * (ly_b*b.sh1_g.x + lz_b*b.sh1_g.y + lx_b*b.sh1_g.z);
         let bb_lin = b.color.b + SH_C1_B * (ly_b*b.sh1_b.x + lz_b*b.sh1_b.y + lx_b*b.sh1_b.z);
         let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
         let color = rgb_vis;
 
+        let T_prev = T_accum;
+        C_accum += T_prev * a * color;
+        T_accum *= (1.0 - a);
+        
+        if (a < 0.001) { continue; }
+        
+        let clamp_gate_o = select(0.0, 1.0, opacity_lin_b > 1e-6 && opacity_lin_b < 1.0 - 1e-6);
+
         let dColor = dC * (T_prev * a);
+        let inv_T = select(1.0 / T_accum, 0.0, T_accum < 1e-5);
+        let C_rest = (C_pred - C_accum) * inv_T;
+        // Edge loss dT goes backwards, but mathematically it acts just like background.
+        // dT was initialized to `dot(dC, background) - d_coverage_edge`.
+        // C_rest handles the `background` part nicely.
+        // For the edge loss part, we can inject it as an additive term.
+        // Actually, d_coverage_edge is just added to the initial dT.
+        // So dT = dot(dC, C_rest) - d_coverage_edge.
+        // Then da = dT * (-T_prev) + dot(dC, T_prev * color).
+        let dT = dot(dC, C_rest) - d_coverage_edge;
         let da = dT * (-T_prev) + dot(dC, T_prev * color);
-        dT = dT * (1.0 - a) + dot(dC, a * color);
 
         let raw_w = dot(B_pixel, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
         let linear_w = max(raw_w, DEPTH_NEAR_BEZ);
@@ -676,7 +713,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     // Accumulate per-pixel residual loss for ADC seeding.
     // Use the uncovered MSE: pixels with high transmittance (no bezier covers them)
     // and high color error are the best candidates for new bezier placement.
-    let residual = dot(dC_raw * 0.5, dC_raw * 0.5) * Ts[bezier_count];
+    let residual = dot(dC_raw * 0.5, dC_raw * 0.5) * T_final;
     let px_idx = global_id.y * dims.x + global_id.x;
     let FP_LOSS = 10000.0;
     atomicAdd(&pixel_loss[px_idx], i32(residual * FP_LOSS));

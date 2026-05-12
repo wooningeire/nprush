@@ -43,6 +43,57 @@ struct SplatUniforms {
 }
 @group(0) @binding(4) var<uniform> splat_uniforms: SplatUniforms;
 
+const lr_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+    0.0003, 0.0003, 0.0003, 0.005,  // pos + scale_x
+    0.0025, 0.0025, 0.0025, 0.05,   // color + opacity
+    0.001, 0.001, 0.001, 0.001,     // quat
+    0.005, 0.0, 0.0, 0.005,         // scale_y, shape_a, shape_b, scale_z
+    0.0001, 0.0001, 0.0001, 0.0,    // sh1_r
+    0.0001, 0.0001, 0.0001, 0.0,    // sh1_g
+    0.0001, 0.0001, 0.0001, 0.0,    // sh1_b
+    0.0001, 0.0001, 0.0001, 0.0     // sh1_a
+);
+const mu_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+    0.05, 0.05, 0.05, 0.05,
+    0.1, 0.1, 0.1, 0.1,
+    0.05, 0.05, 0.05, 0.05,
+    0.05, 0.0, 0.0, 0.05,
+    0.1, 0.1, 0.1, 0.0,
+    0.1, 0.1, 0.1, 0.0,
+    0.1, 0.1, 0.1, 0.0,
+    0.1, 0.1, 0.1, 0.0
+);
+const fps_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+    10000.0, 10000.0, 10000.0, 10000.0,
+    100000.0, 100000.0, 100000.0, 100000.0,
+    10000.0, 10000.0, 10000.0, 10000.0,
+    10000.0, 10000.0, 10000.0, 10000.0,
+    100000.0, 100000.0, 100000.0, 100000.0,
+    100000.0, 100000.0, 100000.0, 100000.0,
+    100000.0, 100000.0, 100000.0, 100000.0,
+    100000.0, 100000.0, 100000.0, 100000.0
+);
+const lo_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+    -1e9, -1e9, -1e9, 0.001,
+    -5.0, -5.0, -5.0, 0.01,
+    -1e9, -1e9, -1e9, -1e9,
+    0.001, 0.1, 0.01, 0.001,
+    -2.5, -2.5, -2.5, -1e9,
+    -2.5, -2.5, -2.5, -1e9,
+    -2.5, -2.5, -2.5, -1e9,
+    -2.5, -2.5, -2.5, -1e9
+);
+const hi_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+    1e9,  1e9,  1e9, 2.0,
+    5.0,  5.0,  5.0, 0.99,
+    1e9,  1e9,  1e9,  1e9,
+    2.0, 10.0, 5.0,  2.0,
+    2.5,  2.5,  2.5,  1e9,
+    2.5,  2.5,  2.5,  1e9,
+    2.5,  2.5,  2.5,  1e9,
+    2.5,  2.5,  2.5,  1e9
+);
+
 @compute @workgroup_size(64, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let splat_id = global_id.x;
@@ -55,38 +106,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let base_idx = splat_id * {@SPLAT_PARAMS_PER_SPLAT}u;
     let t = current_t + 1.0;
     var pos_grad_norm2 = 0.0;
-
-    // Param indices 16–31: RGB + opacity degree-1 SH (vec4-packed; backward writes xyz only).
-    let lr_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
-        0.0003, 0.0003, 0.0003, 0.005,  // pos + scale_x
-        0.0025, 0.0025, 0.0025, 0.05,   // color + opacity
-        0.001, 0.001, 0.001, 0.001,     // quat
-        0.005, 0.0, 0.0, 0.005,         // scale_y, shape_a, shape_b, scale_z
-        0.0001, 0.0001, 0.0001, 0.0,    // sh1_r
-        0.0001, 0.0001, 0.0001, 0.0,    // sh1_g
-        0.0001, 0.0001, 0.0001, 0.0,    // sh1_b
-        0.0001, 0.0001, 0.0001, 0.0     // sh1_a
-    );
-    let mu_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
-        0.05, 0.05, 0.05, 0.05,
-        0.1, 0.1, 0.1, 0.1,
-        0.05, 0.05, 0.05, 0.05,
-        0.05, 0.0, 0.0, 0.05,
-        0.1, 0.1, 0.1, 0.0,
-        0.1, 0.1, 0.1, 0.0,
-        0.1, 0.1, 0.1, 0.0,
-        0.1, 0.1, 0.1, 0.0
-    );
-    let fps_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
-        10000.0, 10000.0, 10000.0, 10000.0,
-        100000.0, 100000.0, 100000.0, 100000.0,
-        10000.0, 10000.0, 10000.0, 10000.0,
-        10000.0, 10000.0, 10000.0, 10000.0,
-        100000.0, 100000.0, 100000.0, 100000.0,
-        100000.0, 100000.0, 100000.0, 100000.0,
-        100000.0, 100000.0, 100000.0, 100000.0,
-        100000.0, 100000.0, 100000.0, 100000.0
-    );
 
     let beta1 = {@ADAM_BETA1};
     let beta2 = {@ADAM_BETA2};
@@ -108,26 +127,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         s.sh1_b.x, s.sh1_b.y, s.sh1_b.z, s.sh1_b.w,
         s.sh1_a.x, s.sh1_a.y, s.sh1_a.z, s.sh1_a.w
     );
-    let lo = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
-        -1e9, -1e9, -1e9, 0.001,
-        -5.0, -5.0, -5.0, 0.01,
-        -1e9, -1e9, -1e9, -1e9,
-        0.001, 0.1, 0.01, 0.001,
-        -2.5, -2.5, -2.5, -1e9,
-        -2.5, -2.5, -2.5, -1e9,
-        -2.5, -2.5, -2.5, -1e9,
-        -2.5, -2.5, -2.5, -1e9
-    );
-    let hi = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
-        1e9,  1e9,  1e9, 2.0,
-        5.0,  5.0,  5.0, 0.99,
-        1e9,  1e9,  1e9,  1e9,
-        2.0, 10.0, 5.0,  2.0,
-        2.5,  2.5,  2.5,  1e9,
-        2.5,  2.5,  2.5,  1e9,
-        2.5,  2.5,  2.5,  1e9,
-        2.5,  2.5,  2.5,  1e9
-    );
+
 
     for (var lp = 0u; lp < {@SPLAT_PARAMS_PER_SPLAT}u; lp++) {
         let param_idx = base_idx + lp;
@@ -150,7 +150,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
         let max_update = mu_table[lp];
         let update = clamp(raw_update, -max_update, max_update);
 
-        params_arr[lp] = clamp(params_arr[lp] - update, lo[lp], hi[lp]);
+        params_arr[lp] = clamp(params_arr[lp] - update, lo_table[lp], hi_table[lp]);
 
         if (lp <= 2u) { pos_grad_norm2 += grad * grad; }
     }

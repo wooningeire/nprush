@@ -244,10 +244,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let p = pixel_to_p(global_id.xy, dims, aspect);
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
 
-    var alphas = array<f32, MAX_TILE_SPLATS>();
-    var Ts = array<f32, MAX_TILE_SPLATS + 1u>();
-    Ts[0] = 1.0;
     var C_pred = vec3f(0.0);
+    var T_final = 1.0;
 
     for (var idx = 0u; idx < splat_count; idx++) {
         let i = tile_splats[idx];
@@ -259,25 +257,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let opacity_lin = splat_opacity_lin(s, dir_v);
         let opacity_v = clamp(opacity_lin, 0.0, 1.0);
         let a = clamp(select(0.0, exp(power) * opacity_v, power > -15.0), 0.0, 0.999);
-        alphas[idx] = a;
         let rgb_lin = splat_rgb_sh1_linear(s, dir_v);
         let rgb_vis = max(rgb_lin, vec3f(0.0));
-        C_pred += Ts[idx] * a * rgb_vis;
-        Ts[idx+1] = Ts[idx] * (1.0 - a);
+        C_pred += T_final * a * rgb_vis;
+        T_final *= (1.0 - a);
     }
 
     let background = vec3f(0.05);
-    C_pred += Ts[splat_count] * background;
+    C_pred += T_final * background;
     
     let dC = 2.0 * (C_pred - tgt_color);
-    var dT_C = dot(dC, background);
 
-    for (var j = 0u; j < splat_count; j++) {
-        let idx = splat_count - 1u - j;
+    var C_accum = vec3f(0.0);
+    var T_accum = 1.0;
+
+    for (var idx = 0u; idx < splat_count; idx++) {
         let i = tile_splats[idx];
-        let a = alphas[idx];
-        if (a < 0.001) { continue; }
         let s = splats.splats[i];
+        let ps = eval_splat(s, p, aspect);
+        let power = -0.5 * ps.r * ps.r;
+
         let cam_xyz = splat_uniforms.cam_world.xyz;
         let dir_l = splat_view_dir_local(cam_xyz, s.pos_sx.xyz, s.quat);
         let lx = dir_l.x;
@@ -288,21 +287,27 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let bb_lin = s.color.b + SH_C1 * (ly * s.sh1_b.x + lz * s.sh1_b.y + lx * s.sh1_b.z);
         let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
         let color = rgb_vis;
+        
         let opacity_lin_b = s.color.a + SH_C1 * (ly * s.sh1_a.x + lz * s.sh1_a.y + lx * s.sh1_a.z);
         let opacity = clamp(opacity_lin_b, 0.0, 1.0);
+        let a = clamp(select(0.0, exp(power) * opacity, power > -15.0), 0.0, 0.999);
+        
+        let T_prev = T_accum;
+        C_accum += T_prev * a * color;
+        T_accum *= (1.0 - a);
+        
+        if (a < 0.001) { continue; }
+        
         let clamp_gate_o = select(0.0, 1.0, opacity_lin_b > 1e-6 && opacity_lin_b < 1.0 - 1e-6);
-        let T_prev = Ts[idx];
-        let ps = eval_splat(s, p, aspect);
 
         let dColor = dC * (T_prev * a);
-        let da = dT_C * (-T_prev) + dot(dC, T_prev * color);
-        
-        dT_C = dT_C * (1.0 - a) + dot(dC, a * color);
+        let inv_T = select(1.0 / T_accum, 0.0, T_accum < 1e-5);
+        let C_rest = (C_pred - C_accum) * inv_T;
+        let da = dot(dC, T_prev * color - T_prev * C_rest);
         let sx = max(s.pos_sx.w, 0.0001);
         let sy = max(s.sy_shape.x, 0.0001);
         let sz = max(s.sy_shape.w, 0.0001);
-        // Standard Gaussian: power = -0.5 * r²
-        let power = -0.5 * ps.r * ps.r;
+
 
         var d_screen = vec2f(0.0);
         var d_sx = 0.0;
