@@ -650,8 +650,10 @@ export class GpuSplatOptimizerManager {
         );
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
+    dispatch(commandEncoder: GPUCommandEncoder, vpMat: Mat4, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
         if (!this.backwardBindGroup) return;
+
+        this.dispatchBinning(commandEncoder, vpMat);
 
         // Update pixel count for gradient normalization in the step shader.
         // AdamState layout: m [N], v [N], t [1], pixel_count [1], pad [2]

@@ -54,7 +54,9 @@ struct ADCArray {
 // Per-pixel residual loss map: accumulated as fixed-point i32 (scale 10000).
 // ADC reads this to find high-loss regions and seeds new beziers there.
 @group(0) @binding(9) var<storage, read_write> pixel_loss: array<atomic<i32>, {@PIXEL_LOSS_SIZE}u>;
-@group(0) @binding(10) var<storage, read> sort_order: array<u32, {@NUM_BEZIERS}u>;
+@group(0) @binding(11) var<storage, read> instance_vals: array<u32>;
+@group(0) @binding(12) var<storage, read> tile_starts: array<u32>;
+@group(0) @binding(13) var<storage, read> tile_ends: array<u32>;
 
 const N_SEG: u32 = {@BEZIER_POLY_SEG}u;
 // Reciprocal depth near-plane constant — must match mesh.wgsl and splat_forward.wgsl.
@@ -133,13 +135,6 @@ fn bezier_rgb_linear_dl(b: Bezier, dl: vec3f) -> vec3f {
     return vec3f(rr, gg, bb);
 }
 
-const MAX_TILE_BEZIERS = {@BEZIER_MAX_TILE_BEZIERS}u;
-const TILE_CACHE_DIM: u32 = 20u;
-const TILE_CACHE_SZ: u32 = 400u;
-const SORT_CHUNK: u32 = {@BEZIER_SORT_CHUNK}u;
-var<workgroup> tile_mask: array<atomic<u32>, {@NUM_BEZIERS_DIV_32}u>;
-var<workgroup> tile_beziers: array<u32, MAX_TILE_BEZIERS>;
-var<workgroup> tile_bezier_count: atomic<u32>;
 var<workgroup> shared_beziers: array<Bezier, 128>;
 var<workgroup> compact_scan: array<u32, 256u>;
 var<workgroup> tile_tgt_luma: array<f32, TILE_CACHE_SZ>;
@@ -159,106 +154,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let dims = textureDimensions(targetTex);
     let aspect = f32(dims.x) / f32(dims.y);
     
-    // --- 1. COOPERATIVE TILE BINNING ---
-    let local_idx = local_id.y * 16u + local_id.x;
+    let tile_id = workgroup_id.y * u32(ceil(f32(dims.x) / 16.0)) + workgroup_id.x;
+    let start_idx = tile_starts[tile_id];
+    let end_idx = tile_ends[tile_id];
+    let bezier_count = end_idx - start_idx;
     
-    for (var i = local_idx; i < {@NUM_BEZIERS_DIV_32}; i += 256u) {
-        atomicStore(&tile_mask[i], 0u);
-    }
-    workgroupBarrier();
-    
-    let tile_min_px = workgroup_id.xy * 16u;
-    let tile_max_px = min(tile_min_px + vec2u(16u), dims);
-    let p00 = pixel_to_p(tile_min_px, dims, aspect);
-    let p11 = pixel_to_p(tile_max_px, dims, aspect);
-    let tile_min_p = vec2f(p00.x, p11.y);
-    let tile_max_p = vec2f(p11.x, p00.y);
-    
-    for (var bezier_id = local_idx; bezier_id < {@NUM_BEZIERS}; bezier_id += 256u) {
-        let b = beziers.items[bezier_id];
-        if (b.color.a < {@BEZIER_KILL_ALPHA_THRESH}) { continue; }
-        
-        let width = max(b.p0.w, 0.001);
-        let softness = max(b.p1.w, 0.001);
-        
-        let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
-        let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
-        let proj2 = project_center(uniforms.vp, b.p2.xyz, aspect);
-        let proj3 = project_center(uniforms.vp, b.p3.xyz, aspect);
-        // Skip if any control point is behind the camera near plane — same rule
-        // as the forward pass so tile binning stays consistent.
-        const DEPTH_NEAR_CULL = 0.1;
-        if (proj0.z < DEPTH_NEAR_CULL || proj1.z < DEPTH_NEAR_CULL || proj2.z < DEPTH_NEAR_CULL || proj3.z < DEPTH_NEAR_CULL) { continue; }
-
-        let p0 = proj0.xy;
-        let p1 = proj1.xy;
-        let p2 = proj2.xy;
-        let p3 = proj3.xy;
-
-        let pm1 = bezier_at(p0, p1, p2, p3, 0.25);
-        let pm2 = bezier_at(p0, p1, p2, p3, 0.5);
-        let pm3 = bezier_at(p0, p1, p2, p3, 0.75);
-
-        let outer_cull = width + softness;
-        let min_p = min(min(min(p0, p3), min(pm1, pm2)), pm3) - vec2f(outer_cull);
-        let max_p = max(max(max(p0, p3), max(pm1, pm2)), pm3) + vec2f(outer_cull);
-
-        if (!(min_p.x > tile_max_p.x || max_p.x < tile_min_p.x || 
-              min_p.y > tile_max_p.y || max_p.y < tile_min_p.y)) {
-            let word_idx = bezier_id / 32u;
-            let bit_idx = bezier_id % 32u;
-            atomicOr(&tile_mask[word_idx], 1u << bit_idx);
-        }
-    }
-    workgroupBarrier();
-
-    // Parallel compact of tile hits in paint order (nearest sort index first).
-    var hit_chunk = 0u;
-    for (var j = 0u; j < SORT_CHUNK; j = j + 1u) {
-        let idx = local_idx * SORT_CHUNK + j;
-        if (idx < {@NUM_BEZIERS}u) {
-            let bezier_id = sort_order[{@NUM_BEZIERS}u - 1u - idx];
-            let word_idx = bezier_id / 32u;
-            let bit_idx = bezier_id % 32u;
-            let word = atomicLoad(&tile_mask[word_idx]);
-            if ((word & (1u << bit_idx)) != 0u) {
-                hit_chunk = hit_chunk + 1u;
-            }
-        }
-    }
-    compact_scan[local_idx] = hit_chunk;
-    workgroupBarrier();
-    if (local_idx == 0u) {
-        var prefix = 0u;
-        for (var i = 0u; i < 256u; i = i + 1u) {
-            let hits_i = compact_scan[i];
-            compact_scan[i] = prefix;
-            prefix = prefix + hits_i;
-        }
-        atomicStore(&tile_bezier_count, min(prefix, MAX_TILE_BEZIERS));
-    }
-    workgroupBarrier();
-    let list_base = compact_scan[local_idx];
-    var sc = 0u;
-    for (var j2 = 0u; j2 < SORT_CHUNK; j2 = j2 + 1u) {
-        let idx2 = local_idx * SORT_CHUNK + j2;
-        if (idx2 < {@NUM_BEZIERS}u) {
-            let bezier_id2 = sort_order[{@NUM_BEZIERS}u - 1u - idx2];
-            let word_idx2 = bezier_id2 / 32u;
-            let bit_idx2 = bezier_id2 % 32u;
-            let word2 = atomicLoad(&tile_mask[word_idx2]);
-            if ((word2 & (1u << bit_idx2)) != 0u) {
-                let dst = list_base + sc;
-                if (dst < MAX_TILE_BEZIERS) {
-                    tile_beziers[dst] = bezier_id2;
-                }
-                sc = sc + 1u;
-            }
-        }
-    }
-    workgroupBarrier();
-
-    let bezier_count = atomicLoad(&tile_bezier_count);
+    if (global_id.x >= dims.x || global_id.y >= dims.y) { return; }
 
     // Cooperatively cache target luma / fine gray / normal scalar for ±2 neighborhood.
     let ox = i32(workgroup_id.x * 16u);
@@ -293,10 +194,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var C_pred = vec3f(0.0);
     var T_final = 1.0;
 
+    let local_idx = local_id.y * 16u + local_id.x;
     for (var chunk = 0u; chunk < bezier_count; chunk += 128u) {
         let load_idx = chunk + local_idx;
         if (local_idx < 128u && load_idx < bezier_count) {
-            let bezier_id = tile_beziers[load_idx];
+            let bezier_id = instance_vals[start_idx + load_idx];
             shared_beziers[local_idx] = beziers.items[bezier_id];
         }
         workgroupBarrier();
@@ -304,6 +206,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let valid_count = min(128u, bezier_count - chunk);
         for (var i = 0u; i < valid_count; i++) {
             let b = shared_beziers[i];
+            let bezier_id = instance_vals[start_idx + chunk + i];
         
         let width = max(b.p0.w, 0.001);
         let softness = max(b.p1.w, 0.001);
