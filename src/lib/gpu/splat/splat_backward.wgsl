@@ -35,6 +35,7 @@ const MAX_TILE_SPLATS = {@SPLAT_MAX_TILE_SPLATS}u;
 var<workgroup> tile_mask: array<atomic<u32>, {@NUM_SPLATS_DIV_32}u>;
 var<workgroup> tile_splats: array<u32, MAX_TILE_SPLATS>;
 var<workgroup> tile_splat_count: atomic<u32>;
+var<workgroup> shared_splats: array<Splat, 256>;
 
 fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32) -> vec2f {
     let uv = (vec2f(px) + vec2f(0.5)) / vec2f(dims);
@@ -247,20 +248,30 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var C_pred = vec3f(0.0);
     var T_final = 1.0;
 
-    for (var idx = 0u; idx < splat_count; idx++) {
-        let i = tile_splats[idx];
-        let s = splats.splats[i];
-        let ps = eval_splat(s, p, aspect);
-        // Standard Gaussian: power = -0.5 * r²
-        let power = -0.5 * ps.r * ps.r;
-        let dir_v = splat_view_dir_local(splat_uniforms.cam_world.xyz, s.pos_sx.xyz, s.quat);
-        let opacity_lin = splat_opacity_lin(s, dir_v);
-        let opacity_v = clamp(opacity_lin, 0.0, 1.0);
-        let a = clamp(select(0.0, exp(power) * opacity_v, power > -15.0), 0.0, 0.999);
-        let rgb_lin = splat_rgb_sh1_linear(s, dir_v);
-        let rgb_vis = max(rgb_lin, vec3f(0.0));
-        C_pred += T_final * a * rgb_vis;
-        T_final *= (1.0 - a);
+    for (var chunk = 0u; chunk < splat_count; chunk += 256u) {
+        let load_idx = chunk + local_idx;
+        if (load_idx < splat_count) {
+            let splat_id = tile_splats[load_idx];
+            shared_splats[local_idx] = splats.splats[splat_id];
+        }
+        workgroupBarrier();
+
+        let valid_count = min(256u, splat_count - chunk);
+        for (var i = 0u; i < valid_count; i++) {
+            let s = shared_splats[i];
+            let ps = eval_splat(s, p, aspect);
+            // Standard Gaussian: power = -0.5 * r²
+            let power = -0.5 * ps.r * ps.r;
+            let dir_v = splat_view_dir_local(splat_uniforms.cam_world.xyz, s.pos_sx.xyz, s.quat);
+            let opacity_lin = splat_opacity_lin(s, dir_v);
+            let opacity_v = clamp(opacity_lin, 0.0, 1.0);
+            let a = clamp(select(0.0, exp(power) * opacity_v, power > -15.0), 0.0, 0.999);
+            let rgb_lin = splat_rgb_sh1_linear(s, dir_v);
+            let rgb_vis = max(rgb_lin, vec3f(0.0));
+            C_pred += T_final * a * rgb_vis;
+            T_final *= (1.0 - a);
+        }
+        workgroupBarrier();
     }
 
     let background = vec3f(0.05);
@@ -271,32 +282,41 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var C_accum = vec3f(0.0);
     var T_accum = 1.0;
 
-    for (var idx = 0u; idx < splat_count; idx++) {
-        let i = tile_splats[idx];
-        let s = splats.splats[i];
-        let ps = eval_splat(s, p, aspect);
-        let power = -0.5 * ps.r * ps.r;
+    for (var chunk = 0u; chunk < splat_count; chunk += 256u) {
+        let load_idx = chunk + local_idx;
+        if (load_idx < splat_count) {
+            let splat_id = tile_splats[load_idx];
+            shared_splats[local_idx] = splats.splats[splat_id];
+        }
+        workgroupBarrier();
 
-        let cam_xyz = splat_uniforms.cam_world.xyz;
-        let dir_l = splat_view_dir_local(cam_xyz, s.pos_sx.xyz, s.quat);
-        let lx = dir_l.x;
-        let ly = dir_l.y;
-        let lz = dir_l.z;
-        let rr_lin = s.color.r + SH_C1 * (ly * s.sh1_r.x + lz * s.sh1_r.y + lx * s.sh1_r.z);
-        let gg_lin = s.color.g + SH_C1 * (ly * s.sh1_g.x + lz * s.sh1_g.y + lx * s.sh1_g.z);
-        let bb_lin = s.color.b + SH_C1 * (ly * s.sh1_b.x + lz * s.sh1_b.y + lx * s.sh1_b.z);
-        let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
-        let color = rgb_vis;
-        
-        let opacity_lin_b = s.color.a + SH_C1 * (ly * s.sh1_a.x + lz * s.sh1_a.y + lx * s.sh1_a.z);
-        let opacity = clamp(opacity_lin_b, 0.0, 1.0);
-        let a = clamp(select(0.0, exp(power) * opacity, power > -15.0), 0.0, 0.999);
-        
-        let T_prev = T_accum;
-        C_accum += T_prev * a * color;
-        T_accum *= (1.0 - a);
-        
-        if (a < 0.001) { continue; }
+        let valid_count = min(256u, splat_count - chunk);
+        for (var i = 0u; i < valid_count; i++) {
+            let s = shared_splats[i];
+            let splat_id = tile_splats[chunk + i];
+            let ps = eval_splat(s, p, aspect);
+            let power = -0.5 * ps.r * ps.r;
+
+            let cam_xyz = splat_uniforms.cam_world.xyz;
+            let dir_l = splat_view_dir_local(cam_xyz, s.pos_sx.xyz, s.quat);
+            let lx = dir_l.x;
+            let ly = dir_l.y;
+            let lz = dir_l.z;
+            let rr_lin = s.color.r + SH_C1 * (ly * s.sh1_r.x + lz * s.sh1_r.y + lx * s.sh1_r.z);
+            let gg_lin = s.color.g + SH_C1 * (ly * s.sh1_g.x + lz * s.sh1_g.y + lx * s.sh1_g.z);
+            let bb_lin = s.color.b + SH_C1 * (ly * s.sh1_b.x + lz * s.sh1_b.y + lx * s.sh1_b.z);
+            let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
+            let color = rgb_vis;
+            
+            let opacity_lin_b = s.color.a + SH_C1 * (ly * s.sh1_a.x + lz * s.sh1_a.y + lx * s.sh1_a.z);
+            let opacity = clamp(opacity_lin_b, 0.0, 1.0);
+            let a = clamp(select(0.0, exp(power) * opacity, power > -15.0), 0.0, 0.999);
+            
+            let T_prev = T_accum;
+            C_accum += T_prev * a * color;
+            T_accum *= (1.0 - a);
+            
+            if (a < 0.001) { continue; }
         
         let clamp_gate_o = select(0.0, 1.0, opacity_lin_b > 1e-6 && opacity_lin_b < 1.0 - 1e-6);
 
@@ -435,7 +455,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let d_relu_g = select(0.0, dColor.g, gg_lin > 0.0);
         let d_relu_b = select(0.0, dColor.b, bb_lin > 0.0);
 
-        let base_idx = i * {@SPLAT_PARAMS_PER_SPLAT}u;
+        let base_idx = splat_id * {@SPLAT_PARAMS_PER_SPLAT}u;
         atomicAdd(&grads.data[base_idx + 0u], i32(d_pos.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 1u], i32(d_pos.y * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 2u], i32(d_pos.z * FP_SCALE_POS));

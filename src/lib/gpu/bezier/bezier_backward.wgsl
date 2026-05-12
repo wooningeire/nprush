@@ -140,6 +140,7 @@ const SORT_CHUNK: u32 = {@BEZIER_SORT_CHUNK}u;
 var<workgroup> tile_mask: array<atomic<u32>, {@NUM_BEZIERS_DIV_32}u>;
 var<workgroup> tile_beziers: array<u32, MAX_TILE_BEZIERS>;
 var<workgroup> tile_bezier_count: atomic<u32>;
+var<workgroup> shared_beziers: array<Bezier, 128>;
 var<workgroup> compact_scan: array<u32, 256u>;
 var<workgroup> tile_tgt_luma: array<f32, TILE_CACHE_SZ>;
 var<workgroup> tile_tgt_gray: array<f32, TILE_CACHE_SZ>;
@@ -292,9 +293,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var C_pred = vec3f(0.0);
     var T_final = 1.0;
 
-    for (var idx = 0u; idx < bezier_count; idx++) {
-        let i = tile_beziers[idx];
-        let b = beziers.items[i];
+    for (var chunk = 0u; chunk < bezier_count; chunk += 128u) {
+        let load_idx = chunk + local_idx;
+        if (local_idx < 128u && load_idx < bezier_count) {
+            let bezier_id = tile_beziers[load_idx];
+            shared_beziers[local_idx] = beziers.items[bezier_id];
+        }
+        workgroupBarrier();
+
+        let valid_count = min(128u, bezier_count - chunk);
+        for (var i = 0u; i < valid_count; i++) {
+            let b = shared_beziers[i];
         
         let width = max(b.p0.w, 0.001);
         let softness = max(b.p1.w, 0.001);
@@ -362,6 +371,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
         C_pred += T_final * a * rgb_vis_f;
         T_final *= (1.0 - a);
+    }
+    workgroupBarrier();
     }
 
     let background_sample = textureLoad(bgTex, global_id.xy, 0).rgb;
@@ -440,9 +451,18 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var C_accum = vec3f(0.0);
     var T_accum = 1.0;
 
-    for (var idx = 0u; idx < bezier_count; idx++) {
-        let i = tile_beziers[idx];
-        let b = beziers.items[i];
+    for (var chunk = 0u; chunk < bezier_count; chunk += 128u) {
+        let load_idx = chunk + local_idx;
+        if (local_idx < 128u && load_idx < bezier_count) {
+            let bezier_id = tile_beziers[load_idx];
+            shared_beziers[local_idx] = beziers.items[bezier_id];
+        }
+        workgroupBarrier();
+
+        let valid_count = min(128u, bezier_count - chunk);
+        for (var i = 0u; i < valid_count; i++) {
+            let bezier_id = tile_beziers[chunk + i];
+            let b = shared_beziers[i];
         let width = max(b.p0.w, 0.001);
         let softness = max(b.p1.w, 0.001);
 
@@ -599,7 +619,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let B_curr = bernstein(t_curr);
 
         // --- Regularization (fine bezier layer only: max_width > 0) ---
-        let base = i * {@BEZIER_PARAMS_PER}u;
+        let base = bezier_id * {@BEZIER_PARAMS_PER}u;
 
         // 1. Softness → 0: loss = REG_SOFT * softness^2
         //    d_soft += REG_SOFT * 2 * softness
@@ -707,7 +727,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
         // Accumulate this bezier's contribution to the color loss for ADC pruning.
         let color_loss_contrib = dot(dC * dC, vec3f(1.0)) * (T_prev * a);
-        adc.loss_accum[i] += color_loss_contrib;
+        adc.loss_accum[bezier_id] += color_loss_contrib;
+    }
+    workgroupBarrier();
     }
 
     // Accumulate per-pixel residual loss for ADC seeding.
