@@ -18,6 +18,22 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 </script>
 
 <div class="overlays">
+    <label class="upload-btn" title="Load a GLB file">
+        📂 Load Model
+        <input
+            type="file"
+            accept=".glb"
+            style="display:none"
+            onchange={(e) => {
+                const file = (e.target as HTMLInputElement).files?.[0];
+                if (file) viewerState.loadModelFromFile(file);
+                (e.target as HTMLInputElement).value = "";
+            }}
+        />
+    </label>
+
+    <div class="separator"></div>
+
     <div class="slider-group">
         <label style="flex-direction: row; justify-content: space-between;">
             Render Mode
@@ -312,6 +328,26 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             height: 1px;
             background: rgba(255, 255, 255, 0.15);
             margin: 0.5rem 0;
+        }
+
+        .upload-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.08);
+            color: white;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s ease;
+
+            &:hover {
+                background: rgba(255, 255, 255, 0.15);
+            }
         }
 
         .render-btn {

@@ -4,7 +4,7 @@ import { CameraOrbit } from "./CameraOrbit.svelte.ts";
 import { requestGpu } from "$/gpu/requestGpu";
 import { GpuRunner } from "./GpuRunner.svelte.ts";
 import { constants } from "$/gpu/constants";
-import { loadGlb } from "../gpu/file-load/loadGlb.ts";
+import { loadGlb, parseGlbBuffer } from "../gpu/file-load/loadGlb.ts";
 import artelorianUrl from "$/assets/artelorian.glb?url";
 import groundUrl from "$/assets/ground.glb?url";
 import hdrUrl from "$/assets/lakeside_sunrise_2k.hdr?url";
@@ -293,6 +293,29 @@ export class ViewerState {
         } finally {
             this.isTurntableRendering = false;
             this.turntableProgress = 0;
+        }
+    }
+
+    async loadModelFromFile(file: File) {
+        if (!this.runner) {
+            showToast("renderer not ready yet", "error");
+            return;
+        }
+        const t = showToast(`loading ${file.name}…`, "info", 0);
+        try {
+            const buffer = await file.arrayBuffer();
+            const mesh = parseGlbBuffer(buffer);
+            const t2 = showToast("building BVH…", "info", 0);
+            this.meshVerts = new Float32Array(mesh.vertices);
+            this.meshBvh = buildBvh(this.meshVerts, new Uint32Array(mesh.indices));
+            dismissToast(t2);
+            this.runner.replaceMesh(mesh);
+            dismissToast(t);
+            showToast(`loaded ${file.name}`, "success");
+        } catch (e) {
+            dismissToast(t);
+            console.error("Failed to load model", e);
+            showToast(`failed to load model: ${(e as Error)?.message ?? e}`, "error", 0);
         }
     }
 

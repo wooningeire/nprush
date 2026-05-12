@@ -483,6 +483,12 @@ export class GpuRunner {
      * After this returns, `multiviewDataset` is populated and training can
      * use it as a fixed dataset — no live PT dispatch needed per frame.
      */
+    replaceMesh(mesh: MeshData) {
+        this.meshRenderPipelineManager.replaceMesh(mesh);
+        const ptMeshes: MeshData[] = [mesh];
+        this.pathTracePipelineManager.setMeshes(ptMeshes);
+    }
+
     async prerenderDataset(): Promise<void> {
         const vs = this.viewerState;
         const numViews = vs.multiviewNumViews as number;

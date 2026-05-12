@@ -19,9 +19,9 @@ export class GpuMeshRenderPipelineManager {
     readonly renderPipeline: GPURenderPipeline;
     readonly uniformsManager: GpuUniformsBufferManager;
 
-    readonly vertexBuffer: GPUBuffer;
-    readonly indexBuffer: GPUBuffer;
-    readonly indexCount: number;
+    vertexBuffer: GPUBuffer;
+    indexBuffer: GPUBuffer;
+    indexCount: number;
 
     private meshSplatsBuffer: GPUBuffer;
     private meshUniformsBuffer: GPUBuffer;
@@ -159,6 +159,26 @@ export class GpuMeshRenderPipelineManager {
             usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
         });
         device.queue.writeBuffer(this.indexBuffer, 0, mesh.indices as any);
+        this.indexCount = mesh.indices.length;
+    }
+
+    replaceMesh(mesh: MeshData) {
+        this.vertexBuffer.destroy();
+        this.indexBuffer.destroy();
+
+        this.vertexBuffer = this.device.createBuffer({
+            label: "mesh vertex buffer",
+            size: mesh.vertices.byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.vertexBuffer, 0, mesh.vertices as any);
+
+        this.indexBuffer = this.device.createBuffer({
+            label: "mesh index buffer",
+            size: mesh.indices.byteLength,
+            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.indexBuffer, 0, mesh.indices as any);
         this.indexCount = mesh.indices.length;
     }
 

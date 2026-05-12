@@ -118,6 +118,15 @@ export async function loadGlb(
     return parseGlb(buffer, normalize, materialOverride, meshName);
 }
 
+export function parseGlbBuffer(
+    buffer: ArrayBuffer,
+    normalize = true,
+    materialOverride?: [number, number, number, number],
+    meshName?: string,
+): MeshData {
+    return parseGlb(buffer, normalize, materialOverride, meshName);
+}
+
 function parseGlb(
     buffer: ArrayBuffer,
     normalize = true,
