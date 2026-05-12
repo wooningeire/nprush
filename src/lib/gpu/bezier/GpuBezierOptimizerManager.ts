@@ -44,13 +44,13 @@ export class GpuBezierOptimizerManager {
     private readonly adcBindGroupLayout: GPUBindGroupLayout;
 
     private readonly adcScratchBuffer: GPUBuffer;
-    private readonly sortInitPipeline: GPUComputePipeline;
-    private readonly sortStepPipeline: GPUComputePipeline;
-    private readonly sortInitBindGroup: GPUBindGroup;
-    private readonly sortStepBindGroupAtoB: GPUBindGroup;
-    private readonly sortStepBindGroupBtoA: GPUBindGroup;
-    private readonly numSortSteps: number;
-    private readonly sortN: number;
+    private readonly histBuffer: GPUBuffer;
+    private readonly radixInitPipeline: GPUComputePipeline;
+    private readonly radixCountPipeline: GPUComputePipeline;
+    private readonly radixScanPipeline: GPUComputePipeline;
+    private readonly radixScatterPipeline: GPUComputePipeline;
+    private readonly sortBindGroupAtoB: GPUBindGroup;
+    private readonly sortBindGroupBtoA: GPUBindGroup;
 
     private backwardBindGroup: GPUBindGroup | null = null;
     private stepCount: number = 0;
@@ -123,40 +123,46 @@ export class GpuBezierOptimizerManager {
         });
 
         // Sort Buffers
-        this.sortN = nextPowerOfTwoAtLeast(this.numBeziers);
-        const logN = Math.log2(this.sortN);
-        const numSteps = (logN * (logN + 1)) / 2;
-        const finalInA = numSteps % 2 === 0;
-
         this.sortKeysBufferA = device.createBuffer({
             label: "bezier sort keys A",
-            size: this.sortN * 4,
+            size: this.numBeziers * 4,
             usage: GPUBufferUsage.STORAGE,
         });
         this.sortKeysBufferB = device.createBuffer({
             label: "bezier sort keys B",
-            size: this.sortN * 4,
+            size: this.numBeziers * 4,
             usage: GPUBufferUsage.STORAGE,
         });
         this.sortIndicesBufferA = device.createBuffer({
             label: "bezier sort indices A",
-            size: this.sortN * 4,
+            size: this.numBeziers * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this.sortIndicesBufferB = device.createBuffer({
             label: "bezier sort indices B",
-            size: this.sortN * 4,
+            size: this.numBeziers * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
-        this.sortKeysBuffer = finalInA ? this.sortKeysBufferA : this.sortKeysBufferB;
-        this.sortIndicesBuffer = finalInA ? this.sortIndicesBufferA : this.sortIndicesBufferB;
+        const W = Math.ceil(this.numBeziers / 256);
+        this.histBuffer = device.createBuffer({
+            label: "bezier sort histogram",
+            size: 256 * W * 4,
+            usage: GPUBufferUsage.STORAGE,
+        });
+
+        this.sortKeysBuffer = this.sortKeysBufferA;
+        this.sortIndicesBuffer = this.sortIndicesBufferA;
 
         this.sortUniformsBuffer = device.createBuffer({
             label: "bezier sort uniforms",
-            size: 256 * (numSteps + 1),
+            size: 1024,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
+
+        for (let i = 0; i < 4; i++) {
+            device.queue.writeBuffer(this.sortUniformsBuffer, i * 256 + 64, new Uint32Array([i * 8, 0, 0, 0]));
+        }
 
         // NUM_BEZIERS_PLUS_ONE / NUM_BEZIERS_MINUS_ONE must come before
         // NUM_BEZIERS for the same substring reason as the splat shaders.
@@ -175,7 +181,6 @@ export class GpuBezierOptimizerManager {
                 BEZIER_SORT_CHUNK: Math.ceil(this.numBeziers / 256),
                 NUM_BEZIER_PARAMS: this.numParams,
                 PIXEL_LOSS_SIZE: PIXEL_LOSS_MAX,
-                SORT_N: this.sortN,
             });
         };
 
@@ -293,12 +298,13 @@ export class GpuBezierOptimizerManager {
         const sortBindGroupLayout = device.createBindGroupLayout({
             label: "bezier sort bind group layout",
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
-                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true } },
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // splats
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // in_keys
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // in_indices
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // out_keys
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // out_indices
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true } }, // sort_uniforms
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // hist
             ],
         });
         const sortModule = device.createShaderModule({ label: "bezier sort", code: inject(sortModuleSrc) });
@@ -344,38 +350,37 @@ export class GpuBezierOptimizerManager {
         initPass.end();
         device.queue.submit([initEncoder.finish()]);
 
-        this.sortInitPipeline = device.createComputePipeline({
+        const sortLayout = device.createPipelineLayout({
+            label: "bezier sort pipeline layout",
+            bindGroupLayouts: [sortBindGroupLayout],
+        });
+
+        this.radixInitPipeline = device.createComputePipeline({
             label: "bezier sort init pipeline",
-            layout: device.createPipelineLayout({
-                label: "bezier sort init pipeline layout",
-                bindGroupLayouts: [sortBindGroupLayout],
-            }),
+            layout: sortLayout,
             compute: { module: sortModule, entryPoint: "init_keys" },
         });
-        this.sortStepPipeline = device.createComputePipeline({
-            label: "bezier sort step pipeline",
-            layout: device.createPipelineLayout({
-                label: "bezier sort step pipeline layout",
-                bindGroupLayouts: [sortBindGroupLayout],
-            }),
-            compute: { module: sortModule, entryPoint: "sort_step" },
+
+        this.radixCountPipeline = device.createComputePipeline({
+            label: "bezier sort count pipeline",
+            layout: sortLayout,
+            compute: { module: sortModule, entryPoint: "count" },
         });
 
-        this.sortInitBindGroup = device.createBindGroup({
-            label: "bezier sort init bind group",
-            layout: sortBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.bezierBuffer } },
-                { binding: 1, resource: { buffer: this.sortKeysBufferB } },
-                { binding: 2, resource: { buffer: this.sortIndicesBufferB } },
-                { binding: 3, resource: { buffer: this.sortKeysBufferA } },
-                { binding: 4, resource: { buffer: this.sortIndicesBufferA } },
-                { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
-            ],
+        this.radixScanPipeline = device.createComputePipeline({
+            label: "bezier sort scan pipeline",
+            layout: sortLayout,
+            compute: { module: sortModule, entryPoint: "scan" },
         });
 
-        this.sortStepBindGroupAtoB = device.createBindGroup({
-            label: "bezier sort step bind group A to B",
+        this.radixScatterPipeline = device.createComputePipeline({
+            label: "bezier sort scatter pipeline",
+            layout: sortLayout,
+            compute: { module: sortModule, entryPoint: "scatter" },
+        });
+
+        this.sortBindGroupAtoB = device.createBindGroup({
+            label: "bezier sort bind group A to B",
             layout: sortBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
@@ -384,11 +389,12 @@ export class GpuBezierOptimizerManager {
                 { binding: 3, resource: { buffer: this.sortKeysBufferB } },
                 { binding: 4, resource: { buffer: this.sortIndicesBufferB } },
                 { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
+                { binding: 6, resource: { buffer: this.histBuffer } },
             ],
         });
 
-        this.sortStepBindGroupBtoA = device.createBindGroup({
-            label: "bezier sort step bind group B to A",
+        this.sortBindGroupBtoA = device.createBindGroup({
+            label: "bezier sort bind group B to A",
             layout: sortBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
@@ -397,18 +403,9 @@ export class GpuBezierOptimizerManager {
                 { binding: 3, resource: { buffer: this.sortKeysBufferA } },
                 { binding: 4, resource: { buffer: this.sortIndicesBufferA } },
                 { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
+                { binding: 6, resource: { buffer: this.histBuffer } },
             ],
         });
-
-        let stepIdx = 0;
-        for (let block_k = 1; block_k <= logN; block_k++) {
-            for (let sub_k = block_k - 1; sub_k >= 0; sub_k--) {
-                const offset = 256 * (stepIdx + 1);
-                device.queue.writeBuffer(this.sortUniformsBuffer, offset + 64, new Uint32Array([block_k, sub_k, 0, 0]));
-                stepIdx++;
-            }
-        }
-        this.numSortSteps = stepIdx;
     }
 
     writeVPMatrix(mat: Float32Array | number[]) {
@@ -620,27 +617,43 @@ export class GpuBezierOptimizerManager {
     dispatchSort(commandEncoder: GPUCommandEncoder, vpMat: Mat4) {
         const vpData = vpMat as Float32Array;
 
-        this.device.queue.writeBuffer(
-            this.sortUniformsBuffer, 0,
-            vpData.buffer, vpData.byteOffset, vpData.byteLength,
-        );
+        for (let i = 0; i < 4; i++) {
+            this.device.queue.writeBuffer(
+                this.sortUniformsBuffer, i * 256,
+                vpData.buffer, vpData.byteOffset, vpData.byteLength,
+            );
+        }
 
-        const wg = Math.ceil(this.sortN / 256);
+        const wg = Math.ceil(this.numBeziers / 256);
 
         const initPass = commandEncoder.beginComputePass({ label: "bezier sort init pass" });
-        initPass.setPipeline(this.sortInitPipeline);
-        initPass.setBindGroup(0, this.sortInitBindGroup, [0]);
+        initPass.setPipeline(this.radixInitPipeline);
+        // Bind to AtoB to write to Buffer A. Uniform offset 0 (shift 0).
+        initPass.setBindGroup(0, this.sortBindGroupAtoB, [0]);
         initPass.dispatchWorkgroups(wg);
         initPass.end();
 
-        const stepWg = Math.ceil(this.sortN / 2 / 256);
-        for (let i = 0; i < this.numSortSteps; i++) {
-            const stepPass = commandEncoder.beginComputePass({ label: `bezier sort step ${i}` });
-            stepPass.setPipeline(this.sortStepPipeline);
-            const bg = (i % 2 === 0) ? this.sortStepBindGroupAtoB : this.sortStepBindGroupBtoA;
-            stepPass.setBindGroup(0, bg, [256 * (i + 1)]);
-            stepPass.dispatchWorkgroups(stepWg);
-            stepPass.end();
+        for (let i = 0; i < 4; i++) {
+            const bg = (i % 2 === 0) ? this.sortBindGroupAtoB : this.sortBindGroupBtoA;
+            const offset = i * 256;
+
+            const countPass = commandEncoder.beginComputePass({ label: `bezier sort count ${i}` });
+            countPass.setPipeline(this.radixCountPipeline);
+            countPass.setBindGroup(0, bg, [offset]);
+            countPass.dispatchWorkgroups(wg);
+            countPass.end();
+
+            const scanPass = commandEncoder.beginComputePass({ label: `bezier sort scan ${i}` });
+            scanPass.setPipeline(this.radixScanPipeline);
+            scanPass.setBindGroup(0, bg, [offset]);
+            scanPass.dispatchWorkgroups(1);
+            scanPass.end();
+
+            const scatterPass = commandEncoder.beginComputePass({ label: `bezier sort scatter ${i}` });
+            scatterPass.setPipeline(this.radixScatterPipeline);
+            scatterPass.setBindGroup(0, bg, [offset]);
+            scatterPass.dispatchWorkgroups(wg);
+            scatterPass.end();
         }
     }
 
@@ -657,5 +670,6 @@ export class GpuBezierOptimizerManager {
         this.sortIndicesBufferA.destroy();
         this.sortIndicesBufferB.destroy();
         this.sortUniformsBuffer.destroy();
+        this.histBuffer.destroy();
     }
 }
