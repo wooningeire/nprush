@@ -127,7 +127,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     <div class="slider-group">
         <label>
             Render res: {viewerState.renderWidth}×{viewerState.renderHeight}
-            <input type="range" min="256" max="2048" step="256"
+            <input type="range" min="128" max="2048" step="128"
                 value={viewerState.renderWidth}
                 oninput={(e) => {
                     const v = parseInt((e.target as HTMLInputElement).value);

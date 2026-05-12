@@ -32,8 +32,8 @@ export class ViewerState {
 
     // Output render resolution — independent of the browser window size.
     // These drive the full-res textures used for visualization and capture.
-    renderWidth = $state(1024);
-    renderHeight = $state(1024);
+    renderWidth = $state(256);
+    renderHeight = $state(256);
 
     edgeBeziersEnabled = $state(false);
     baseColorBeziersEnabled = $state(true);
