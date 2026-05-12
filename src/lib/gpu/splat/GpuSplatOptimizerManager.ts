@@ -5,6 +5,7 @@ import adcModuleSrc from "./splat_adc.wgsl?raw";
 import edgeModuleSrc from "./splat_edge.wgsl?raw";
 import sortModuleSrc from "./splat_sort.wgsl?raw";
 import initModuleSrc from "./splat_init.wgsl?raw";
+import binningModuleSrc from "./splat_binning.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
 import { constants, injectWgslConstants } from "../constants";
 import { nextPowerOfTwoAtLeast } from "../nextPowerOfTwoAtLeast";
@@ -46,6 +47,26 @@ export class GpuSplatOptimizerManager {
     private sortBindGroupBtoA!: GPUBindGroup;
     
     private histBuffer!: GPUBuffer;
+
+    // Binning buffers and pipelines
+    private binningAtomicBuffer!: GPUBuffer;
+    private instanceKeysBufferA!: GPUBuffer;
+    private instanceKeysBufferB!: GPUBuffer;
+    private instanceValsBufferA!: GPUBuffer;
+    private instanceValsBufferB!: GPUBuffer;
+    private binningUniformsBuffer!: GPUBuffer;
+    private binningHistBuffer!: GPUBuffer;
+    private tileStartsBuffer!: GPUBuffer;
+    private tileEndsBuffer!: GPUBuffer;
+
+    private binInstantiatePipeline!: GPUComputePipeline;
+    private binCountPipeline!: GPUComputePipeline;
+    private binScanPipeline!: GPUComputePipeline;
+    private binScatterPipeline!: GPUComputePipeline;
+    private binRangesPipeline!: GPUComputePipeline;
+
+    private binBindGroupAtoB!: GPUBindGroup;
+    private binBindGroupBtoA!: GPUBindGroup;
 
     private backwardBindGroupLayout: GPUBindGroupLayout;
     private stepBindGroupLayout: GPUBindGroupLayout;
@@ -149,6 +170,64 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.STORAGE,
         });
 
+        // Binning buffers
+        this.binningAtomicBuffer = device.createBuffer({
+            label: "splat binning atomic",
+            size: 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        const maxInstances = this.numSplats * 4;
+        this.instanceKeysBufferA = device.createBuffer({
+            label: "splat binning keys A",
+            size: maxInstances * 8, // vec2u
+            usage: GPUBufferUsage.STORAGE,
+        });
+        this.instanceKeysBufferB = device.createBuffer({
+            label: "splat binning keys B",
+            size: maxInstances * 8, // vec2u
+            usage: GPUBufferUsage.STORAGE,
+        });
+        this.instanceValsBufferA = device.createBuffer({
+            label: "splat binning vals A",
+            size: maxInstances * 4,
+            usage: GPUBufferUsage.STORAGE,
+        });
+        this.instanceValsBufferB = device.createBuffer({
+            label: "splat binning vals B",
+            size: maxInstances * 4,
+            usage: GPUBufferUsage.STORAGE,
+        });
+        this.binningUniformsBuffer = device.createBuffer({
+            label: "splat binning uniforms",
+            size: 1024,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        // We write 8 shift passes: depth (word 0, shift 0,8,16,24), tile (word 1, shift 0,8,16,24)
+        for (let i = 0; i < 8; i++) {
+            const word_idx = i < 4 ? 0 : 1;
+            const shift = (i % 4) * 8;
+            device.queue.writeBuffer(this.binningUniformsBuffer, i * 256 + 64, new Uint32Array([shift, word_idx, 0, 0]));
+        }
+        
+        // Hist buffer needs to support MAX_INSTANCES / 256 items
+        const W_bin = Math.ceil(maxInstances / 256);
+        this.binningHistBuffer = device.createBuffer({
+            label: "splat binning histogram",
+            size: 256 * W_bin * 4,
+            usage: GPUBufferUsage.STORAGE,
+        });
+
+        this.tileStartsBuffer = device.createBuffer({
+            label: "splat tile starts",
+            size: 40000 * 4,
+            usage: GPUBufferUsage.STORAGE,
+        });
+        this.tileEndsBuffer = device.createBuffer({
+            label: "splat tile ends",
+            size: 40000 * 4,
+            usage: GPUBufferUsage.STORAGE,
+        });
+
         this.sortKeysBuffer = this.sortKeysBufferA;
         this.sortIndicesBuffer = this.sortIndicesBufferA;
 
@@ -175,7 +254,7 @@ export class GpuSplatOptimizerManager {
             });
         };
 
-        // Backward Pipeline — now has 6 bindings (splats, grads, target, depth, VP uniform, sort order)
+        // Backward Pipeline — bindings: splats, grads, target, targetDepth, splat_uniforms, tile_starts, tile_ends, instance_vals
         this.backwardBindGroupLayout = device.createBindGroupLayout({
             label: "splat backward bind group layout",
             entries: [
@@ -185,6 +264,8 @@ export class GpuSplatOptimizerManager {
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
             ],
         });
         const backwardModule = device.createShaderModule({ label: "splat backward", code: injectConstants(backwardModuleSrc) });
@@ -481,7 +562,9 @@ export class GpuSplatOptimizerManager {
                 { binding: 2, resource: targetTextureView },
                 { binding: 3, resource: targetDepthTextureView }, // actual depth, not edge
                 { binding: 4, resource: { buffer: this.splatUniformsBuffer } },
-                { binding: 5, resource: { buffer: this.sortIndicesBuffer } },
+                { binding: 5, resource: { buffer: this.instanceValsBufferA } }, // after 8 passes, result is in BufferA
+                { binding: 6, resource: { buffer: this.tileStartsBuffer } },
+                { binding: 7, resource: { buffer: this.tileEndsBuffer } },
             ],
         });
     }

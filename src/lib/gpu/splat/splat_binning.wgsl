@@ -24,8 +24,8 @@ struct BinningUniforms {
 struct SortUniforms {
     shift: u32,
     word_idx: u32, // 0 for depth, 1 for tile_id
-    total_instances: u32,
-    _pad: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
@@ -139,7 +139,8 @@ const WG_SIZE = 256u;
 
 @compute @workgroup_size(256)
 fn count(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_id) lid: vec3u) {
-    let count = sort_uniforms.total_instances;
+    let count_val = atomicLoad(&atomic_count);
+    let count = min(count_val, binning_uniforms.max_instances);
     let W = (count + WG_SIZE - 1u) / WG_SIZE;
     
     atomicStore(&hist[lid.x * W + wid.x], 0u);
@@ -156,7 +157,8 @@ fn count(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup_id) wid: 
 
 @compute @workgroup_size(256)
 fn scan(@builtin(local_invocation_id) lid: vec3u) {
-    let count = sort_uniforms.total_instances;
+    let count_val = atomicLoad(&atomic_count);
+    let count = min(count_val, binning_uniforms.max_instances);
     let W = (count + WG_SIZE - 1u) / WG_SIZE;
     let bucket = lid.x; // 0..255
     
@@ -186,7 +188,8 @@ fn scan(@builtin(local_invocation_id) lid: vec3u) {
 
 @compute @workgroup_size(256)
 fn scatter(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_id) lid: vec3u) {
-    let count = sort_uniforms.total_instances;
+    let count_val = atomicLoad(&atomic_count);
+    let count = min(count_val, binning_uniforms.max_instances);
     let W = (count + WG_SIZE - 1u) / WG_SIZE;
     let idx = gid.x;
     
@@ -231,7 +234,8 @@ fn scatter(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup_id) wid
 @compute @workgroup_size(256)
 fn calc_ranges(@builtin(global_invocation_id) gid: vec3u) {
     let idx = gid.x;
-    let count = sort_uniforms.total_instances;
+    let count_val = atomicLoad(&atomic_count);
+    let count = min(count_val, binning_uniforms.max_instances);
     
     // Also reset tile_starts and tile_ends in a separate pass?
     // We can clear them where idx < grid_width * grid_height.
