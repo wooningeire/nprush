@@ -25,11 +25,7 @@ struct ForwardUniforms {
 @group(0) @binding(1) var<uniform> uniforms: ForwardUniforms;
 @group(0) @binding(2) var brush_sampler: sampler;
 @group(0) @binding(3) var brush_texture: texture_2d<f32>;
-
-@group(0) @binding(4) var outTex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(5) var<storage, read> instance_vals: array<u32>;
-@group(0) @binding(6) var<storage, read> tile_starts: array<u32>;
-@group(0) @binding(7) var<storage, read> tile_ends: array<u32>;
+@group(0) @binding(4) var<storage, read> sort_order: array<u32, {@NUM_BEZIERS}u>;
 
 const N_SEG: u32 = {@BEZIER_POLY_SEG}u;
 const SH_C1_B: f32 = 0.4886025119029199;
@@ -69,142 +65,182 @@ fn bezier_at(p0: vec2f, p1: vec2f, p2: vec2f, p3: vec2f, t: f32) -> vec2f {
          + t*t*t * p3;
 }
 
-fn project_center(vp: mat4x4f, pos3: vec3f, aspect: f32) -> vec3f {
+fn project_to_screen(vp: mat4x4f, pos3: vec3f, aspect: f32) -> vec3f {
+    // Returns (x_aspect_corrected, y_ndc, w)
     let clip = vp * vec4f(pos3, 1.0);
-    return vec3f(clip.x / clip.w * aspect, -clip.y / clip.w, clip.w);
+    return vec3f(clip.x / clip.w * aspect, clip.y / clip.w, clip.w);
 }
 
-fn bernstein(t: f32) -> vec4f {
-    let omt = 1.0 - t;
-    return vec4f(omt*omt*omt, 3.0*omt*omt*t, 3.0*omt*t*t, t*t*t);
+struct VsOut {
+    @builtin(position) pos: vec4f,
+    @location(0) @interpolate(flat) bezier_idx: u32,
+    // Bounding box in aspect-corrected screen space, passed to fragment
+    @location(1) p_screen: vec2f,
+    @location(2) @interpolate(flat) proj0: vec3f,
+    @location(5) @interpolate(flat) proj1: vec3f,
+    @location(8) @interpolate(flat) proj2: vec3f,
+    @location(11) @interpolate(flat) proj3: vec3f,
 }
 
-var<workgroup> shared_beziers: array<Bezier, 128>;
-
-@compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_id) local_id: vec3u) {
-    let dims = vec2u(uniforms.dims);
+@vertex
+fn vs_main(
+    @builtin(instance_index) ii: u32,
+    @builtin(vertex_index) vi: u32
+) -> VsOut {
+    // Draw back-to-front
+    let bezier_idx = sort_order[ii];
+    let b = beziers.items[bezier_idx];
     let aspect = uniforms.dims.x / uniforms.dims.y;
-    
-    let tile_id = workgroup_id.y * u32(ceil(uniforms.dims.x / 16.0)) + workgroup_id.x;
-    let start_idx = tile_starts[tile_id];
-    let end_idx = tile_ends[tile_id];
-    let bezier_count = end_idx - start_idx;
-    
-    if (global_id.x >= dims.x || global_id.y >= dims.y) { return; }
 
-    let p_ndc = (vec2f(global_id.xy) + 0.5) / vec2f(dims) * 2.0 - 1.0;
-    let p = vec2f(p_ndc.x * aspect, -p_ndc.y);
+    let proj0 = project_to_screen(uniforms.vp, b.p0.xyz, aspect);
+    let proj1 = project_to_screen(uniforms.vp, b.p1.xyz, aspect);
+    let proj2 = project_to_screen(uniforms.vp, b.p2.xyz, aspect);
+    let proj3 = project_to_screen(uniforms.vp, b.p3.xyz, aspect);
 
-    var C_pred = vec3f(0.0);
-    var T_final = 1.0;
-
-    let local_idx = local_id.y * 16u + local_id.x;
-
-    for (var chunk = 0u; chunk < bezier_count; chunk += 128u) {
-        let load_idx = chunk + local_idx;
-        if (local_idx < 128u && load_idx < bezier_count) {
-            let bezier_id = instance_vals[start_idx + load_idx];
-            shared_beziers[local_idx] = beziers.items[bezier_id];
-        }
-        workgroupBarrier();
-
-        let valid_count = min(128u, bezier_count - chunk);
-        for (var i = 0u; i < valid_count; i++) {
-            let b = shared_beziers[i];
-            
-            let proj0 = project_center(uniforms.vp, b.p0.xyz, aspect);
-            let proj1 = project_center(uniforms.vp, b.p1.xyz, aspect);
-            let proj2 = project_center(uniforms.vp, b.p2.xyz, aspect);
-            let proj3 = project_center(uniforms.vp, b.p3.xyz, aspect);
-            
-            const DEPTH_NEAR_CULL = 0.1;
-            if (proj0.z < DEPTH_NEAR_CULL || proj1.z < DEPTH_NEAR_CULL || proj2.z < DEPTH_NEAR_CULL || proj3.z < DEPTH_NEAR_CULL) { continue; }
-
-            let p0 = proj0.xy;
-            let p1 = proj1.xy;
-            let p2 = proj2.xy;
-            let p3 = proj3.xy;
-
-            var min_d2 = 1e9;
-            var min_k = 1u;
-            var min_u = 0.0;
-            var prev = p0;
-            for (var k = 1u; k <= N_SEG; k = k + 1u) {
-                let curr = bezier_at(p0, p1, p2, p3, f32(k) / f32(N_SEG));
-                let seg = curr - prev;
-                let len2 = max(dot(seg, seg), 1e-8);
-                let u = clamp(dot(p - prev, seg) / len2, 0.0, 1.0);
-                let proj_pt = prev + u * seg;
-                let diff = p - proj_pt;
-                let d2 = dot(diff, diff);
-                if (d2 < min_d2) {
-                    min_d2 = d2;
-                    min_k = k;
-                    min_u = u;
-                }
-                prev = curr;
-            }
-            
-            let min_d = sqrt(min_d2);
-            let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
-            let dt = t - 0.5;
-            let pressure = 1.0 - 4.0 * dt * dt;
-            
-            let B = bernstein(t);
-            let w = dot(B, vec4f(proj0.z, proj1.z, proj2.z, proj3.z));
-            let inv_w = 1.0 / max(w, 0.001);
-            
-            let width = max(b.p0.w, 0.0001) * inv_w;
-            let softness = max(b.p1.w, 0.0001) * inv_w;
-            let local_width = width * pressure;
-            let local_softness = softness * pressure;
-            
-            let inner = local_width - local_softness;
-            let outer = local_width + local_softness;
-            let a_geom = 1.0 - smoothstep(inner, outer, min_d);
-            
-            if (a_geom < 0.001) { continue; }
-
-            let pos_w = bezier_pos_world(b, t);
-            let tang = bezier_deriv_world(b, t);
-            let dl_b = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w, tang);
-            let lx_b = dl_b.x;
-            let ly_b = dl_b.y;
-            let lz_b = dl_b.z;
-            
-            let o_lin = b.color.a + SH_C1_B * (ly_b * b.sh1_a.x + lz_b * b.sh1_a.y + lx_b * b.sh1_a.z);
-            let opacity = clamp(o_lin, 0.0, 1.0);
-            
-            // Brush lookup
-            let t_prev = f32(min_k - 1u) / f32(N_SEG);
-            let t_curr = f32(min_k) / f32(N_SEG);
-            let best_prev = bezier_at(p0, p1, p2, p3, t_prev);
-            let best_curr = bezier_at(p0, p1, p2, p3, t_curr);
-            let best_seg = best_curr - best_prev;
-            let best_len = max(length(best_seg), 1e-4);
-            let best_dir = best_seg / best_len;
-            let best_proj = best_prev + min_u * best_seg;
-            let best_diff = p - best_proj;
-            let signed_cross = best_diff.x * (-best_dir.y) + best_diff.y * best_dir.x;
-            
-            let brush_u = t;
-            let brush_v = clamp(signed_cross / max(local_width + local_softness, 1e-6) * 0.5 + 0.5, 0.0, 1.0);
-            let brush_alpha = textureSampleLevel(brush_texture, brush_sampler, vec2f(brush_u, brush_v), 0.0).r;
-            
-            let a = clamp(a_geom * brush_alpha * opacity * pressure, 0.0, 0.999);
-            if (a < 0.001) { continue; }
-
-            let rr_lin = b.color.r + SH_C1_B * (ly_b * b.sh1_r.x + lz_b * b.sh1_r.y + lx_b * b.sh1_r.z);
-            let gg_lin = b.color.g + SH_C1_B * (ly_b * b.sh1_g.x + lz_b * b.sh1_g.y + lx_b * b.sh1_g.z);
-            let bb_lin = b.color.b + SH_C1_B * (ly_b * b.sh1_b.x + lz_b * b.sh1_b.y + lx_b * b.sh1_b.z);
-            let rgb = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
-
-            C_pred = C_pred * (1.0 - a) + rgb * a;
-            T_final *= (1.0 - a);
-        }
-        workgroupBarrier();
+    const DEPTH_NEAR_CULL = 0.1;
+    if (proj0.z < DEPTH_NEAR_CULL || proj1.z < DEPTH_NEAR_CULL || proj2.z < DEPTH_NEAR_CULL || proj3.z < DEPTH_NEAR_CULL) {
+        var out: VsOut;
+        out.pos = vec4f(0.0, 0.0, 2.0, 1.0);
+        out.bezier_idx = bezier_idx;
+        out.p_screen = vec2f(0.0);
+        out.proj0 = vec3f(0.0);
+        out.proj1 = vec3f(0.0);
+        out.proj2 = vec3f(0.0);
+        out.proj3 = vec3f(0.0);
+        return out;
     }
 
-    textureStore(outTex, global_id.xy, vec4f(C_pred, 1.0));
+    let p0 = proj0.xy;
+    let p1 = proj1.xy;
+    let p2 = proj2.xy;
+    let p3 = proj3.xy;
+
+    // Perspective scaling: treat width/softness as world-space units.
+    // Use average depth for bounding box expansion.
+    let avg_w = (proj0.z + proj1.z + proj2.z + proj3.z) * 0.25;
+    let inv_w = 1.0 / max(avg_w, 0.001);
+
+    let width = max(b.p0.w, 0.0001) * inv_w;
+    let softness = max(b.p1.w, 0.0001) * inv_w;
+    let pad = width + softness;
+
+    // Tight AABB around the bezier hull + padding.
+    let SCREEN_BOUND = 4.0;
+    let min_p = max(min(min(p0, p1), min(p2, p3)) - vec2f(pad), vec2f(-SCREEN_BOUND));
+    let max_p = min(max(max(p0, p1), max(p2, p3)) + vec2f(pad), vec2f(SCREEN_BOUND));
+
+    let corners = array<vec2f, 4>(
+        vec2f(min_p.x, max_p.y),
+        vec2f(min_p.x, min_p.y),
+        vec2f(max_p.x, max_p.y),
+        vec2f(max_p.x, min_p.y),
+    );
+    let c = corners[vi];
+
+    let ndc = vec2f(c.x / aspect, c.y);
+
+    var out: VsOut;
+    out.pos = vec4f(ndc, 0.0, 1.0);
+    out.bezier_idx = bezier_idx;
+    out.p_screen = c;
+    out.proj0 = proj0;
+    out.proj1 = proj1;
+    out.proj2 = proj2;
+    out.proj3 = proj3;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VsOut) -> @location(0) vec4f {
+    let ii = in.bezier_idx;
+    let b = beziers.items[ii];
+
+    let proj0 = in.proj0;
+    let proj1 = in.proj1;
+    let proj2 = in.proj2;
+    let proj3 = in.proj3;
+
+    let p0 = proj0.xy;
+    let p1 = proj1.xy;
+    let p2 = proj2.xy;
+    let p3 = proj3.xy;
+
+    let p = in.p_screen;
+
+    var min_d2 = 1e9;
+    var min_k = 1u;
+    var min_u = 0.0;
+    var prev = p0;
+    for (var k = 1u; k <= N_SEG; k++) {
+        let curr = bezier_at(p0, p1, p2, p3, f32(k) / f32(N_SEG));
+        let seg = curr - prev;
+        let len2 = max(dot(seg, seg), 1e-8);
+        let u = clamp(dot(p - prev, seg) / len2, 0.0, 1.0);
+        let proj_pt = prev + u * seg;
+        let diff = p - proj_pt;
+        let d2 = dot(diff, diff);
+        if (d2 < min_d2) {
+            min_d2 = d2;
+            min_k = k;
+            min_u = u;
+        }
+        prev = curr;
+    }
+
+    let min_d = sqrt(min_d2);
+
+    let t_prev = f32(min_k - 1u) / f32(N_SEG);
+    let t_curr = f32(min_k) / f32(N_SEG);
+    let best_prev = bezier_at(p0, p1, p2, p3, t_prev);
+    let best_curr = bezier_at(p0, p1, p2, p3, t_curr);
+    let best_seg = best_curr - best_prev;
+    let best_len = max(length(best_seg), 1e-4);
+    let best_dir = best_seg / best_len;
+    let best_proj = best_prev + min_u * best_seg;
+    let best_diff = p - best_proj;
+    let min_signed_cross = best_diff.x * (-best_dir.y) + best_diff.y * best_dir.x;
+
+    let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
+    let dt = t - 0.5;
+    let pressure = 1.0 - 4.0 * dt * dt;
+
+    let omt = 1.0 - t;
+    let w = omt * omt * omt * proj0.z
+        + 3.0 * omt * omt * t * proj1.z
+        + 3.0 * omt * t * t * proj2.z
+        + t * t * t * proj3.z;
+    let inv_w = 1.0 / max(w, 0.001);
+
+    let width = max(b.p0.w, 0.0001) * inv_w;
+    let softness = max(b.p1.w, 0.0001) * inv_w;
+    let local_width = width * pressure;
+    let local_softness = softness * pressure;
+
+    let pos_w = bezier_pos_world(b, t);
+    let dl_b = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w, bezier_deriv_world(b, t));
+    let lx_b = dl_b.x;
+    let ly_b = dl_b.y;
+    let lz_b = dl_b.z;
+    let o_lin = b.color.a + SH_C1_B * (ly_b * b.sh1_a.x + lz_b * b.sh1_a.y + lx_b * b.sh1_a.z);
+    let opacity = clamp(o_lin, 0.0, 1.0);
+    let local_opacity = opacity * pressure;
+
+    let inner = local_width - local_softness;
+    let outer = local_width + local_softness;
+    let a_geom = 1.0 - smoothstep(inner, outer, min_d);
+
+    let brush_u = t;
+    let brush_v = clamp(min_signed_cross / max(local_width + local_softness, 1e-6) * 0.5 + 0.5, 0.0, 1.0);
+    let brush_alpha = textureSample(brush_texture, brush_sampler, vec2f(brush_u, brush_v)).r;
+
+    let a = clamp(a_geom * brush_alpha * local_opacity, 0.0, 0.999);
+
+    if (a < 0.001) { discard; }
+
+    let rr_lin = b.color.r + SH_C1_B * (ly_b * b.sh1_r.x + lz_b * b.sh1_r.y + lx_b * b.sh1_r.z);
+    let gg_lin = b.color.g + SH_C1_B * (ly_b * b.sh1_g.x + lz_b * b.sh1_g.y + lx_b * b.sh1_g.z);
+    let bb_lin = b.color.b + SH_C1_B * (ly_b * b.sh1_b.x + lz_b * b.sh1_b.y + lx_b * b.sh1_b.z);
+    let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
+
+    return vec4f(rgb_vis * a, a);
 }

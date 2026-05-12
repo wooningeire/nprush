@@ -11,11 +11,6 @@ struct Splat {
 
 const SH_C1: f32 = 0.4886025119029199;
 
-fn quat_rotate(q: vec4f, v: vec3f) -> vec3f {
-    let t = 2.0 * cross(q.yzw, v);
-    return v + q.x * t + cross(q.yzw, t);
-}
-
 fn quat_conj(q: vec4f) -> vec4f {
     return vec4f(q.x, -q.y, -q.z, -q.w);
 }
@@ -59,110 +54,153 @@ struct ForwardUniforms {
 }
 @group(0) @binding(1) var<uniform> uniforms: ForwardUniforms;
 
-@group(0) @binding(2) var outTex: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(3) var outDepthTex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(2) var<storage, read> sort_order: array<u32, {@NUM_SPLATS}u>;
 
-@group(0) @binding(4) var<storage, read> instance_vals: array<u32>;
-@group(0) @binding(5) var<storage, read> tile_starts: array<u32>;
-@group(0) @binding(6) var<storage, read> tile_ends: array<u32>;
+struct VsOut {
+    @builtin(position) pos: vec4f,
+    @location(0) d: vec2f,
+    @location(1) @interpolate(flat) instance_idx: u32,
+    @location(2) depth: f32,
+    @location(3) @interpolate(flat) conic: vec3f,
+    @location(4) @interpolate(flat) rgb: vec3f,
+    @location(5) @interpolate(flat) opacity_view: f32,
+}
 
-var<workgroup> shared_splats: array<Splat, 128>;
+fn quat_rotate(q: vec4f, v: vec3f) -> vec3f {
+    let t = 2.0 * cross(q.yzw, v);
+    return v + q.x * t + cross(q.yzw, t);
+}
 
-@compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_id) local_id: vec3u) {
-    let dims = vec2u(uniforms.dims);
+fn project_axis(vp: mat4x4f, ax_world: vec3f, clip_xy: vec2f, w: f32, aspect: f32) -> vec2f {
+    let ac = vp * vec4f(ax_world, 0.0);
+    return vec2f(
+        (ac.x * w - clip_xy.x * ac.w) / (w * w) * aspect,
+        (ac.y * w - clip_xy.y * ac.w) / (w * w)
+    );
+}
+
+@vertex
+fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsOut {
+    // Use sort order: instance 0 = farthest splat (drawn first, behind everything)
+    let splat_idx = sort_order[ii];
+    let s = splats.splats[splat_idx];
+    
+    let pos3 = s.pos_sx.xyz;
+    let sx = max(s.pos_sx.w, 0.0001);
+    let sy = max(s.sy_shape.x, 0.0001);
+    let sz = max(s.sy_shape.w, 0.0001);
+    let q = s.quat;
+    
+    // 3DGS cutoff radius. Increased to 4.5 sigma so exp(-0.5 * 4.5^2) < 0.001
+    // preventing hard quad edges from being visible before discard.
+    let R = 4.5;
+    
+    let clip_center = uniforms.vp * vec4f(pos3, 1.0);
+    let w = clip_center.w;
+    
+    // Collapse quad for splats behind the camera or too close to near plane
+    const DEPTH_NEAR_CULL = 0.1;
+    if (w < DEPTH_NEAR_CULL) {
+        var o_clip: VsOut;
+        o_clip.pos = vec4f(0.0, 0.0, 2.0, 1.0);
+        o_clip.d = vec2f(0.0);
+        o_clip.instance_idx = splat_idx;
+        o_clip.depth = 0.0;
+        o_clip.conic = vec3f(0.0);
+        o_clip.rgb = vec3f(0.0);
+        o_clip.opacity_view = 0.0;
+        return o_clip;
+    }
+    
+    let clip_xy = vec2f(clip_center.x, clip_center.y);
     let aspect = uniforms.dims.x / uniforms.dims.y;
     
-    let tile_id = workgroup_id.y * u32(ceil(uniforms.dims.x / 16.0)) + workgroup_id.x;
-    let start_idx = tile_starts[tile_id];
-    let end_idx = tile_ends[tile_id];
-    let splat_count = end_idx - start_idx;
+    let ax_w = quat_rotate(q, vec3f(1.0, 0.0, 0.0));
+    let ay_w = quat_rotate(q, vec3f(0.0, 1.0, 0.0));
+    let az_w = quat_rotate(q, vec3f(0.0, 0.0, 1.0));
     
-    if (global_id.x >= dims.x || global_id.y >= dims.y) { return; }
+    let ax_s = project_axis(uniforms.vp, ax_w, clip_xy, w, aspect);
+    let ay_s = project_axis(uniforms.vp, ay_w, clip_xy, w, aspect);
+    let az_s = project_axis(uniforms.vp, az_w, clip_xy, w, aspect);
+    
+    let m0x = ax_s.x * sx; let m0y = ax_s.y * sx;
+    let m1x = ay_s.x * sy; let m1y = ay_s.y * sy;
+    let m2x = az_s.x * sz; let m2y = az_s.y * sz;
+    
+    var cov00 = m0x*m0x + m1x*m1x + m2x*m2x;
+    var cov01 = m0x*m0y + m1x*m1y + m2x*m2y;
+    var cov11 = m0y*m0y + m1y*m1y + m2y*m2y;
+    
+    // Low-pass filter (0.3px) to prevent aliasing for distant splats
+    let filter_std = 0.3 * (2.0 / uniforms.dims.y);
+    let filter2 = filter_std * filter_std;
+    cov00 += filter2;
+    cov11 += filter2;
+    
+    let det = cov00 * cov11 - cov01 * cov01;
+    let inv_det = select(1.0 / det, 0.0, abs(det) < 1e-10);
+    let A = cov11 * inv_det;
+    let B = -cov01 * inv_det;
+    let C = cov00 * inv_det;
+    
+    let extent_x = R * sqrt(max(cov00, 1e-9));
+    let extent_y = R * sqrt(max(cov11, 1e-9));
+    
+    let quad_x = array<f32, 6>(-1.0,  1.0, -1.0, -1.0,  1.0,  1.0);
+    let quad_y = array<f32, 6>(-1.0, -1.0,  1.0,  1.0, -1.0,  1.0);
+    let lx = quad_x[vi] * extent_x;
+    let ly = quad_y[vi] * extent_y;
+    
+    var clip = clip_center;
+    clip.x += lx * w / aspect;
+    clip.y += ly * w;
+    
+    let dir_l = splat_view_dir_local(uniforms.cam_world.xyz, pos3, q);
+    let rgb = splat_rgb_sh1(s, dir_l);
+    let opacity_view = splat_opacity_sh1(s, dir_l);
 
-    let p_ndc = (vec2f(global_id.xy) + 0.5) / vec2f(dims) * 2.0 - 1.0;
-    let p = vec2f(p_ndc.x * aspect, -p_ndc.y);
+    var o: VsOut;
+    o.pos = clip;
+    o.d = vec2f(lx, ly);
+    o.instance_idx = splat_idx;
+    o.depth = w;
+    o.conic = vec3f(A, B, C);
+    o.rgb = rgb;
+    o.opacity_view = opacity_view;
+    return o;
+}
 
-    var C_pred = vec3f(0.05, 0.05, 0.05); // Background
-    var D_pred = 1.0;
+struct FragOut {
+    @location(0) color: vec4f,
+    @location(1) depth: vec4f,
+}
 
-    let local_idx = local_id.y * 16u + local_id.x;
+@fragment
+fn frag(v: VsOut) -> FragOut {
+    let A = v.conic.x;
+    let B = v.conic.y;
+    let C = v.conic.z;
+    let dx = v.d.x;
+    let dy = v.d.y;
+    let r2 = A * dx * dx + 2.0 * B * dx * dy + C * dy * dy;
+    
+    // Standard 3DGS Gaussian falloff
+    let pw = -0.5 * r2;
 
-    for (var chunk = 0u; chunk < splat_count; chunk += 128u) {
-        let load_idx = chunk + local_idx;
-        if (local_idx < 128u && load_idx < splat_count) {
-            let splat_idx = instance_vals[start_idx + load_idx];
-            shared_splats[local_idx] = splats.splats[splat_idx];
-        }
-        workgroupBarrier();
-
-        let valid_count = min(128u, splat_count - chunk);
-        for (var i = 0u; i < valid_count; i++) {
-            let s = shared_splats[i];
-            
-            let pos3 = s.pos_sx.xyz;
-            let sx = max(s.pos_sx.w, 0.0001);
-            let sy = max(s.sy_shape.x, 0.0001);
-            let sz = max(s.sy_shape.w, 0.0001);
-            let q = s.quat;
-            
-            let clip_center = uniforms.vp * vec4f(pos3, 1.0);
-            let w = clip_center.w;
-            
-            // Standard near-plane culling
-            if (w < 0.1) { continue; }
-            
-            let proj_center = vec2f(clip_center.x / w * aspect, -clip_center.y / w);
-            
-            // 3D Jacobian approach (simplified for compute)
-            let q_mat = mat3x3f(
-                quat_rotate(q, vec3f(1.0, 0.0, 0.0)),
-                quat_rotate(q, vec3f(0.0, 1.0, 0.0)),
-                quat_rotate(q, vec3f(0.0, 0.0, 1.0))
-            );
-            let scale_mat = mat3x3f(
-                vec3f(sx, 0.0, 0.0),
-                vec3f(0.0, sy, 0.0),
-                vec3f(0.0, 0.0, sz)
-            );
-            let M = q_mat * scale_mat;
-            let Sigma = M * transpose(M);
-            
-            let J = mat3x3f(
-                vec3f(aspect / w, 0.0, -clip_center.x / (w * w) * aspect),
-                vec3f(0.0, -1.0 / w, clip_center.y / (w * w)),
-                vec3f(0.0, 0.0, 0.0) // We only care about 2D projection
-            );
-            
-            let V2D = J * Sigma * transpose(J);
-            // Add low-pass filter (0.3 pixel radius in NDC-ish space)
-            let filter = 0.3 * (2.0 / uniforms.dims.y);
-            let cov = vec3f(V2D[0][0] + filter*filter, V2D[0][1], V2D[1][1] + filter*filter);
-            
-            let det = cov.x * cov.z - cov.y * cov.y;
-            if (det < 1e-10) { continue; }
-            let conic = vec3f(cov.z / det, -cov.y / det, cov.x / det);
-            
-            let dx = p - proj_center;
-            let power = -0.5 * (conic.x * dx.x * dx.x + 2.0 * conic.y * dx.x * dx.y + conic.z * dx.y * dx.y);
-            if (power > 0.0) { continue; }
-            
-            let alpha = exp(power);
-            if (alpha < 1.0/255.0) { continue; }
-            
-            let dir_l = splat_view_dir_local(uniforms.cam_world.xyz, pos3, q);
-            let rgb = splat_rgb_sh1(s, dir_l);
-            let opacity = splat_opacity_sh1(s, dir_l);
-            let a = alpha * opacity;
-            
-            if (a < 1.0/255.0) { continue; }
-
-            C_pred = C_pred * (1.0 - a) + rgb * a;
-            D_pred = D_pred * (1.0 - a) + (clip_center.z / w) * a;
-        }
-        workgroupBarrier();
+    var a = select(0.0, exp(pw) * v.opacity_view, pw > -15.0);
+    a = clamp(a, 0.0, 0.999);
+    
+    if (a < 0.001) {
+        discard;
     }
+    
+    // Reciprocal depth encoding matching mesh.wgsl: 1 - DEPTH_NEAR / w
+    const DEPTH_NEAR = 0.1;
+    let linear_depth = max(v.depth, DEPTH_NEAR);
+    let enc_depth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
 
-    textureStore(outTex, global_id.xy, vec4f(C_pred, 1.0));
-    textureStore(outDepthTex, global_id.xy, vec4f(vec3f(D_pred), 1.0));
+    var out: FragOut;
+    out.color = vec4f(v.rgb, a);
+    out.depth = vec4f(enc_depth, enc_depth, enc_depth, a);
+    return out;
 }

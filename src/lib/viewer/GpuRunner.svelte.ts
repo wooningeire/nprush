@@ -282,18 +282,14 @@ export class GpuRunner {
             device,
             numSplats: constants.NUM_GAUSSIAN_SPLATS,
             splatBuffer: this.splatOptimizerManager.splatBuffer,
-            instanceValsBuffer: this.splatOptimizerManager.instanceValsBufferA,
-            tileStartsBuffer: this.splatOptimizerManager.tileStartsBuffer,
-            tileEndsBuffer: this.splatOptimizerManager.tileEndsBuffer,
+            sortOrderBuffer: this.splatOptimizerManager.sortIndicesBuffer,
         });
 
         this.bezierForwardManager = new GpuBezierForwardPipelineManager({
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.edgeLayerBezierManager.bezierBuffer,
-            instanceValsBuffer: this.edgeLayerBezierManager.instanceValsBufferA,
-            tileStartsBuffer: this.edgeLayerBezierManager.tileStartsBuffer,
-            tileEndsBuffer: this.edgeLayerBezierManager.tileEndsBuffer,
+            sortOrderBuffer: this.edgeLayerBezierManager.sortIndicesBuffer,
             brushTexture,
         });
 
@@ -301,9 +297,7 @@ export class GpuRunner {
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.baseColorLayerBezierManager.bezierBuffer,
-            instanceValsBuffer: this.baseColorLayerBezierManager.instanceValsBufferA,
-            tileStartsBuffer: this.baseColorLayerBezierManager.tileStartsBuffer,
-            tileEndsBuffer: this.baseColorLayerBezierManager.tileEndsBuffer,
+            sortOrderBuffer: this.baseColorLayerBezierManager.sortIndicesBuffer,
             brushTexture,
         });
 
@@ -311,9 +305,7 @@ export class GpuRunner {
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
             bezierBuffer: this.colorLayerBezierManager.bezierBuffer,
-            instanceValsBuffer: this.colorLayerBezierManager.instanceValsBufferA,
-            tileStartsBuffer: this.colorLayerBezierManager.tileStartsBuffer,
-            tileEndsBuffer: this.colorLayerBezierManager.tileEndsBuffer,
+            sortOrderBuffer: this.colorLayerBezierManager.sortIndicesBuffer,
             brushTexture,
         });
         
@@ -650,7 +642,7 @@ export class GpuRunner {
             label: "optimization splat view",
             size: [ow, oh],
             format: "rgba8unorm",
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.optimSplatTextureView = this.optimSplatTexture.createView();
 
@@ -658,7 +650,7 @@ export class GpuRunner {
             label: "optimization splat depth",
             size: [ow, oh],
             format: "rgba8unorm",
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.optimSplatDepthTextureView = this.optimSplatDepthTexture.createView();
 
@@ -815,7 +807,7 @@ export class GpuRunner {
                     label: "full-res splat view",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
-                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
                 });
                 this.fullSplatTextureView = this.fullSplatTexture.createView();
 
@@ -823,7 +815,7 @@ export class GpuRunner {
                     label: "full-res splat depth",
                     size: [fullW, fullH],
                     format: "rgba8unorm",
-                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
                 });
                 this.fullSplatDepthTextureView = this.fullSplatDepthTexture.createView();
 
@@ -1168,6 +1160,7 @@ export class GpuRunner {
             );
             this.splatForwardManager.dispatch(
                 commandEncoder,
+                true,
                 this.viewerState.splatsEnabled,
                 profWrites(GpuProfilingPair.SplatRasterOptim),
             );
@@ -1199,7 +1192,7 @@ export class GpuRunner {
                 // Render coarse beziers into optimSplatTextureView (loadOp: "load")
                 // This makes it the background for the NEXT layer!
                 this.baseColorBezierForwardManager.setTarget(this.optimSplatTextureView!, this.optimWidth, this.optimHeight);
-                this.baseColorBezierForwardManager.dispatch(commandEncoder, true);
+                this.baseColorBezierForwardManager.dispatch(commandEncoder, false);
             }
 
             // Train fine beziers against sharp target
@@ -1235,6 +1228,7 @@ export class GpuRunner {
                 // 4.5. Compute views into textures
                 this.splatForwardManager.dispatch(
                     commandEncoder,
+                    true,
                     this.viewerState.splatsEnabled,
                     profWrites(GpuProfilingPair.SplatRasterFull),
                 );

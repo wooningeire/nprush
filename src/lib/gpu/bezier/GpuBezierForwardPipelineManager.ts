@@ -3,15 +3,13 @@ import { constants, injectWgslConstants } from "../constants";
 
 export class GpuBezierForwardPipelineManager {
     private readonly device: GPUDevice;
-    private readonly pipeline: GPUComputePipeline;
+    private readonly pipeline: GPURenderPipeline;
     private readonly bindGroupLayout: GPUBindGroupLayout;
     private bindGroup: GPUBindGroup | null = null;
     private targetView: GPUTextureView | null = null;
     private dims: { width: number, height: number } = { width: 0, height: 0 };
     private readonly bezierBuffer: GPUBuffer;
-    private readonly instanceValsBuffer: GPUBuffer;
-    private readonly tileStartsBuffer: GPUBuffer;
-    private readonly tileEndsBuffer: GPUBuffer;
+    private readonly sortOrderBuffer: GPUBuffer;
     private readonly bezierUniformsBuffer: GPUBuffer;
     private readonly numBeziers: number;
     private readonly brushSampler: GPUSampler;
@@ -21,24 +19,18 @@ export class GpuBezierForwardPipelineManager {
         device,
         numBeziers,
         bezierBuffer,
-        instanceValsBuffer,
-        tileStartsBuffer,
-        tileEndsBuffer,
+        sortOrderBuffer,
         brushTexture,
     }: {
         device: GPUDevice,
         numBeziers: number,
         bezierBuffer: GPUBuffer,
-        instanceValsBuffer: GPUBuffer,
-        tileStartsBuffer: GPUBuffer,
-        tileEndsBuffer: GPUBuffer,
+        sortOrderBuffer: GPUBuffer,
         brushTexture: GPUTexture,
     }) {
         this.device = device;
         this.bezierBuffer = bezierBuffer;
-        this.instanceValsBuffer = instanceValsBuffer;
-        this.tileStartsBuffer = tileStartsBuffer;
-        this.tileEndsBuffer = tileEndsBuffer;
+        this.sortOrderBuffer = sortOrderBuffer;
         this.numBeziers = numBeziers;
         this.brushTextureView = brushTexture.createView();
 
@@ -51,7 +43,7 @@ export class GpuBezierForwardPipelineManager {
             mipmapFilter: "linear",
         });
 
-        // mat4x4 (64) + dims vec2 + pad + cam_world vec4
+        // mat4x4 (64) + dims vec2 + pad + cam_world vec4 — match splat forward layout.
         this.bezierUniformsBuffer = device.createBuffer({
             label: "bezier forward uniforms buffer",
             size: 96,
@@ -61,14 +53,11 @@ export class GpuBezierForwardPipelineManager {
         this.bindGroupLayout = device.createBindGroupLayout({
             label: "bezier forward bind group layout",
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // beziers
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } }, // uniforms
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, sampler: { type: "filtering" } }, // brush_sampler
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } }, // brush_texture
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, storageTexture: { format: "rgba8unorm", access: "write-only", viewDimension: "2d" } }, // out color
-                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // instance_vals
-                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // tile_starts
-                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // tile_ends
+                { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+                { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
             ],
         });
 
@@ -77,14 +66,42 @@ export class GpuBezierForwardPipelineManager {
             NUM_BEZIERS: numBeziers,
         });
         const module = device.createShaderModule({ label: "bezier forward", code });
+        module.getCompilationInfo().then(info => {
+            for (const msg of info.messages) console.warn(`[bezier_forward] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
+        });
 
-        this.pipeline = device.createComputePipeline({
-            label: "bezier forward compute pipeline",
+        this.pipeline = device.createRenderPipeline({
+            label: "bezier forward render pipeline",
             layout: device.createPipelineLayout({ 
                 label: "bezier forward pipeline layout",
                 bindGroupLayouts: [this.bindGroupLayout] 
             }),
-            compute: { module, entryPoint: "main" },
+            vertex: {
+                module,
+                entryPoint: "vs_main",
+            },
+            fragment: {
+                module,
+                entryPoint: "fs_main",
+                targets: [{
+                    format: "rgba8unorm",
+                    blend: {
+                        color: {
+                            operation: "add",
+                            srcFactor: "one",
+                            dstFactor: "one-minus-src-alpha",
+                        },
+                        alpha: {
+                            operation: "add",
+                            srcFactor: "one",
+                            dstFactor: "one-minus-src-alpha",
+                        },
+                    },
+                }],
+            },
+            primitive: {
+                topology: "triangle-strip",
+            },
         });
     }
 
@@ -107,34 +124,38 @@ export class GpuBezierForwardPipelineManager {
         if (this.dims.width !== width || this.dims.height !== height) {
             this.dims = { width, height };
             this.device.queue.writeBuffer(this.bezierUniformsBuffer, 64, new Float32Array([width, height, 0, 0]));
-
-            this.bindGroup = this.device.createBindGroup({
-                label: "bezier forward bind group",
-                layout: this.bindGroupLayout,
-                entries: [
-                    { binding: 0, resource: { buffer: this.bezierBuffer } },
-                    { binding: 1, resource: { buffer: this.bezierUniformsBuffer } },
-                    { binding: 2, resource: this.brushSampler },
-                    { binding: 3, resource: this.brushTextureView },
-                    { binding: 4, resource: targetView },
-                    { binding: 5, resource: { buffer: this.instanceValsBuffer } },
-                    { binding: 6, resource: { buffer: this.tileStartsBuffer } },
-                    { binding: 7, resource: { buffer: this.tileEndsBuffer } },
-                ],
-            });
         }
+
+        this.bindGroup = this.device.createBindGroup({
+            label: "bezier forward bind group",
+            layout: this.bindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.bezierBuffer } },
+                { binding: 1, resource: { buffer: this.bezierUniformsBuffer } },
+                { binding: 2, resource: this.brushSampler },
+                { binding: 3, resource: this.brushTextureView },
+                { binding: 4, resource: { buffer: this.sortOrderBuffer } },
+            ],
+        });
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder, draw: boolean = true, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
-        if (!this.bindGroup || !this.targetView || !draw) return;
-        
-        const pass = commandEncoder.beginComputePass({
-            label: "bezier forward compute pass",
+    dispatch(commandEncoder: GPUCommandEncoder, clear: boolean = true, timestampWrites?: NonNullable<GPURenderPassDescriptor["timestampWrites"]>) {
+        if (!this.bindGroup || !this.targetView) return;
+        const pass = commandEncoder.beginRenderPass({
+            label: "bezier forward pass",
             ...(timestampWrites ? { timestampWrites } : {}),
+            colorAttachments: [
+                {
+                    view: this.targetView,
+                    clearValue: clear ? { r: 0.0, g: 0.0, b: 0.0, a: 0.0 } : undefined,
+                    loadOp: clear ? "clear" : "load",
+                    storeOp: "store",
+                },
+            ],
         });
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(this.dims.width / 16), Math.ceil(this.dims.height / 16));
+        pass.draw(4, this.numBeziers);
         pass.end();
     }
 
