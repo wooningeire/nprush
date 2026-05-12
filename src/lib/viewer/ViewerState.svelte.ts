@@ -25,7 +25,7 @@ import {
 import { evaluateTurntablePath, type TurntablePathParams } from "./turntable/turntablePath.ts";
 import { runTurntableExport } from "./turntable/turntableExport.ts";
 import { GPU_PROFILER_PAIR_COUNT, GPU_PROFILER_HISTORY_FRAMES } from "$/gpu/performanceMeasurement/gpuProfilerPairs";
-import { showToast } from "./toast.svelte.ts";
+import { showToast, dismissToast } from "./toast.svelte.ts";
 
 export class ViewerState {
     width = $state(300);
@@ -307,29 +307,36 @@ export class ViewerState {
         onMount(async () => {
             // Kick off mesh load and gpu request concurrently; both are awaited
             // before we build the runner since the mesh is a constructor input.
+            const t0 = showToast("loading meshes & gpu…", "info", 0);
             const [gpu, mesh, groundMesh, groundPbrMesh] = await Promise.all([
                 requestGpu({
                     canvas: await canvasPromise,
                     onStatusChange: (text) => showToast(text, "info", 2500),
                     onErr: (text) => showToast(text, "error", 0),
                 }),
-                loadGlb(artelorianUrl),
-                loadGlb(groundUrl, false, [1, 1, 1, 0]),           // Plane — specular mirror, world-space
-                loadGlb(groundUrl, false, [1, 1, 1, 1], 'Plane.001'), // Plane.001 — PBR textured
+                loadGlb(artelorianUrl).then(r => { showToast("mesh loaded", "info", 2000); return r; }),
+                loadGlb(groundUrl, false, [1, 1, 1, 0]),
+                loadGlb(groundUrl, false, [1, 1, 1, 1], 'Plane.001'),
             ]);
+            dismissToast(t0);
             if (!gpu) return;
 
             state.gpuTimestampQuerySupported = gpu.supportsTimestamp;
 
+            const t1 = showToast("building BVH…", "info", 0);
             state.meshVerts = new Float32Array(mesh.vertices);
             state.meshBvh = buildBvh(state.meshVerts, new Uint32Array(mesh.indices));
+            dismissToast(t1);
+            showToast("BVH ready", "info", 2000);
 
+            const t2 = showToast("loading textures…", "info", 0);
             const [envTexture, brushTexture, groundAlbedoTexture, groundNormalTexture] = await Promise.all([
-                loadHdrTexture(gpu.device, hdrUrl),
+                loadHdrTexture(gpu.device, hdrUrl).then(r => { showToast("environment loaded", "info", 2000); return r; }),
                 loadTexture(gpu.device, brushUrl),
                 loadTexture(gpu.device, groundAlbedoUrl),
-                loadTexture(gpu.device, groundNormalUrl),
+                loadTexture(gpu.device, groundNormalUrl).then(r => { showToast("textures loaded", "info", 2000); return r; }),
             ]);
+            dismissToast(t2);
 
             const gpuRunner = new GpuRunner({
                 device: gpu.device,

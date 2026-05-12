@@ -8,7 +8,7 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
         <div
             class="toast {toast.kind}"
             role="alert"
-            out:fade
+            out:fade={{duration: 200}}
         >
             <span class="message">{toast.message}</span>
             <button class="close" onclick={() => dismissToast(toast.id)} aria-label="Dismiss">✕</button>

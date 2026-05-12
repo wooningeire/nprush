@@ -9,10 +9,11 @@ export interface Toast {
 let nextId = 0;
 export const toasts = $state<Toast[]>([]);
 
-export function showToast(message: string, kind: ToastKind = "info", duration = 4000) {
+export function showToast(message: string, kind: ToastKind = "info", duration = 4000): number {
     const id = nextId++;
     toasts.push({ id, message, kind });
-    setTimeout(() => dismissToast(id), duration);
+    if (duration > 0) setTimeout(() => dismissToast(id), duration);
+    return id;
 }
 
 export function dismissToast(id: number) {
