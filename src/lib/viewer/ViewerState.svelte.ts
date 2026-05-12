@@ -305,6 +305,12 @@ export class ViewerState {
         try {
             const buffer = await file.arrayBuffer();
             const mesh = parseGlbBuffer(buffer);
+            // Flip Z: negate position Z (offset 2) and normal Z (offset 5) per vertex.
+            const STRIDE = 12;
+            for (let i = 0; i < mesh.vertices.length / STRIDE; i++) {
+                mesh.vertices[i * STRIDE + 2] *= -1;
+                mesh.vertices[i * STRIDE + 5] *= -1;
+            }
             const t2 = showToast("building BVH…", "info", 0);
             this.meshVerts = new Float32Array(mesh.vertices);
             this.meshBvh = buildBvh(this.meshVerts, new Uint32Array(mesh.indices));
