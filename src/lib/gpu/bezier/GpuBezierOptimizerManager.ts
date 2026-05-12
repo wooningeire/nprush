@@ -3,7 +3,6 @@ import stepModuleSrc from "./bezier_step.wgsl?raw";
 import adcModuleSrc from "./bezier_adc.wgsl?raw";
 import sortModuleSrc from "./bezier_sort.wgsl?raw";
 import initModuleSrc from "./bezier_init.wgsl?raw";
-import binningModuleSrc from "./bezier_binning.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
 import { constants, injectWgslConstants } from "../constants";
 import { nextPowerOfTwoAtLeast } from "../nextPowerOfTwoAtLeast";
@@ -45,33 +44,13 @@ export class GpuBezierOptimizerManager {
     private readonly adcBindGroupLayout: GPUBindGroupLayout;
 
     private readonly adcScratchBuffer: GPUBuffer;
-    private readonly histBuffer: GPUBuffer;
-    private readonly radixInitPipeline: GPUComputePipeline;
-    private readonly radixCountPipeline: GPUComputePipeline;
-    private readonly radixScanPipeline: GPUComputePipeline;
-    private readonly radixScatterPipeline: GPUComputePipeline;
-    private readonly sortBindGroupAtoB: GPUBindGroup;
-    private readonly sortBindGroupBtoA: GPUBindGroup;
-
-    // Binning buffers and pipelines
-    private readonly binningAtomicBuffer: GPUBuffer;
-    private readonly instanceKeysBufferA: GPUBuffer;
-    private readonly instanceKeysBufferB: GPUBuffer;
-    private readonly instanceValsBufferA: GPUBuffer;
-    private readonly instanceValsBufferB: GPUBuffer;
-    private readonly binningUniformsBuffer: GPUBuffer;
-    private readonly binningHistBuffer: GPUBuffer;
-    private readonly tileStartsBuffer: GPUBuffer;
-    private readonly tileEndsBuffer: GPUBuffer;
-
-    private readonly binInstantiatePipeline: GPUComputePipeline;
-    private readonly binCountPipeline: GPUComputePipeline;
-    private readonly binScanPipeline: GPUComputePipeline;
-    private readonly binScatterPipeline: GPUComputePipeline;
-    private readonly binRangesPipeline: GPUComputePipeline;
-
-    private readonly binBindGroupAtoB: GPUBindGroup;
-    private readonly binBindGroupBtoA: GPUBindGroup;
+    private readonly sortInitPipeline: GPUComputePipeline;
+    private readonly sortStepPipeline: GPUComputePipeline;
+    private readonly sortInitBindGroup: GPUBindGroup;
+    private readonly sortStepBindGroupAtoB: GPUBindGroup;
+    private readonly sortStepBindGroupBtoA: GPUBindGroup;
+    private readonly numSortSteps: number;
+    private readonly sortN: number;
 
     private backwardBindGroup: GPUBindGroup | null = null;
     private stepCount: number = 0;
@@ -144,102 +123,39 @@ export class GpuBezierOptimizerManager {
         });
 
         // Sort Buffers
+        this.sortN = nextPowerOfTwoAtLeast(this.numBeziers);
+        const logN = Math.log2(this.sortN);
+        const numSteps = (logN * (logN + 1)) / 2;
+        const finalInA = numSteps % 2 === 0;
+
         this.sortKeysBufferA = device.createBuffer({
             label: "bezier sort keys A",
-            size: this.numBeziers * 4,
+            size: this.sortN * 4,
             usage: GPUBufferUsage.STORAGE,
         });
         this.sortKeysBufferB = device.createBuffer({
             label: "bezier sort keys B",
-            size: this.numBeziers * 4,
+            size: this.sortN * 4,
             usage: GPUBufferUsage.STORAGE,
         });
         this.sortIndicesBufferA = device.createBuffer({
             label: "bezier sort indices A",
-            size: this.numBeziers * 4,
+            size: this.sortN * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this.sortIndicesBufferB = device.createBuffer({
             label: "bezier sort indices B",
-            size: this.numBeziers * 4,
+            size: this.sortN * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
-        const W = Math.ceil(this.numBeziers / 256);
-        this.histBuffer = device.createBuffer({
-            label: "bezier sort histogram",
-            size: 256 * W * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
-
-        this.sortKeysBuffer = this.sortKeysBufferA;
-        this.sortIndicesBuffer = this.sortIndicesBufferA;
+        this.sortKeysBuffer = finalInA ? this.sortKeysBufferA : this.sortKeysBufferB;
+        this.sortIndicesBuffer = finalInA ? this.sortIndicesBufferA : this.sortIndicesBufferB;
 
         this.sortUniformsBuffer = device.createBuffer({
             label: "bezier sort uniforms",
-            size: 1024,
+            size: 256 * (numSteps + 1),
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-
-        for (let i = 0; i < 4; i++) {
-            device.queue.writeBuffer(this.sortUniformsBuffer, i * 256 + 64, new Uint32Array([i * 8, 0, 0, 0]));
-        }
-
-        // Binning buffers
-        this.binningAtomicBuffer = device.createBuffer({
-            label: "bezier binning atomic",
-            size: 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        });
-        const maxInstances = this.numBeziers * 8; // More instances per bezier than splats? 8 seems safe.
-        this.instanceKeysBufferA = device.createBuffer({
-            label: "bezier binning keys A",
-            size: maxInstances * 8, // vec2u
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.instanceKeysBufferB = device.createBuffer({
-            label: "bezier binning keys B",
-            size: maxInstances * 8, // vec2u
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.instanceValsBufferA = device.createBuffer({
-            label: "bezier binning vals A",
-            size: maxInstances * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.instanceValsBufferB = device.createBuffer({
-            label: "bezier binning vals B",
-            size: maxInstances * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.binningUniformsBuffer = device.createBuffer({
-            label: "bezier binning uniforms",
-            size: 1024,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-        // We write 8 shift passes: depth (word 0, shift 0,8,16,24), tile (word 1, shift 0,8,16,24)
-        for (let i = 0; i < 8; i++) {
-            const word_idx = i < 4 ? 0 : 1;
-            const shift = (i % 4) * 8;
-            device.queue.writeBuffer(this.binningUniformsBuffer, i * 256 + 64, new Uint32Array([shift, word_idx, 0, 0]));
-        }
-        
-        const W_bin = Math.ceil(maxInstances / 256);
-        this.binningHistBuffer = device.createBuffer({
-            label: "bezier binning histogram",
-            size: 256 * W_bin * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
-
-        this.tileStartsBuffer = device.createBuffer({
-            label: "bezier tile starts",
-            size: 40000 * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.tileEndsBuffer = device.createBuffer({
-            label: "bezier tile ends",
-            size: 40000 * 4,
-            usage: GPUBufferUsage.STORAGE,
         });
 
         // NUM_BEZIERS_PLUS_ONE / NUM_BEZIERS_MINUS_ONE must come before
@@ -259,6 +175,7 @@ export class GpuBezierOptimizerManager {
                 BEZIER_SORT_CHUNK: Math.ceil(this.numBeziers / 256),
                 NUM_BEZIER_PARAMS: this.numParams,
                 PIXEL_LOSS_SIZE: PIXEL_LOSS_MAX,
+                SORT_N: this.sortN,
             });
         };
 
@@ -274,9 +191,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 8, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
-                { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // instance_vals
-                { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // tile_starts
-                { binding: 13, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // tile_ends
+                { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
             ],
         });
         const backwardModule = device.createShaderModule({
@@ -378,13 +293,12 @@ export class GpuBezierOptimizerManager {
         const sortBindGroupLayout = device.createBindGroupLayout({
             label: "bezier sort bind group layout",
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // splats
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // in_keys
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // in_indices
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // out_keys
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // out_indices
-                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true } }, // sort_uniforms
-                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // hist
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true } },
             ],
         });
         const sortModule = device.createShaderModule({ label: "bezier sort", code: inject(sortModuleSrc) });
@@ -430,51 +344,25 @@ export class GpuBezierOptimizerManager {
         initPass.end();
         device.queue.submit([initEncoder.finish()]);
 
-        const sortLayout = device.createPipelineLayout({
-            label: "bezier sort pipeline layout",
-            bindGroupLayouts: [sortBindGroupLayout],
-        });
-
-        this.radixInitPipeline = device.createComputePipeline({
+        this.sortInitPipeline = device.createComputePipeline({
             label: "bezier sort init pipeline",
-            layout: sortLayout,
+            layout: device.createPipelineLayout({
+                label: "bezier sort init pipeline layout",
+                bindGroupLayouts: [sortBindGroupLayout],
+            }),
             compute: { module: sortModule, entryPoint: "init_keys" },
         });
-
-        this.radixCountPipeline = device.createComputePipeline({
-            label: "bezier sort count pipeline",
-            layout: sortLayout,
-            compute: { module: sortModule, entryPoint: "count" },
+        this.sortStepPipeline = device.createComputePipeline({
+            label: "bezier sort step pipeline",
+            layout: device.createPipelineLayout({
+                label: "bezier sort step pipeline layout",
+                bindGroupLayouts: [sortBindGroupLayout],
+            }),
+            compute: { module: sortModule, entryPoint: "sort_step" },
         });
 
-        this.radixScanPipeline = device.createComputePipeline({
-            label: "bezier sort scan pipeline",
-            layout: sortLayout,
-            compute: { module: sortModule, entryPoint: "scan" },
-        });
-
-        this.radixScatterPipeline = device.createComputePipeline({
-            label: "bezier sort scatter pipeline",
-            layout: sortLayout,
-            compute: { module: sortModule, entryPoint: "scatter" },
-        });
-
-        this.sortBindGroupAtoB = device.createBindGroup({
-            label: "bezier sort bind group A to B",
-            layout: sortBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.bezierBuffer } },
-                { binding: 1, resource: { buffer: this.sortKeysBufferA } },
-                { binding: 2, resource: { buffer: this.sortIndicesBufferA } },
-                { binding: 3, resource: { buffer: this.sortKeysBufferB } },
-                { binding: 4, resource: { buffer: this.sortIndicesBufferB } },
-                { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
-                { binding: 6, resource: { buffer: this.histBuffer } },
-            ],
-        });
-
-        this.sortBindGroupBtoA = device.createBindGroup({
-            label: "bezier sort bind group B to A",
+        this.sortInitBindGroup = device.createBindGroup({
+            label: "bezier sort init bind group",
             layout: sortBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
@@ -483,104 +371,44 @@ export class GpuBezierOptimizerManager {
                 { binding: 3, resource: { buffer: this.sortKeysBufferA } },
                 { binding: 4, resource: { buffer: this.sortIndicesBufferA } },
                 { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
-                { binding: 6, resource: { buffer: this.histBuffer } },
             ],
         });
 
-        // Binning Pipelines
-        const binningBindGroupLayout = device.createBindGroupLayout({
-            label: "bezier binning bind group layout",
-            entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // beziers
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // instance_keys
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // instance_vals
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // atomic_count
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } }, // binning_uniforms
-                
-                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // in_keys
-                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // in_vals
-                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // out_keys
-                { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // out_vals
-                { binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true } }, // sort_uniforms
-                { binding: 10, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // hist
-                { binding: 11, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // tile_starts
-                { binding: 12, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // tile_ends
-            ],
-        });
-
-        const binningModule = device.createShaderModule({ 
-            label: "bezier binning", 
-            code: inject(binningModuleSrc) 
-        });
-        binningModule.getCompilationInfo().then(info => {
-            for (const msg of info.messages) console.warn(`[bezier_binning] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
-        });
-
-        const binningLayout = device.createPipelineLayout({
-            label: "bezier binning pipeline layout",
-            bindGroupLayouts: [binningBindGroupLayout]
-        });
-
-        this.binInstantiatePipeline = device.createComputePipeline({
-            label: "bezier binning instantiate", layout: binningLayout,
-            compute: { module: binningModule, entryPoint: "instantiate" },
-        });
-        this.binCountPipeline = device.createComputePipeline({
-            label: "bezier binning count", layout: binningLayout,
-            compute: { module: binningModule, entryPoint: "count" },
-        });
-        this.binScanPipeline = device.createComputePipeline({
-            label: "bezier binning scan", layout: binningLayout,
-            compute: { module: binningModule, entryPoint: "scan" },
-        });
-        this.binScatterPipeline = device.createComputePipeline({
-            label: "bezier binning scatter", layout: binningLayout,
-            compute: { module: binningModule, entryPoint: "scatter" },
-        });
-        this.binRangesPipeline = device.createComputePipeline({
-            label: "bezier binning ranges", layout: binningLayout,
-            compute: { module: binningModule, entryPoint: "calc_ranges" },
-        });
-
-        this.binBindGroupAtoB = device.createBindGroup({
-            label: "bezier binning bind group A to B",
-            layout: binningBindGroupLayout,
+        this.sortStepBindGroupAtoB = device.createBindGroup({
+            label: "bezier sort step bind group A to B",
+            layout: sortBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
-                { binding: 1, resource: { buffer: this.instanceKeysBufferA } },
-                { binding: 2, resource: { buffer: this.instanceValsBufferA } },
-                { binding: 3, resource: { buffer: this.binningAtomicBuffer } },
-                { binding: 4, resource: { buffer: this.binningUniformsBuffer, size: 80 } },
-                { binding: 5, resource: { buffer: this.instanceKeysBufferA } },
-                { binding: 6, resource: { buffer: this.instanceValsBufferA } },
-                { binding: 7, resource: { buffer: this.instanceKeysBufferB } },
-                { binding: 8, resource: { buffer: this.instanceValsBufferB } },
-                { binding: 9, resource: { buffer: this.binningUniformsBuffer, offset: 256, size: 80 } },
-                { binding: 10, resource: { buffer: this.binningHistBuffer } },
-                { binding: 11, resource: { buffer: this.tileStartsBuffer } },
-                { binding: 12, resource: { buffer: this.tileEndsBuffer } },
+                { binding: 1, resource: { buffer: this.sortKeysBufferA } },
+                { binding: 2, resource: { buffer: this.sortIndicesBufferA } },
+                { binding: 3, resource: { buffer: this.sortKeysBufferB } },
+                { binding: 4, resource: { buffer: this.sortIndicesBufferB } },
+                { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
             ],
         });
 
-        this.binBindGroupBtoA = device.createBindGroup({
-            label: "bezier binning bind group B to A",
-            layout: binningBindGroupLayout,
+        this.sortStepBindGroupBtoA = device.createBindGroup({
+            label: "bezier sort step bind group B to A",
+            layout: sortBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.bezierBuffer } },
-                { binding: 1, resource: { buffer: this.instanceKeysBufferB } },
-                { binding: 2, resource: { buffer: this.instanceValsBufferB } },
-                { binding: 3, resource: { buffer: this.binningAtomicBuffer } },
-                { binding: 4, resource: { buffer: this.binningUniformsBuffer, size: 80 } },
-                { binding: 5, resource: { buffer: this.instanceKeysBufferB } },
-                { binding: 6, resource: { buffer: this.instanceValsBufferB } },
-                { binding: 7, resource: { buffer: this.instanceKeysBufferA } },
-                { binding: 8, resource: { buffer: this.instanceValsBufferA } },
-                { binding: 9, resource: { buffer: this.binningUniformsBuffer, offset: 256, size: 80 } },
-                { binding: 10, resource: { buffer: this.binningHistBuffer } },
-                { binding: 11, resource: { buffer: this.tileStartsBuffer } },
-                { binding: 12, resource: { buffer: this.tileEndsBuffer } },
+                { binding: 1, resource: { buffer: this.sortKeysBufferB } },
+                { binding: 2, resource: { buffer: this.sortIndicesBufferB } },
+                { binding: 3, resource: { buffer: this.sortKeysBufferA } },
+                { binding: 4, resource: { buffer: this.sortIndicesBufferA } },
+                { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
             ],
         });
+
+        let stepIdx = 0;
+        for (let block_k = 1; block_k <= logN; block_k++) {
+            for (let sub_k = block_k - 1; sub_k >= 0; sub_k--) {
+                const offset = 256 * (stepIdx + 1);
+                device.queue.writeBuffer(this.sortUniformsBuffer, offset + 64, new Uint32Array([block_k, sub_k, 0, 0]));
+                stepIdx++;
+            }
+        }
+        this.numSortSteps = stepIdx;
     }
 
     writeVPMatrix(mat: Float32Array | number[]) {
@@ -744,17 +572,13 @@ export class GpuBezierOptimizerManager {
                 { binding: 7, resource: { buffer: this.adcBuffer } },
                 { binding: 8, resource: normalTextureView },
                 { binding: 9, resource: { buffer: this.pixelLossBuffer } },
-                { binding: 11, resource: { buffer: this.instanceValsBufferA } },
-                { binding: 12, resource: { buffer: this.tileStartsBuffer } },
-                { binding: 13, resource: { buffer: this.tileEndsBuffer } },
+                { binding: 10, resource: { buffer: this.sortIndicesBuffer } },
             ],
         });
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder, vpMat: Mat4, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
+    dispatch(commandEncoder: GPUCommandEncoder, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
         if (!this.backwardBindGroup) return;
-
-        this.dispatchBinning(commandEncoder, vpMat);
 
         // Update pixel count for normalization in the step shader.
         // AdamState layout: m [N], v [N], t [1], pixel_count [1], pad [2]
@@ -792,105 +616,31 @@ export class GpuBezierOptimizerManager {
 
         pass.end();
     }
-    dispatchBinning(commandEncoder: GPUCommandEncoder, vpMat: Mat4) {
-        const vpData = vpMat as Float32Array;
-        const gridW = Math.ceil(this.dims.width / 16);
-        const gridH = Math.ceil(this.dims.height / 16);
-        const maxInstances = this.numBeziers * 8;
-
-        this.device.queue.writeBuffer(
-            this.binningUniformsBuffer, 0,
-            vpData.buffer, vpData.byteOffset, vpData.byteLength,
-        );
-        this.device.queue.writeBuffer(
-            this.binningUniformsBuffer, 64,
-            new Uint32Array([gridW, gridH, maxInstances, 0])
-        );
-
-        for (let i = 1; i < 8; i++) {
-            commandEncoder.copyBufferToBuffer(this.binningUniformsBuffer, 0, this.binningUniformsBuffer, i * 256, 80);
-        }
-
-        this.device.queue.writeBuffer(this.binningAtomicBuffer, 0, new Uint32Array([0]));
-
-        const wg = Math.ceil(this.numBeziers / 256);
-        const initPass = commandEncoder.beginComputePass({ label: "bezier binning instantiate" });
-        initPass.setPipeline(this.binInstantiatePipeline);
-        initPass.setBindGroup(0, this.binBindGroupAtoB, [0]);
-        initPass.dispatchWorkgroups(wg);
-        initPass.end();
-
-        const W_bin = Math.ceil(maxInstances / 256);
-        for (let i = 0; i < 8; i++) {
-            const bg = (i % 2 === 0) ? this.binBindGroupAtoB : this.binBindGroupBtoA;
-            const offset = i * 256;
-
-            const countPass = commandEncoder.beginComputePass({ label: `bezier binning count ${i}` });
-            countPass.setPipeline(this.binCountPipeline);
-            countPass.setBindGroup(0, bg, [offset]);
-            countPass.dispatchWorkgroups(W_bin);
-            countPass.end();
-
-            const scanPass = commandEncoder.beginComputePass({ label: `bezier binning scan ${i}` });
-            scanPass.setPipeline(this.binScanPipeline);
-            scanPass.setBindGroup(0, bg, [offset]);
-            scanPass.dispatchWorkgroups(1);
-            scanPass.end();
-
-            const scatterPass = commandEncoder.beginComputePass({ label: `bezier binning scatter ${i}` });
-            scatterPass.setPipeline(this.binScatterPipeline);
-            scatterPass.setBindGroup(0, bg, [offset]);
-            scatterPass.dispatchWorkgroups(W_bin);
-            scatterPass.end();
-        }
-
-        const rangesPass = commandEncoder.beginComputePass({ label: "bezier binning ranges" });
-        rangesPass.setPipeline(this.binRangesPipeline);
-        rangesPass.setBindGroup(0, this.binBindGroupAtoB, [0]);
-        rangesPass.dispatchWorkgroups(W_bin);
-        rangesPass.end();
-    }
 
     dispatchSort(commandEncoder: GPUCommandEncoder, vpMat: Mat4) {
         const vpData = vpMat as Float32Array;
 
-        for (let i = 0; i < 4; i++) {
-            this.device.queue.writeBuffer(
-                this.sortUniformsBuffer, i * 256,
-                vpData.buffer, vpData.byteOffset, vpData.byteLength,
-            );
-        }
+        this.device.queue.writeBuffer(
+            this.sortUniformsBuffer, 0,
+            vpData.buffer, vpData.byteOffset, vpData.byteLength,
+        );
 
-        const wg = Math.ceil(this.numBeziers / 256);
+        const wg = Math.ceil(this.sortN / 256);
 
         const initPass = commandEncoder.beginComputePass({ label: "bezier sort init pass" });
-        initPass.setPipeline(this.radixInitPipeline);
-        // Bind to AtoB to write to Buffer A. Uniform offset 0 (shift 0).
-        initPass.setBindGroup(0, this.sortBindGroupAtoB, [0]);
+        initPass.setPipeline(this.sortInitPipeline);
+        initPass.setBindGroup(0, this.sortInitBindGroup, [0]);
         initPass.dispatchWorkgroups(wg);
         initPass.end();
 
-        for (let i = 0; i < 4; i++) {
-            const bg = (i % 2 === 0) ? this.sortBindGroupAtoB : this.sortBindGroupBtoA;
-            const offset = i * 256;
-
-            const countPass = commandEncoder.beginComputePass({ label: `bezier sort count ${i}` });
-            countPass.setPipeline(this.radixCountPipeline);
-            countPass.setBindGroup(0, bg, [offset]);
-            countPass.dispatchWorkgroups(wg);
-            countPass.end();
-
-            const scanPass = commandEncoder.beginComputePass({ label: `bezier sort scan ${i}` });
-            scanPass.setPipeline(this.radixScanPipeline);
-            scanPass.setBindGroup(0, bg, [offset]);
-            scanPass.dispatchWorkgroups(1);
-            scanPass.end();
-
-            const scatterPass = commandEncoder.beginComputePass({ label: `bezier sort scatter ${i}` });
-            scatterPass.setPipeline(this.radixScatterPipeline);
-            scatterPass.setBindGroup(0, bg, [offset]);
-            scatterPass.dispatchWorkgroups(wg);
-            scatterPass.end();
+        const stepWg = Math.ceil(this.sortN / 2 / 256);
+        for (let i = 0; i < this.numSortSteps; i++) {
+            const stepPass = commandEncoder.beginComputePass({ label: `bezier sort step ${i}` });
+            stepPass.setPipeline(this.sortStepPipeline);
+            const bg = (i % 2 === 0) ? this.sortStepBindGroupAtoB : this.sortStepBindGroupBtoA;
+            stepPass.setBindGroup(0, bg, [256 * (i + 1)]);
+            stepPass.dispatchWorkgroups(stepWg);
+            stepPass.end();
         }
     }
 
@@ -907,6 +657,5 @@ export class GpuBezierOptimizerManager {
         this.sortIndicesBufferA.destroy();
         this.sortIndicesBufferB.destroy();
         this.sortUniformsBuffer.destroy();
-        this.histBuffer.destroy();
     }
 }

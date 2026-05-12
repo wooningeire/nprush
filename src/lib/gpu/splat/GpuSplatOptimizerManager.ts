@@ -5,7 +5,6 @@ import adcModuleSrc from "./splat_adc.wgsl?raw";
 import edgeModuleSrc from "./splat_edge.wgsl?raw";
 import sortModuleSrc from "./splat_sort.wgsl?raw";
 import initModuleSrc from "./splat_init.wgsl?raw";
-import binningModuleSrc from "./splat_binning.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
 import { constants, injectWgslConstants } from "../constants";
 import { nextPowerOfTwoAtLeast } from "../nextPowerOfTwoAtLeast";
@@ -37,36 +36,15 @@ export class GpuSplatOptimizerManager {
     private readonly adcPipeline: GPUComputePipeline;
     private readonly edgePipeline: GPUComputePipeline;
     private readonly renderPipeline: GPURenderPipeline;
-    private radixInitPipeline!: GPUComputePipeline;
-    private radixCountPipeline!: GPUComputePipeline;
-    private radixScanPipeline!: GPUComputePipeline;
-    private radixScatterPipeline!: GPUComputePipeline;
+    private readonly sortInitPipeline: GPUComputePipeline;
+    private readonly sortStepPipeline: GPUComputePipeline;
     private readonly initPipeline: GPUComputePipeline;
+    private sortInitBindGroup: GPUBindGroup;
     private initBindGroup: GPUBindGroup;
-    private sortBindGroupAtoB!: GPUBindGroup;
-    private sortBindGroupBtoA!: GPUBindGroup;
-    
-    private histBuffer!: GPUBuffer;
-
-    // Binning buffers and pipelines
-    private binningAtomicBuffer!: GPUBuffer;
-    private instanceKeysBufferA!: GPUBuffer;
-    private instanceKeysBufferB!: GPUBuffer;
-    private instanceValsBufferA!: GPUBuffer;
-    private instanceValsBufferB!: GPUBuffer;
-    private binningUniformsBuffer!: GPUBuffer;
-    private binningHistBuffer!: GPUBuffer;
-    private tileStartsBuffer!: GPUBuffer;
-    private tileEndsBuffer!: GPUBuffer;
-
-    private binInstantiatePipeline!: GPUComputePipeline;
-    private binCountPipeline!: GPUComputePipeline;
-    private binScanPipeline!: GPUComputePipeline;
-    private binScatterPipeline!: GPUComputePipeline;
-    private binRangesPipeline!: GPUComputePipeline;
-
-    private binBindGroupAtoB!: GPUBindGroup;
-    private binBindGroupBtoA!: GPUBindGroup;
+    private sortStepBindGroupAtoB!: GPUBindGroup;
+    private sortStepBindGroupBtoA!: GPUBindGroup;
+    private numSortSteps: number = 0;
+    private sortN: number = 0;
 
     private backwardBindGroupLayout: GPUBindGroupLayout;
     private stepBindGroupLayout: GPUBindGroupLayout;
@@ -161,87 +139,23 @@ export class GpuSplatOptimizerManager {
             usage: GPUBufferUsage.STORAGE,
         });
 
-        // WG_SIZE = 256. Number of workgroups W = ceil(numSplats / 256).
-        // histBuffer stores atomic<u32> for 256 buckets across W workgroups.
-        const W = Math.ceil(this.numSplats / 256);
-        this.histBuffer = device.createBuffer({
-            label: "splat sort histogram",
-            size: 256 * W * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
+        const sortN = nextPowerOfTwoAtLeast(this.numSplats);
+        this.sortN = sortN;
+        const logN = Math.log2(this.sortN);
+        const numSteps = (logN * (logN + 1)) / 2;
+        const finalInA = numSteps % 2 === 0;
 
-        // Binning buffers
-        this.binningAtomicBuffer = device.createBuffer({
-            label: "splat binning atomic",
-            size: 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        });
-        const maxInstances = this.numSplats * 4;
-        this.instanceKeysBufferA = device.createBuffer({
-            label: "splat binning keys A",
-            size: maxInstances * 8, // vec2u
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.instanceKeysBufferB = device.createBuffer({
-            label: "splat binning keys B",
-            size: maxInstances * 8, // vec2u
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.instanceValsBufferA = device.createBuffer({
-            label: "splat binning vals A",
-            size: maxInstances * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.instanceValsBufferB = device.createBuffer({
-            label: "splat binning vals B",
-            size: maxInstances * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.binningUniformsBuffer = device.createBuffer({
-            label: "splat binning uniforms",
-            size: 1024,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-        // We write 8 shift passes: depth (word 0, shift 0,8,16,24), tile (word 1, shift 0,8,16,24)
-        for (let i = 0; i < 8; i++) {
-            const word_idx = i < 4 ? 0 : 1;
-            const shift = (i % 4) * 8;
-            device.queue.writeBuffer(this.binningUniformsBuffer, i * 256 + 64, new Uint32Array([shift, word_idx, 0, 0]));
-        }
-        
-        // Hist buffer needs to support MAX_INSTANCES / 256 items
-        const W_bin = Math.ceil(maxInstances / 256);
-        this.binningHistBuffer = device.createBuffer({
-            label: "splat binning histogram",
-            size: 256 * W_bin * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
+        this.sortKeysBuffer = finalInA ? this.sortKeysBufferA : this.sortKeysBufferB;
+        this.sortIndicesBuffer = finalInA ? this.sortIndicesBufferA : this.sortIndicesBufferB;
 
-        this.tileStartsBuffer = device.createBuffer({
-            label: "splat tile starts",
-            size: 40000 * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
-        this.tileEndsBuffer = device.createBuffer({
-            label: "splat tile ends",
-            size: 40000 * 4,
-            usage: GPUBufferUsage.STORAGE,
-        });
-
-        this.sortKeysBuffer = this.sortKeysBufferA;
-        this.sortIndicesBuffer = this.sortIndicesBufferA;
-
-        // Sort uniforms: VP (64) + shift (4) + pad (12) = 80 bytes.
-        // We use 4 dynamic offsets (0, 256, 512, 768) for the 4 passes (shift = 0, 8, 16, 24).
+        // Sort uniforms: VP (64) + block_k (4) + sub_k (4) + pad (8) = 80
+        // Using dynamic offsets aligned to 256 bytes.
+        // Chunk 0 is used for init_keys (VP matrix). Chunks 1..numSteps are for sort_step.
         this.sortUniformsBuffer = device.createBuffer({
             label: "splat sort uniforms",
-            size: 1024,
+            size: 256 * (numSteps + 1),
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
-
-        for (let i = 0; i < 4; i++) {
-            device.queue.writeBuffer(this.sortUniformsBuffer, i * 256 + 64, new Uint32Array([i * 8, 0, 0, 0]));
-        }
 
         const injectConstants = (src: string) => {
             return injectWgslConstants(src, {
@@ -251,10 +165,11 @@ export class GpuSplatOptimizerManager {
                 NUM_SPLATS_MINUS_ONE: this.numSplats - 1,
                 NUM_SPLATS_DIV_32: Math.ceil(this.numSplats / 32),
                 NUM_PARAMS: this.numParams,
+                SORT_N: sortN,
             });
         };
 
-        // Backward Pipeline — bindings: splats, grads, target, targetDepth, splat_uniforms, tile_starts, tile_ends, instance_vals
+        // Backward Pipeline — now has 6 bindings (splats, grads, target, depth, VP uniform, sort order)
         this.backwardBindGroupLayout = device.createBindGroupLayout({
             label: "splat backward bind group layout",
             entries: [
@@ -264,8 +179,6 @@ export class GpuSplatOptimizerManager {
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-                { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
             ],
         });
         const backwardModule = device.createShaderModule({ label: "splat backward", code: injectConstants(backwardModuleSrc) });
@@ -400,51 +313,37 @@ export class GpuSplatOptimizerManager {
             fragment: { module: renderModule, entryPoint: "frag", targets: [{ format }] },
             primitive: { topology: "triangle-list" },
         });
+        // Sort pipelines
         const sortBindGroupLayout = device.createBindGroupLayout({
             label: "splat sort bind group layout",
             entries: [
-                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // splats
-                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // in_keys
-                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }, // in_indices
-                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // out_keys
-                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // out_indices
-                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true } }, // sort_uniforms
-                { binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }, // hist
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", hasDynamicOffset: true } },
             ],
         });
-
         const sortModule = device.createShaderModule({ label: "splat sort", code: injectConstants(sortModuleSrc) });
         sortModule.getCompilationInfo().then(info => {
             for (const msg of info.messages) console.warn(`[splat_sort] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
-
-        const sortLayout = device.createPipelineLayout({
-            label: "splat sort pipeline layout",
-            bindGroupLayouts: [sortBindGroupLayout]
-        });
-
-        this.radixInitPipeline = device.createComputePipeline({
-            label: "splat sort init_keys pipeline",
-            layout: sortLayout,
+        this.sortInitPipeline = device.createComputePipeline({
+            label: "splat sort init pipeline",
+            layout: device.createPipelineLayout({
+                label: "splat sort init pipeline layout",
+                bindGroupLayouts: [sortBindGroupLayout],
+            }),
             compute: { module: sortModule, entryPoint: "init_keys" },
         });
-
-        this.radixCountPipeline = device.createComputePipeline({
-            label: "splat sort count pipeline",
-            layout: sortLayout,
-            compute: { module: sortModule, entryPoint: "count" },
-        });
-
-        this.radixScanPipeline = device.createComputePipeline({
-            label: "splat sort scan pipeline",
-            layout: sortLayout,
-            compute: { module: sortModule, entryPoint: "scan" },
-        });
-
-        this.radixScatterPipeline = device.createComputePipeline({
-            label: "splat sort scatter pipeline",
-            layout: sortLayout,
-            compute: { module: sortModule, entryPoint: "scatter" },
+        this.sortStepPipeline = device.createComputePipeline({
+            label: "splat sort step pipeline",
+            layout: device.createPipelineLayout({
+                label: "splat sort step pipeline layout",
+                bindGroupLayouts: [sortBindGroupLayout],
+            }),
+            compute: { module: sortModule, entryPoint: "sort_step" },
         });
 
         const initBindGroupLayout = device.createBindGroupLayout({
@@ -485,22 +384,10 @@ export class GpuSplatOptimizerManager {
         initPass.end();
         device.queue.submit([initEncoder.finish()]);
 
-        this.sortBindGroupAtoB = device.createBindGroup({
-            label: "splat sort bind group A to B",
-            layout: sortBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.splatBuffer } },
-                { binding: 1, resource: { buffer: this.sortKeysBufferA } },
-                { binding: 2, resource: { buffer: this.sortIndicesBufferA } },
-                { binding: 3, resource: { buffer: this.sortKeysBufferB } },
-                { binding: 4, resource: { buffer: this.sortIndicesBufferB } },
-                { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
-                { binding: 6, resource: { buffer: this.histBuffer } },
-            ],
-        });
-
-        this.sortBindGroupBtoA = device.createBindGroup({
-            label: "splat sort bind group B to A",
+        // Pre-create init bind group (uses sortUniformsBuffer for VP only at offset 0)
+        // Note: init pass only writes to A. in_keys/in_indices are unused by init shader, but we bind them to A as dummies.
+        this.sortInitBindGroup = device.createBindGroup({
+            label: "splat sort init bind group",
             layout: sortBindGroupLayout,
             entries: [
                 { binding: 0, resource: { buffer: this.splatBuffer } },
@@ -509,9 +396,45 @@ export class GpuSplatOptimizerManager {
                 { binding: 3, resource: { buffer: this.sortKeysBufferA } },
                 { binding: 4, resource: { buffer: this.sortIndicesBufferA } },
                 { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
-                { binding: 6, resource: { buffer: this.histBuffer } },
             ],
         });
+
+        this.sortStepBindGroupAtoB = device.createBindGroup({
+            label: "splat sort step bind group A to B",
+            layout: sortBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.splatBuffer } },
+                { binding: 1, resource: { buffer: this.sortKeysBufferA } },
+                { binding: 2, resource: { buffer: this.sortIndicesBufferA } },
+                { binding: 3, resource: { buffer: this.sortKeysBufferB } },
+                { binding: 4, resource: { buffer: this.sortIndicesBufferB } },
+                { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
+            ],
+        });
+
+        this.sortStepBindGroupBtoA = device.createBindGroup({
+            label: "splat sort step bind group B to A",
+            layout: sortBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.splatBuffer } },
+                { binding: 1, resource: { buffer: this.sortKeysBufferB } },
+                { binding: 2, resource: { buffer: this.sortIndicesBufferB } },
+                { binding: 3, resource: { buffer: this.sortKeysBufferA } },
+                { binding: 4, resource: { buffer: this.sortIndicesBufferA } },
+                { binding: 5, resource: { buffer: this.sortUniformsBuffer, size: 80 } },
+            ],
+        });
+
+        // Pre-write all block_k and sub_k step params at their dynamic offsets
+        let stepIdx = 0;
+        for (let block_k = 1; block_k <= logN; block_k++) {
+            for (let sub_k = block_k - 1; sub_k >= 0; sub_k--) {
+                const offset = 256 * (stepIdx + 1); // +1 because offset 0 is for init
+                device.queue.writeBuffer(this.sortUniformsBuffer, offset + 64, new Uint32Array([block_k, sub_k, 0, 0]));
+                stepIdx++;
+            }
+        }
+        this.numSortSteps = stepIdx;
     }
 
     writeSplatVPMatrix(
@@ -562,9 +485,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 2, resource: targetTextureView },
                 { binding: 3, resource: targetDepthTextureView }, // actual depth, not edge
                 { binding: 4, resource: { buffer: this.splatUniformsBuffer } },
-                { binding: 5, resource: { buffer: this.instanceValsBufferA } }, // after 8 passes, result is in BufferA
-                { binding: 6, resource: { buffer: this.tileStartsBuffer } },
-                { binding: 7, resource: { buffer: this.tileEndsBuffer } },
+                { binding: 5, resource: { buffer: this.sortIndicesBuffer } },
             ],
         });
     }
@@ -650,10 +571,8 @@ export class GpuSplatOptimizerManager {
         );
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder, vpMat: Mat4, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
+    dispatch(commandEncoder: GPUCommandEncoder, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
         if (!this.backwardBindGroup) return;
-
-        this.dispatchBinning(commandEncoder, vpMat);
 
         // Update pixel count for gradient normalization in the step shader.
         // AdamState layout: m [N], v [N], t [1], pixel_count [1], pad [2]
@@ -717,45 +636,30 @@ export class GpuSplatOptimizerManager {
     dispatchSort(commandEncoder: GPUCommandEncoder, vpMat: Mat4) {
         const vpData = vpMat as Float32Array;
 
-        for (let i = 0; i < 4; i++) {
-            this.device.queue.writeBuffer(
-                this.sortUniformsBuffer, i * 256,
-                vpData.buffer, vpData.byteOffset, vpData.byteLength,
-            );
-        }
+        // Write VP matrix to the init uniform buffer
+        this.device.queue.writeBuffer(
+            this.sortUniformsBuffer, 0,
+            vpData.buffer, vpData.byteOffset, vpData.byteLength,
+        );
 
-        const wg = Math.ceil(this.numSplats / 256);
+        const wg = Math.ceil(this.sortN / 256);
 
         // Pass 0: compute depth keys + init indices
         const initPass = commandEncoder.beginComputePass({ label: "splat sort init pass" });
-        initPass.setPipeline(this.radixInitPipeline);
-        // Bind to AtoB to write to Buffer A. Uniform offset 0 (shift 0).
-        initPass.setBindGroup(0, this.sortBindGroupAtoB, [0]);
+        initPass.setPipeline(this.sortInitPipeline);
+        initPass.setBindGroup(0, this.sortInitBindGroup, [0]);
         initPass.dispatchWorkgroups(wg);
         initPass.end();
 
-        // 4 passes of 8-bit Radix Sort
-        for (let i = 0; i < 4; i++) {
-            const bg = (i % 2 === 0) ? this.sortBindGroupAtoB : this.sortBindGroupBtoA;
-            const offset = i * 256;
-
-            const countPass = commandEncoder.beginComputePass({ label: `splat sort count ${i}` });
-            countPass.setPipeline(this.radixCountPipeline);
-            countPass.setBindGroup(0, bg, [offset]);
-            countPass.dispatchWorkgroups(wg);
-            countPass.end();
-
-            const scanPass = commandEncoder.beginComputePass({ label: `splat sort scan ${i}` });
-            scanPass.setPipeline(this.radixScanPipeline);
-            scanPass.setBindGroup(0, bg, [offset]);
-            scanPass.dispatchWorkgroups(1);
-            scanPass.end();
-
-            const scatterPass = commandEncoder.beginComputePass({ label: `splat sort scatter ${i}` });
-            scatterPass.setPipeline(this.radixScatterPipeline);
-            scatterPass.setBindGroup(0, bg, [offset]);
-            scatterPass.dispatchWorkgroups(wg);
-            scatterPass.end();
+        // Bitonic merge sort steps
+        const stepWg = Math.ceil(this.sortN / 2 / 256);
+        for (let i = 0; i < this.numSortSteps; i++) {
+            const stepPass = commandEncoder.beginComputePass({ label: `splat sort step ${i}` });
+            stepPass.setPipeline(this.sortStepPipeline);
+            const bg = (i % 2 === 0) ? this.sortStepBindGroupAtoB : this.sortStepBindGroupBtoA;
+            stepPass.setBindGroup(0, bg, [256 * (i + 1)]);
+            stepPass.dispatchWorkgroups(stepWg);
+            stepPass.end();
         }
     }
 
@@ -771,6 +675,5 @@ export class GpuSplatOptimizerManager {
         this.sortIndicesBufferA.destroy();
         this.sortIndicesBufferB.destroy();
         this.sortUniformsBuffer.destroy();
-        this.histBuffer.destroy();
     }
 }

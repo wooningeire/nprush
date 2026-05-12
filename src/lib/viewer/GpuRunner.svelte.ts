@@ -1141,7 +1141,6 @@ export class GpuRunner {
             if (this.viewerState.splatsEnabled && !(this.viewerState.splatTrainingPaused || defaultPause)) {
                 this.splatOptimizerManager.dispatch(
                     commandEncoder,
-                    sortVp,
                     profWrites(GpuProfilingPair.SplatBackwardStep),
                 );
             }
@@ -1171,7 +1170,6 @@ export class GpuRunner {
                 if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
                     this.edgeLayerBezierManager.dispatch(
                         commandEncoder,
-                        sortVp,
                         profWrites(GpuProfilingPair.BezierEdgeOptim),
                     );
                 }
@@ -1183,7 +1181,6 @@ export class GpuRunner {
                 if (!(this.viewerState.baseColorBezierTrainingPaused || defaultPause)) {
                     this.baseColorLayerBezierManager.dispatch(
                         commandEncoder,
-                        sortVp,
                         profWrites(GpuProfilingPair.BezierCoarseOptim),
                     );
                 }
@@ -1200,7 +1197,6 @@ export class GpuRunner {
                 if (!(this.viewerState.colorBezierTrainingPaused || defaultPause)) {
                     this.colorLayerBezierManager.dispatch(
                         commandEncoder,
-                        sortVp,
                         profWrites(GpuProfilingPair.BezierFineOptim),
                     );
                 }
