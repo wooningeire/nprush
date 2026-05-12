@@ -487,6 +487,7 @@ export class GpuRunner {
         this.meshRenderPipelineManager.replaceMesh(mesh);
         const ptMeshes: MeshData[] = [mesh];
         this.pathTracePipelineManager.setMeshes(ptMeshes);
+        this.pathTracePipelineManager.reset();
     }
 
     async prerenderDataset(): Promise<void> {
