@@ -137,12 +137,15 @@ fn instantiate(@builtin(global_invocation_id) gid: vec3u) {
 
 const WG_SIZE = 256u;
 
+var<workgroup> bucket_totals: array<u32, 256>;
+var<workgroup> shared_digits: array<u32, 256>;
+
 @compute @workgroup_size(256)
 fn count(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_id) lid: vec3u) {
     let count_val = atomicLoad(&atomic_count);
     let count = min(count_val, binning_uniforms.max_instances);
-    let W = (count + WG_SIZE - 1u) / WG_SIZE;
-    
+    let W = (binning_uniforms.max_instances + WG_SIZE - 1u) / WG_SIZE;
+
     atomicStore(&hist[lid.x * W + wid.x], 0u);
     workgroupBarrier();
 
@@ -157,11 +160,9 @@ fn count(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup_id) wid: 
 
 @compute @workgroup_size(256)
 fn scan(@builtin(local_invocation_id) lid: vec3u) {
-    let count_val = atomicLoad(&atomic_count);
-    let count = min(count_val, binning_uniforms.max_instances);
-    let W = (count + WG_SIZE - 1u) / WG_SIZE;
-    let bucket = lid.x; // 0..255
-    
+    let W = (binning_uniforms.max_instances + WG_SIZE - 1u) / WG_SIZE;
+    let bucket = lid.x;
+
     var accum = 0u;
     for (var w = 0u; w < W; w++) {
         let idx = bucket * W + w;
@@ -169,16 +170,15 @@ fn scan(@builtin(local_invocation_id) lid: vec3u) {
         atomicStore(&hist[idx], accum);
         accum += val;
     }
-    
-    var<workgroup> bucket_totals: array<u32, 256>;
+
     bucket_totals[bucket] = accum;
     workgroupBarrier();
-    
+
     var base = 0u;
     for (var b = 0u; b < bucket; b++) {
         base += bucket_totals[b];
     }
-    
+
     for (var w = 0u; w < W; w++) {
         let idx = bucket * W + w;
         let val = atomicLoad(&hist[idx]);
@@ -190,24 +190,23 @@ fn scan(@builtin(local_invocation_id) lid: vec3u) {
 fn scatter(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_id) lid: vec3u) {
     let count_val = atomicLoad(&atomic_count);
     let count = min(count_val, binning_uniforms.max_instances);
-    let W = (count + WG_SIZE - 1u) / WG_SIZE;
+    let W = (binning_uniforms.max_instances + WG_SIZE - 1u) / WG_SIZE;
     let idx = gid.x;
-    
-    var digit = 256u; // invalid
+
+    var digit = 256u;
     var key = vec2u(0u, 0u);
     var val = 0u;
-    
+
     if (idx < count) {
         key = in_keys[idx];
         val = in_vals[idx];
         let word = select(key.x, key.y, sort_uniforms.word_idx == 1u);
         digit = (word >> sort_uniforms.shift) & 255u;
     }
-    
-    var<workgroup> shared_digits: array<u32, 256>;
+
     shared_digits[lid.x] = digit;
     workgroupBarrier();
-    
+
     if (idx < count) {
         var local_rank = 0u;
         for (var i = 0u; i < lid.x; i++) {
@@ -215,10 +214,10 @@ fn scatter(@builtin(global_invocation_id) gid: vec3u, @builtin(workgroup_id) wid
                 local_rank++;
             }
         }
-        
+
         let global_base = atomicLoad(&hist[digit * W + wid.x]);
         let dst_idx = global_base + local_rank;
-        
+
         out_keys[dst_idx] = key;
         out_vals[dst_idx] = val;
     }
@@ -236,26 +235,14 @@ fn calc_ranges(@builtin(global_invocation_id) gid: vec3u) {
     let idx = gid.x;
     let count_val = atomicLoad(&atomic_count);
     let count = min(count_val, binning_uniforms.max_instances);
-    
-    // Also reset tile_starts and tile_ends in a separate pass?
-    // We can clear them where idx < grid_width * grid_height.
-    let num_tiles = binning_uniforms.grid_width * binning_uniforms.grid_height;
-    if (idx < num_tiles) {
-        tile_starts[idx] = 0u;
-        tile_ends[idx] = 0u;
-    }
-    
+
     if (idx >= count) { return; }
 
     let tile_id = in_keys[idx].y;
-    
+
     let is_first = (idx == 0u) || (in_keys[idx - 1u].y != tile_id);
     let is_last = (idx == count - 1u) || (in_keys[idx + 1u].y != tile_id);
 
-    if (is_first) {
-        tile_starts[tile_id] = idx;
-    }
-    if (is_last) {
-        tile_ends[tile_id] = idx + 1u;
-    }
+    if (is_first) { tile_starts[tile_id] = idx; }
+    if (is_last) { tile_ends[tile_id] = idx + 1u; }
 }

@@ -29,12 +29,9 @@ struct SplatUniforms {
 @group(0) @binding(2) var targetTex: texture_2d<f32>;
 @group(0) @binding(3) var targetDepthTex: texture_2d<f32>;
 @group(0) @binding(4) var<uniform> splat_uniforms: SplatUniforms;
-@group(0) @binding(5) var<storage, read> sort_order: array<u32, {@NUM_SPLATS}u>;
-
-const MAX_TILE_SPLATS = {@SPLAT_MAX_TILE_SPLATS}u;
-var<workgroup> tile_mask: array<atomic<u32>, {@NUM_SPLATS_DIV_32}u>;
-var<workgroup> tile_splats: array<u32, MAX_TILE_SPLATS>;
-var<workgroup> tile_splat_count: atomic<u32>;
+@group(0) @binding(5) var<storage, read> instance_vals: array<u32>;
+@group(0) @binding(6) var<storage, read> tile_starts: array<u32>;
+@group(0) @binding(7) var<storage, read> tile_ends: array<u32>;
 
 fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32) -> vec2f {
     let uv = (vec2f(px) + vec2f(0.5)) / vec2f(dims);
@@ -154,91 +151,16 @@ fn eval_splat(s: Splat, p: vec2f, aspect: f32) -> ProjectedSplat {
 }
 
 @compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) workgroup_id: vec3u, @builtin(local_invocation_id) local_id: vec3u) {
+fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) workgroup_id: vec3u) {
     let dims = textureDimensions(targetTex);
     let aspect = f32(dims.x) / f32(dims.y);
 
-    let local_idx = local_id.y * 16u + local_id.x;
-    for (var i = local_idx; i < {@NUM_SPLATS_DIV_32}; i += 256u) {
-        atomicStore(&tile_mask[i], 0u);
-    }
-    if (local_idx == 0u) { atomicStore(&tile_splat_count, 0u); }
-    workgroupBarrier();
+    let grid_width = (dims.x + 15u) / 16u;
+    let tile_id = workgroup_id.y * grid_width + workgroup_id.x;
+    let start_idx = tile_starts[tile_id];
+    let end_idx = tile_ends[tile_id];
+    let splat_count = end_idx - start_idx;
 
-    let tile_min_px = workgroup_id.xy * 16u;
-    let tile_max_px = min(tile_min_px + vec2u(16u), dims);
-    let p00 = pixel_to_p(tile_min_px, dims, aspect);
-    let p11 = pixel_to_p(tile_max_px, dims, aspect);
-    let tile_min_p = vec2f(p00.x, p11.y);
-    let tile_max_p = vec2f(p11.x, p00.y);
-
-    for (var splat_id = local_idx; splat_id < {@NUM_SPLATS}u; splat_id += 256u) {
-        let s = splats.splats[splat_id];
-        if (s.color.a < 0.005) { continue; }
-        let proj = project_center(splat_uniforms.vp, s.pos_sx.xyz, aspect);
-        const DEPTH_NEAR_CULL = 0.1;
-        if (proj.z < DEPTH_NEAR_CULL) { continue; }
-        let sx = max(s.pos_sx.w, 0.0001);
-        let sy = max(s.sy_shape.x, 0.0001);
-        let sz = max(s.sy_shape.w, 0.0001);
-        let safe_sb = max(s.sy_shape.z, 0.0001);
-        // 3DGS cutoff radius. Increased to 4.5 sigma so exp(-0.5 * 4.5^2) < 0.001
-        // preventing hard quad edges from being visible before discard.
-        let R = 4.5;
-        let q = s.quat;
-        let ax_w = quat_rotate(q, vec3f(1.0, 0.0, 0.0));
-        let ay_w = quat_rotate(q, vec3f(0.0, 1.0, 0.0));
-        let az_w = quat_rotate(q, vec3f(0.0, 0.0, 1.0));
-        let clip = splat_uniforms.vp * vec4f(s.pos_sx.xyz, 1.0);
-        let w = clip.w;
-        let clip_xy = vec2f(clip.x, clip.y);
-        let ax_s = project_axis(splat_uniforms.vp, ax_w, clip_xy, w, aspect);
-        let ay_s = project_axis(splat_uniforms.vp, ay_w, clip_xy, w, aspect);
-        let az_s = project_axis(splat_uniforms.vp, az_w, clip_xy, w, aspect);
-        
-        let m0x = ax_s.x * sx; let m0y = ax_s.y * sx;
-        let m1x = ay_s.x * sy; let m1y = ay_s.y * sy;
-        let m2x = az_s.x * sz; let m2y = az_s.y * sz;
-        var cov00 = m0x*m0x + m1x*m1x + m2x*m2x;
-        var cov11 = m0y*m0y + m1y*m1y + m2y*m2y;
-        
-        let filter_std = 0.3 * (2.0 / f32(dims.y));
-        let filter2 = filter_std * filter_std;
-        cov00 += filter2;
-        cov11 += filter2;
-        
-        let max_r = R * sqrt(max(max(cov00, cov11), 1e-9));
-        let sc = proj.xy;
-        let smin = sc - vec2f(max_r);
-        let smax = sc + vec2f(max_r);
-        if (!(smin.x > tile_max_p.x || smax.x < tile_min_p.x || smin.y > tile_max_p.y || smax.y < tile_min_p.y)) {
-            let wi = splat_id / 32u;
-            let bi = splat_id % 32u;
-            atomicOr(&tile_mask[wi], 1u << bi);
-        }
-    }
-    workgroupBarrier();
-
-    if (local_idx == 0u) {
-        var count = 0u;
-        for (var idx = 0u; idx < {@NUM_SPLATS}u; idx++) {
-            // Traverse front-to-back: sort_order has farthest at 0, nearest at NUM_SPLATS - 1
-            let splat_id = sort_order[{@NUM_SPLATS}u - 1u - idx];
-            let wi = splat_id / 32u;
-            let bi = splat_id % 32u;
-            let word = atomicLoad(&tile_mask[wi]);
-            if ((word & (1u << bi)) != 0u) {
-                if (count < MAX_TILE_SPLATS) { 
-                    tile_splats[count] = splat_id; 
-                    count++; 
-                }
-            }
-        }
-        atomicStore(&tile_splat_count, count);
-    }
-    workgroupBarrier();
-
-    let splat_count = atomicLoad(&tile_splat_count);
     if (global_id.x >= dims.x || global_id.y >= dims.y) { return; }
 
     let p = pixel_to_p(global_id.xy, dims, aspect);
@@ -248,7 +170,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var T_final = 1.0;
 
     for (var idx = 0u; idx < splat_count; idx++) {
-        let i = tile_splats[idx];
+        let i = instance_vals[end_idx - 1u - idx];
         let s = splats.splats[i];
         let ps = eval_splat(s, p, aspect);
         // Standard Gaussian: power = -0.5 * r²
@@ -272,7 +194,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     var T_accum = 1.0;
 
     for (var idx = 0u; idx < splat_count; idx++) {
-        let i = tile_splats[idx];
+        let i = instance_vals[end_idx - 1u - idx];
         let s = splats.splats[i];
         let ps = eval_splat(s, p, aspect);
         let power = -0.5 * ps.r * ps.r;
