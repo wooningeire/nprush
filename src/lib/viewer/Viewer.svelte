@@ -4,6 +4,7 @@ import { onMount } from "svelte";
 import Canvas from "./Canvas.svelte";
 import GpuProfilerHud from "./GpuProfilerHud.svelte";
 import Overlays from "./Overlays.svelte";
+import Toasts from "./Toasts.svelte";
 import { ViewerState } from "./ViewerState.svelte.ts";
 
 let canvas = $state<HTMLCanvasElement | null>(null);
@@ -26,6 +27,7 @@ onMount(() => {
 
     <Overlays {viewerState} />
     <GpuProfilerHud {viewerState} />
+    <Toasts />
 </main>
 
 

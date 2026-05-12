@@ -25,6 +25,7 @@ import {
 import { evaluateTurntablePath, type TurntablePathParams } from "./turntable/turntablePath.ts";
 import { runTurntableExport } from "./turntable/turntableExport.ts";
 import { GPU_PROFILER_PAIR_COUNT, GPU_PROFILER_HISTORY_FRAMES } from "$/gpu/performanceMeasurement/gpuProfilerPairs";
+import { showToast } from "./toast.svelte.ts";
 
 export class ViewerState {
     width = $state(300);
@@ -121,6 +122,7 @@ export class ViewerState {
             downloadBlob(blob, `nprush-render-${Date.now()}.png`);
         } catch (e) {
             console.error("Failed to take screenshot", e);
+            showToast(`Screenshot failed: ${(e as Error)?.message ?? e}`, "error");
         } finally {
             this.isCapturing = false;
         }
@@ -216,7 +218,10 @@ export class ViewerState {
         // Kick off prerender — runner will detect turntableTraining=true and
         // multiviewDatasetReady=false and run the prerender pass.
         if (this.runner) {
-            this.runner.prerenderDataset().catch(e => console.error("Prerender failed", e));
+            this.runner.prerenderDataset().catch(e => {
+                console.error("Prerender failed", e);
+                showToast(`Prerender failed: ${(e as Error)?.message ?? e}`, "error");
+            });
         }
     }
 
@@ -284,6 +289,7 @@ export class ViewerState {
             });
         } catch (e) {
             console.error("Turntable render failed", e);
+            showToast(`Turntable render failed: ${(e as Error)?.message ?? e}`, "error");
         } finally {
             this.isTurntableRendering = false;
             this.turntableProgress = 0;
@@ -302,7 +308,11 @@ export class ViewerState {
             // Kick off mesh load and gpu request concurrently; both are awaited
             // before we build the runner since the mesh is a constructor input.
             const [gpu, mesh, groundMesh, groundPbrMesh] = await Promise.all([
-                requestGpu({ canvas: await canvasPromise }),
+                requestGpu({
+                    canvas: await canvasPromise,
+                    onStatusChange: (text) => showToast(text, "info", 2500),
+                    onErr: (text) => showToast(text, "error", 0),
+                }),
                 loadGlb(artelorianUrl),
                 loadGlb(groundUrl, false, [1, 1, 1, 0]),           // Plane — specular mirror, world-space
                 loadGlb(groundUrl, false, [1, 1, 1, 1], 'Plane.001'), // Plane.001 — PBR textured
