@@ -28,9 +28,11 @@ struct SortUniforms {
 }
 
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
-@group(0) @binding(1) var<storage, read_write> sort_keys: array<f32, {@NUM_SPLATS}u>;
-@group(0) @binding(2) var<storage, read_write> sort_indices: array<u32, {@NUM_SPLATS}u>;
-@group(0) @binding(3) var<uniform> sort_uniforms: SortUniforms;
+@group(0) @binding(1) var<storage, read> in_keys: array<f32, {@NUM_SPLATS}u>;
+@group(0) @binding(2) var<storage, read> in_indices: array<u32, {@NUM_SPLATS}u>;
+@group(0) @binding(3) var<storage, read_write> out_keys: array<f32, {@NUM_SPLATS}u>;
+@group(0) @binding(4) var<storage, read_write> out_indices: array<u32, {@NUM_SPLATS}u>;
+@group(0) @binding(5) var<uniform> sort_uniforms: SortUniforms;
 
 // ----- Pass 0: compute depth keys and init indices -----
 @compute @workgroup_size(256)
@@ -49,12 +51,12 @@ fn init_keys(@builtin(global_invocation_id) gid: vec3u) {
         if (s.color.a < 0.005 || depth < DEPTH_NEAR_CULL) {
             depth = 1e10;
         }
-        sort_keys[i] = depth;
-        sort_indices[i] = i;
+        out_keys[i] = depth;
+        out_indices[i] = i;
     } else {
         // Padded entries for power-of-two sort: push to near distance (end of descending sort)
-        sort_keys[i] = -1e10;
-        sort_indices[i] = 0u; // Use a safe index
+        out_keys[i] = -1e10;
+        out_indices[i] = 0u; // Use a safe index
     }
 }
 
@@ -85,8 +87,8 @@ fn sort_step(@builtin(global_invocation_id) gid: vec3u) {
     let block_id = i / block_size;
     let ascending = (block_id & 1u) == 0u;
 
-    let key_i = sort_keys[i];
-    let key_j = sort_keys[j];
+    let key_i = in_keys[i];
+    let key_j = in_keys[j];
 
     // We want back-to-front (descending depth) overall, so:
     // - "ascending" blocks sort descending (large depth first)
@@ -94,10 +96,14 @@ fn sort_step(@builtin(global_invocation_id) gid: vec3u) {
     let should_swap = (ascending && (key_i < key_j)) || (!ascending && (key_i > key_j));
 
     if (should_swap) {
-        sort_keys[i]    = key_j;
-        sort_keys[j]    = key_i;
-        let tmp         = sort_indices[i];
-        sort_indices[i] = sort_indices[j];
-        sort_indices[j] = tmp;
+        out_keys[i]    = key_j;
+        out_keys[j]    = key_i;
+        out_indices[i] = in_indices[j];
+        out_indices[j] = in_indices[i];
+    } else {
+        out_keys[i]    = key_i;
+        out_keys[j]    = key_j;
+        out_indices[i] = in_indices[i];
+        out_indices[j] = in_indices[j];
     }
 }
