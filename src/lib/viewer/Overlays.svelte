@@ -38,14 +38,15 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         Freeze Viewport Render
     </label>
 
-    {#if viewerState.gpuTimestampQuerySupported}
-        <label class="gpu-profiler-toggle">
-            <input type="checkbox" bind:checked={viewerState.gpuProfilingEnabled} />
-            GPU pass timings
-        </label>
-        {#if viewerState.gpuProfilingEnabled}
-            <GpuProfilerCharts {viewerState} />
-        {/if}
+    <label
+        class="gpu-profiler-toggle"
+        class:disabled={!viewerState.gpuTimestampQuerySupported}
+    >
+        <input type="checkbox" bind:checked={viewerState.gpuProfilingEnabled} />
+        GPU pass timings (slower)
+    </label>
+    {#if viewerState.gpuProfilingEnabled && viewerState.gpuTimestampQuerySupported}
+        <GpuProfilerCharts {viewerState} />
     {/if}
 
     <div class="separator"></div>
@@ -481,4 +482,9 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             margin-bottom: 0.25rem;
         }
     }
+
+.disabled {
+    opacity: 0.3;
+    pointer-events: none;
+}
 </style>
