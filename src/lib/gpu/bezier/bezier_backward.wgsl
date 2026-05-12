@@ -515,7 +515,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
             let tangent = seg / sqrt(len2);
             let flow_dir = dir_flow_dir;
             let tg = dot(tangent, flow_dir);
-            let d_loss_dir = REG_DIR * 2.0 * tg;
+            let d_loss_dir = REG_DIR * 2.0 * tg * T_prev * a;
             let d_tangent_vec = d_loss_dir * flow_dir;
             let inv_len = 1.0 / sqrt(len2);
             let d_seg = (d_tangent_vec - tangent * dot(d_tangent_vec, tangent)) * inv_len;
