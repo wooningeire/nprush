@@ -126,7 +126,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         Compare Blurred
     </label>
     {#if viewerState.compareBlurred}
-        <div class="slider-group" style="margin-left: 1rem; margin-bottom: 0.5rem;">
+        <div class="slider-group">
             <label>
                 Radius: {viewerState.blurRadius}
                 <input type="range" min="1" max="64" step="1" bind:value={viewerState.blurRadius} />
@@ -231,13 +231,15 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             </label>
         </div>
 
-        <div class="slider-group">
-            <label title="PNG export only: number of requestAnimationFrame ticks to run after moving the camera, before capturing each frame.">
-                Export: rAF waits before capture: {viewerState.turntableStepsPerFrame}
-                <input type="range" min="1" max="200" step="1" bind:value={viewerState.turntableStepsPerFrame}
-                    disabled={viewerState.isTurntableRendering} />
-            </label>
-        </div>
+        {#if viewerState.renderMode === RENDER_MODE_SINGLE_VIEW_REALTIME}
+            <div class="slider-group">
+                <label title="PNG export only: number of requestAnimationFrame ticks to run after moving the camera, before capturing each frame.">
+                    Steps per frame: {viewerState.turntableStepsPerFrame}
+                    <input type="range" min="1" max="200" step="1" bind:value={viewerState.turntableStepsPerFrame}
+                        disabled={viewerState.isTurntableRendering} />
+                </label>
+            </div>
+        {/if}
 
         <div class="param-header">Path Variation</div>
 

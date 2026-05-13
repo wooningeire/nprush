@@ -2,6 +2,7 @@
     import { fade, fly } from "svelte/transition";
 import { toasts, dismissToast } from "./toast.svelte.ts";
     import { flip } from "svelte/animate";
+    import { cubicOut } from "svelte/easing";
 </script>
 
 <div class="toast-container">
@@ -9,9 +10,9 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
         <div
             class="toast {toast.kind}"
             role="alert"
-            in:fly={{duration: 200}}
-            out:fade={{duration: 200}}
-            animate:flip={{duration: 200}}
+            in:fly={{duration: 200, easing: cubicOut}}
+            out:fade={{duration: 200, easing: cubicOut}}
+            animate:flip={{duration: 200, easing: cubicOut}}
         >
             {#if toast.kind === "error"}
                 <div>🛑</div>

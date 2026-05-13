@@ -272,7 +272,7 @@ export class ViewerState {
         try {
             await runTurntableExport({
                 totalFrames: this.turntableFrameCount,
-                stepsPerFrame: this.turntableStepsPerFrame,
+                stepsPerFrame: this.renderMode === RENDER_MODE_SINGLE_VIEW_REALTIME ? this.turntableStepsPerFrame : 1,
                 isCanceled: () => this.turntableCanceled,
                 captureFrame: () => this.runner!.captureTurntableFrame(),
                 writer,
@@ -288,7 +288,6 @@ export class ViewerState {
                 },
             });
         } catch (e) {
-            console.error("Turntable render failed", e);
             showToast(`Turntable render failed: ${(e as Error)?.message ?? e}`, "error");
         } finally {
             this.isTurntableRendering = false;
