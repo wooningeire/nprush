@@ -193,7 +193,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     let alpha_thresh = select(f32({@BEZIER_PRUNE_ALPHA_DEFAULT}), uniforms.prune_alpha_thresh, uniforms.prune_alpha_thresh > 0.0);
     let width_thresh = select(f32({@BEZIER_PRUNE_WIDTH_DEFAULT}), uniforms.prune_width_thresh, uniforms.prune_width_thresh > 0.0);
-    b.color.a = select(b.color.a, 0.0, b.color.a < alpha_thresh || b.p0.w <= width_thresh);
+    if (adam.no_kill < 0.5) {
+        b.color.a = select(b.color.a, 0.0, b.color.a < alpha_thresh || b.p0.w <= width_thresh);
+    }
 
     if (b.color.a > 0.0 && adam.no_kill < 0.5) {
         let c0 = uniforms.vp * vec4f(b.p0.xyz, 1.0);

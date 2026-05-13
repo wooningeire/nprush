@@ -106,9 +106,9 @@ fn main() {
         let loss_norm = adc.loss_accum[i] / ADC_PERIOD;
 
         // Kill curves that are contributing to loss but not moving (low gradient).
-        // Standard 3DGS allows this even during multiview training; only off-screen
-        // culling is strictly disabled for multiview.
-        if (grad_norm <= TAU_POS && loss_norm > TAU_LOSS) {
+        // Skipped in multiview (no_kill): a curve sampled infrequently accumulates
+        // low average gradient even if it's legitimately needed from its views.
+        if (adam.no_kill < 0.5 && grad_norm <= TAU_POS && loss_norm > TAU_LOSS) {
             beziers.items[i].color.a = 0.0;
             dead_indices[dead_count] = i;
             dead_count = dead_count + 1u;
