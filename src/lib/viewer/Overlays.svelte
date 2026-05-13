@@ -19,7 +19,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 
 <div class="overlays">
     <label class="upload-btn" title="Load a GLB file">
-        📂 Load Model
+        📂 Load a model (.glb)
         <input
             type="file"
             accept=".glb"
@@ -127,7 +127,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     </label>
     {#if viewerState.compareBlurred}
         <div class="slider-group" style="margin-left: 1rem; margin-bottom: 0.5rem;">
-            <label style="font-size: 0.8rem; color: rgba(255, 255, 255, 0.7);">
+            <label>
                 Radius: {viewerState.blurRadius}
                 <input type="range" min="1" max="64" step="1" bind:value={viewerState.blurRadius} />
             </label>
@@ -143,9 +143,9 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     >
         {#if viewerState.isCapturing}
             <div class="spinner"></div>
-            Rendering…
+            Saving…
         {:else}
-            📷 Render to File
+            📷 Save current splats
         {/if}
     </button>
 
@@ -295,7 +295,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
                 onclick={() => viewerState.renderTurntable()}
                 disabled={viewerState.isCapturing}
             >
-                🎬 Save Frames to Folder
+                🎬 Render turntable (.zip image sequence)
             </button>
         {/if}
     </div>
@@ -305,14 +305,16 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     .overlays {
         position: absolute;
         top: 1rem;
+        bottom: 1rem;
         left: 1rem;
-        z-index: 100;
+
+        overflow-y: auto;
+
+        color: oklch(1 0 0);
         background: rgba(0, 0, 0, 0.6);
         backdrop-filter: blur(8px);
-        padding: 0.5rem 1rem;
+        padding: 1rem;
         border-radius: 8px;
-        color: white;
-        font-size: 0.9rem;
         border: 1px solid rgba(255, 255, 255, 0.1);
 
         label {
@@ -325,7 +327,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             &.sub {
                 margin-left: 1.25rem;
                 font-size: 0.8rem;
-                color: rgba(255, 255, 255, 0.65);
+                color: oklch(1 0 0 / 0.8);
             }
         }
 
@@ -349,8 +351,6 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             border: 1px solid rgba(255, 255, 255, 0.2);
             background: rgba(255, 255, 255, 0.08);
             color: white;
-            font-size: 0.85rem;
-            font-weight: 600;
             cursor: pointer;
             transition: background 0.15s ease;
 
@@ -367,8 +367,6 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             border: none;
             padding: 0.5rem 0.75rem;
             border-radius: 6px;
-            font-weight: 600;
-            font-size: 0.85rem;
             cursor: pointer;
             transition: all 0.2s ease;
             display: flex;
@@ -456,8 +454,6 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 
         .turntable-section {
             .section-title {
-                font-size: 0.75rem;
-                font-weight: 600;
                 text-transform: uppercase;
                 letter-spacing: 0.06em;
                 color: rgba(255, 255, 255, 0.5);
@@ -465,8 +461,6 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             }
 
             .param-header {
-                font-size: 0.7rem;
-                font-weight: 600;
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
                 color: rgba(255, 255, 255, 0.35);
@@ -479,7 +473,6 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             margin-bottom: 0.25rem;
 
             label {
-                font-size: 0.8rem;
                 color: rgba(255, 255, 255, 0.7);
                 display: flex;
                 flex-direction: column;
@@ -495,7 +488,6 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
                 margin-left: 0.75rem;
                 label {
                     color: rgba(255, 255, 255, 0.5);
-                    font-size: 0.75rem;
                 }
             }
         }
@@ -521,7 +513,6 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         }
 
         .progress-label {
-            font-size: 0.75rem;
             color: rgba(255, 255, 255, 0.6);
             text-align: center;
             margin-bottom: 0.25rem;
@@ -534,7 +525,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 }
 
 .instructions {
-    max-width: 30ch;
+    max-width: 35ch;
     margin: 1rem 0;
 
     font-style: italic;
