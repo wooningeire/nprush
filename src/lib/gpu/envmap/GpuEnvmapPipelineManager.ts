@@ -52,7 +52,7 @@ export class GpuEnvmapPipelineManager {
                 targets: [
                     { format },
                     // Second color target (depth visualization) — write black/transparent
-                    { format },
+                    { format: "r16float" },
                     // Third color target (normals) — write black/transparent
                     { format },
                 ],

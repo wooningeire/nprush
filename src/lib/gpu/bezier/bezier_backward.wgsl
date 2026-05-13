@@ -310,7 +310,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     // Edge mode: coverage loss driving total alpha to match the edge map.
     let EDGE_LOSS_WEIGHT = 2.0;
     let coverage = 1.0 - T_final;
-    let edge_target = edge_strength; // tgt_color.r — already extracted above
+    let edge_target = step(0.5, edge_strength); // threshold to binary: beziers target full coverage on edges, zero off
     let use_coverage_loss = uniforms.mode < 0.5 || is_edge_color_mode; // mode=0 or mode=2
     let d_coverage_edge = select(0.0, EDGE_LOSS_WEIGHT * 2.0 * (coverage - edge_target), use_coverage_loss);
 

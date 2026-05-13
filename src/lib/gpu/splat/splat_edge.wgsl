@@ -21,37 +21,26 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
 
     let p = vec2i(global_id.xy);
 
-    // Depth Sobel — silhouettes and large depth discontinuities
-    let d_tl = sampleDepth(p + vec2i(-1, -1), dims);
-    let d_tc = sampleDepth(p + vec2i( 0, -1), dims);
-    let d_tr = sampleDepth(p + vec2i( 1, -1), dims);
-    let d_ml = sampleDepth(p + vec2i(-1,  0), dims);
-    let d_mr = sampleDepth(p + vec2i( 1,  0), dims);
-    let d_bl = sampleDepth(p + vec2i(-1,  1), dims);
-    let d_bc = sampleDepth(p + vec2i( 0,  1), dims);
-    let d_br = sampleDepth(p + vec2i( 1,  1), dims);
+    // Depth Laplacian — fires at true discontinuities (step H → value ≈ H).
+    // Zero on linear gradients; suppresses smooth depth variation unlike Sobel.
+    let d_c = sampleDepth(p,                dims);
+    let d_l = sampleDepth(p + vec2i(-1, 0), dims);
+    let d_r = sampleDepth(p + vec2i( 1, 0), dims);
+    let d_u = sampleDepth(p + vec2i( 0,-1), dims);
+    let d_d = sampleDepth(p + vec2i( 0, 1), dims);
+    let depth_edge = abs(d_l + d_r + d_u + d_d - 4.0 * d_c);
 
-    let d_gx = -d_tl - 2.0*d_ml - d_bl + d_tr + 2.0*d_mr + d_br;
-    let d_gy = -d_tl - 2.0*d_tc - d_tr + d_bl + 2.0*d_bc + d_br;
-    let depth_edge = sqrt(d_gx*d_gx + d_gy*d_gy);
+    // Normal Laplacian — fires at creases (|N_B - N_A|: ~1.41 at 90°, ~0.52 at 30°).
+    // Zero on linearly-varying normals, so smooth curvature and glancing angles don't trigger.
+    let n_c = sampleNormal(p,                dims);
+    let n_l = sampleNormal(p + vec2i(-1, 0), dims);
+    let n_r = sampleNormal(p + vec2i( 1, 0), dims);
+    let n_u = sampleNormal(p + vec2i( 0,-1), dims);
+    let n_d = sampleNormal(p + vec2i( 0, 1), dims);
+    let normal_edge = length(n_l + n_r + n_u + n_d - 4.0 * n_c);
 
-    // Normal Sobel — surface creases and ridges
-    let n_tl = sampleNormal(p + vec2i(-1, -1), dims);
-    let n_tc = sampleNormal(p + vec2i( 0, -1), dims);
-    let n_tr = sampleNormal(p + vec2i( 1, -1), dims);
-    let n_ml = sampleNormal(p + vec2i(-1,  0), dims);
-    let n_mr = sampleNormal(p + vec2i( 1,  0), dims);
-    let n_bl = sampleNormal(p + vec2i(-1,  1), dims);
-    let n_bc = sampleNormal(p + vec2i( 0,  1), dims);
-    let n_br = sampleNormal(p + vec2i( 1,  1), dims);
-
-    let n_gx = -n_tl - 2.0*n_ml - n_bl + n_tr + 2.0*n_mr + n_br;
-    let n_gy = -n_tl - 2.0*n_tc - n_tr + n_bl + 2.0*n_bc + n_br;
-    let normal_edge = sqrt(dot(n_gx, n_gx) + dot(n_gy, n_gy));
-
-    let depth_thresh  = smoothstep({@SPLAT_EDGE_THRESHOLD_MIN}, {@SPLAT_EDGE_THRESHOLD_MAX}, depth_edge);
-    // Normal edges use a separate (lower) threshold since normal gradients are smaller in magnitude
-    let normal_thresh = smoothstep({@SPLAT_EDGE_NORMAL_THRESHOLD_MIN}, {@SPLAT_EDGE_NORMAL_THRESHOLD_MAX}, normal_edge);
+    let depth_thresh  = step({@SPLAT_EDGE_THRESHOLD}, depth_edge);
+    let normal_thresh = step({@SPLAT_EDGE_NORMAL_THRESHOLD}, normal_edge);
 
     let edge = max(depth_thresh, normal_thresh);
 

@@ -42,10 +42,8 @@ export const constants = {
     SPLAT_FP_SCALE_COL: 100000.0,
     SPLAT_RENDER_STRIP_HEIGHT: 0.18,
     SPLAT_RENDER_NUM_PANELS: 6.0,
-    SPLAT_EDGE_THRESHOLD_MIN: 0.02,
-    SPLAT_EDGE_THRESHOLD_MAX: 0.06,
-    SPLAT_EDGE_NORMAL_THRESHOLD_MIN: 2.0,
-    SPLAT_EDGE_NORMAL_THRESHOLD_MAX: 4.0,
+    SPLAT_EDGE_THRESHOLD: 0.01,        // depth Laplacian: step H fires at ~H
+    SPLAT_EDGE_NORMAL_THRESHOLD: 1.5,  // normal Laplacian: ~0.52 at 30°, ~1.41 at 90°
     
     OPTIM_SHORT: 128,
     /** Floats stored per Gaussian (pos, color DC, quat, shape, RGB + opacity degree-1 SH, vec4-packed). */

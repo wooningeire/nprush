@@ -109,10 +109,10 @@ export class GpuRunner {
     // These match the camera projection aspect so the rendered model has the same pixel
     // proportions as a square-rendered version (no horizontal/vertical squash).
     //
-    // Note: targetDepthTexture is an RGBA8 *visualization* depth (linear view-space depth
-    // remapped to grayscale, used by Sobel for edge detection). It is NOT the hardware
-    // Z-buffer. The hardware Z-buffer is targetZTexture below; without it, triangles draw
-    // in submission order which causes back-face leakage on overlapping geometry.
+    // Note: targetDepthTexture is an R16Float depth (linear view-space depth remapped via
+    // 1 - DEPTH_NEAR/d, used by Sobel for edge detection). It is NOT the hardware Z-buffer.
+    // The hardware Z-buffer is targetZTexture below; without it, triangles draw in submission
+    // order which causes back-face leakage on overlapping geometry.
     private targetTexture: GPUTexture | null = null;
     private targetTextureView: GPUTextureView | null = null;
     private targetDepthTexture: GPUTexture | null = null;
@@ -628,7 +628,7 @@ export class GpuRunner {
         this.optimDepthTexture = this.device.createTexture({
             label: "optimization depth visualization",
             size: [ow, oh],
-            format: this.format,
+            format: "r16float",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.optimDepthTextureView = this.optimDepthTexture.createView();
@@ -794,7 +794,7 @@ export class GpuRunner {
                 this.targetDepthTexture = this.device.createTexture({
                     label: "full-res depth visualization",
                     size: [fullW, fullH],
-                    format: this.format,
+                    format: "r16float",
                     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
                 });
                 this.targetDepthTextureView = this.targetDepthTexture.createView();
