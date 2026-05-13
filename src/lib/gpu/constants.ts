@@ -44,6 +44,8 @@ export const constants = {
     SPLAT_RENDER_NUM_PANELS: 6.0,
     SPLAT_EDGE_THRESHOLD_MIN: 0.02,
     SPLAT_EDGE_THRESHOLD_MAX: 0.06,
+    SPLAT_EDGE_NORMAL_THRESHOLD_MIN: 2.0,
+    SPLAT_EDGE_NORMAL_THRESHOLD_MAX: 4.0,
     
     OPTIM_SHORT: 128,
     /** Floats stored per Gaussian (pos, color DC, quat, shape, RGB + opacity degree-1 SH, vec4-packed). */

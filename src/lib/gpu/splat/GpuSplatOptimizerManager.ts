@@ -371,6 +371,7 @@ export class GpuSplatOptimizerManager {
             entries: [
                 { binding: 0, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
                 { binding: 1, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
             ],
         });
         const edgeModule = device.createShaderModule({ label: "splat edge", code: injectConstants(edgeModuleSrc) });
@@ -703,13 +704,14 @@ export class GpuSplatOptimizerManager {
         });
     }
 
-    setEdgeTarget(depthTextureView: GPUTextureView, edgeTextureView: GPUTextureView) {
+    setEdgeTarget(depthTextureView: GPUTextureView, edgeTextureView: GPUTextureView, normalTextureView?: GPUTextureView) {
         this.edgeBindGroup = this.device.createBindGroup({
             label: "splat edge bind group",
             layout: this.edgeBindGroupLayout,
             entries: [
                 { binding: 0, resource: depthTextureView },
                 { binding: 1, resource: edgeTextureView },
+                { binding: 2, resource: normalTextureView ?? depthTextureView },
             ],
         });
     }

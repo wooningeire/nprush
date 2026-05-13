@@ -269,13 +269,20 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
     let background_sample = textureLoad(bgTex, global_id.xy, 0).rgb;
     var background = vec3f(0.0);
-    let color_mode = uniforms.mode > 0.5;
+    // mode=1: color loss with background. mode=0,2: no background (black).
+    let color_mode = uniforms.mode > 0.5 && uniforms.mode < 1.5;
     background = select(vec3f(0.0), background_sample, color_mode);
 
     C_pred += T_final * background;
 
-    let dC_raw = 2.0 * (C_pred - tgt_color);
-
+    // mode=2: edge-colored mode — coverage loss + color loss from normalTex weighted by edge strength.
+    // normalTex holds the actual render target color; tgt_color is the edge map (used for coverage).
+    let is_edge_color_mode = uniforms.mode > 1.5;
+    // Edge beziers target a darkened version of the local image color so they read as outlines
+    let actual_color = select(tgt_color, textureLoad(normalTex, global_id.xy, 0).rgb, is_edge_color_mode);
+    let edge_strength = tgt_color.r; // edge map value (used for both coverage and color weighting)
+    let color_loss_weight = select(1.0, step(0.1, edge_strength), is_edge_color_mode);
+    let dC_raw = 2.0 * (C_pred - actual_color) * color_loss_weight;
 
     // Luminance/contrast-weighted color loss.
     // 1. Decompose error into luminance and chrominance components.
@@ -303,8 +310,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     // Edge mode: coverage loss driving total alpha to match the edge map.
     let EDGE_LOSS_WEIGHT = 2.0;
     let coverage = 1.0 - T_final;
-    let edge_target = tgt_color.r;
-    let d_coverage_edge = select(0.0, EDGE_LOSS_WEIGHT * 2.0 * (coverage - edge_target), uniforms.mode < 0.5);
+    let edge_target = edge_strength; // tgt_color.r — already extracted above
+    let use_coverage_loss = uniforms.mode < 0.5 || is_edge_color_mode; // mode=0 or mode=2
+    let d_coverage_edge = select(0.0, EDGE_LOSS_WEIGHT * 2.0 * (coverage - edge_target), use_coverage_loss);
 
     // Color mode: penalize opacity directly on background pixels (tgt_depth ≈ 1 = no geometry).
     // With reciprocal depth encoding, mesh surface pixels are well below 1.0 and
@@ -316,7 +324,9 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let FP_SCALE_COL = f32({@BEZIER_FP_SCALE_COL});
 
     // Direction regularization (fine layer): flow from target/normal texels depends only on this pixel.
-    let is_fine = uniforms.max_width > 0.0;
+    // Disabled for edge-color mode: coverage loss handles positioning, and the edge map gradient
+    // points perpendicular to contours which would misalign strokes.
+    let is_fine = uniforms.max_width > 0.0 && !is_edge_color_mode;
     var dir_flow_dir = vec2f(0.0);
     var dir_flow_use = false;
     if (is_fine) {

@@ -368,10 +368,11 @@ export class GpuRunner {
             $effect(() => this.baseColorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.colorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => {
-                this.edgeLayerBezierManager.writeMode(0); // Coverage loss: drives 1-T toward edge map red channel
+                // mode=2: coverage loss (positions on edges) + color loss from normalTex weighted by edge strength
+                this.edgeLayerBezierManager.writeMode(2);
                 this.edgeLayerBezierManager.writeMaxWidth(0.005);
                 this.edgeLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
-                this.edgeLayerBezierManager.writeBgPenalty(0.0);
+                this.edgeLayerBezierManager.writeBgPenalty(1.0); // kill strays on background pixels
                 this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on fine bezier layer
@@ -707,7 +708,7 @@ export class GpuRunner {
         }
 
         // Rebind
-        this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView);
+        this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView, this.optimNormalTextureView);
         this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimDepthTextureView, ow, oh);
 
         // Edge layer: color target = edge map, depth = real depth, background = black (dummy).
@@ -1110,8 +1111,9 @@ export class GpuRunner {
 
             // 2. Run edge detection on optim-res depth (always use sharp for beziers)
             this.splatOptimizerManager.setEdgeTarget(
-                this.optimDepthTextureView!, 
-                this.optimEdgeTextureView!
+                this.optimDepthTextureView!,
+                this.optimEdgeTextureView!,
+                this.optimNormalTextureView!,
             );
             this.splatOptimizerManager.dispatchEdge(
                 commandEncoder,
@@ -1214,12 +1216,12 @@ export class GpuRunner {
                 }
             }
 
-            // Train edge beziers as a residual layer on top of splat+coarse+fine composite
+            // Train edge beziers against edge map only, black background (composited only at rendertime)
             if (this.viewerState.edgeBeziersEnabled) {
                 this.edgeLayerBezierManager.setBackwardTarget(
                     this.optimEdgeTextureView!,
                     this.optimDepthTextureView!,
-                    this.optimSplatTextureView!,
+                    this.dummyTextureView!,
                     this.optimTextureView!,
                     this.optimWidth,
                     this.optimHeight,
@@ -1243,7 +1245,7 @@ export class GpuRunner {
             // 4. Run edge detection on full-res depth + full-res splat/bezier overlays
             // (skipped when viewport frozen unless turntable capture needs those textures)
             if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
-                this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!);
+                this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!, this.targetNormalTextureView ?? undefined);
                 this.splatOptimizerManager.dispatchEdge(
                     commandEncoder,
                     fullW,
@@ -1251,7 +1253,7 @@ export class GpuRunner {
                     profWrites(GpuProfilingPair.SplatEdgeDetectFull),
                 );
                 // Restore optim-res edge bind group for next frame
-                this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!);
+                this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!, this.optimNormalTextureView!);
 
                 // 4.5. Compute views into textures
                 this.splatForwardManager.dispatch(

@@ -178,7 +178,9 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     var composite = base;
     composite = select(composite, composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb, uniforms.base_color_beziers_enabled > 0.5);
     composite = select(composite, composite * (1.0 - color_bezier.a) + color_bezier.rgb, uniforms.color_beziers_enabled > 0.5);
-    composite = select(composite, mix(composite, vec3f(1.0), edge_a), uniforms.edge_beziers_enabled > 0.5);
+    // Edge outlines: multiply-darken the underlying composite by edge alpha — no learned color bleed
+    const EDGE_DARKEN: f32 = 0.5;
+    composite = select(composite, composite - edge_a * EDGE_DARKEN, uniforms.edge_beziers_enabled > 0.5);
 
     return vec4f(composite, 1.0);
 }
