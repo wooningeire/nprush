@@ -368,7 +368,10 @@ export class GpuRunner {
             $effect(() => this.baseColorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => this.colorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
             $effect(() => {
-                this.edgeLayerBezierManager.writeMode(0); // Edge mode
+                this.edgeLayerBezierManager.writeMode(0); // Coverage loss: drives 1-T toward edge map red channel
+                this.edgeLayerBezierManager.writeMaxWidth(0.005);
+                this.edgeLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
+                this.edgeLayerBezierManager.writeBgPenalty(0.0);
                 this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on fine bezier layer
@@ -707,10 +710,11 @@ export class GpuRunner {
         this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView);
         this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimDepthTextureView, ow, oh);
 
-        // Edge layer: target IS the edge texture itself.
+        // Edge layer: color target = edge map, depth = real depth, background = black (dummy).
+        // Mode=1 color loss drives beziers white on edges, transparent off edges.
         this.edgeLayerBezierManager.setBackwardTarget(
             this.optimEdgeTextureView,
-            this.optimEdgeTextureView,
+            this.optimDepthTextureView,
             this.dummyTextureView!,
             this.optimTextureView!,
             ow, oh
@@ -867,7 +871,7 @@ export class GpuRunner {
                 this.targetTempTextureView = this.targetTempTexture.createView();
 
                 this.splatForwardManager.setTarget(this.fullSplatTextureView, this.fullSplatDepthTextureView!, fullW, fullH);
-                this.bezierForwardManager.setTarget(this.fullBezierTextureView, fullW, fullH);
+                this.bezierForwardManager.setTarget(this.fullBezierTextureView!, fullW, fullH);
                 this.baseColorBezierForwardManager.setTarget(this.fullBaseColorBezierTextureView!, fullW, fullH);
                 this.colorBezierForwardManager.setTarget(this.fullColorBezierTextureView, fullW, fullH);
 
@@ -961,6 +965,9 @@ export class GpuRunner {
             ]);
             this.splatForwardManager.writeVPMatrix(sortVp);
             this.splatForwardManager.writeCameraWorld(camWorld[0], camWorld[1], camWorld[2]);
+            this.bezierForwardManager.writeVPMatrix(sortVp);
+            this.baseColorBezierForwardManager.writeVPMatrix(sortVp);
+            this.colorBezierForwardManager.writeVPMatrix(sortVp);
 
             this.edgeLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
             this.baseColorLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
@@ -1172,19 +1179,6 @@ export class GpuRunner {
                 profWrites(GpuProfilingPair.SplatRasterOptim),
             );
 
-            // 3b. Train the bezier edge layer: its target is the freshly-computed
-            // edge texture, so the curves learn to trace the depth silhouette.
-            if (this.viewerState.edgeBeziersEnabled) {
-                if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
-                    this.edgeLayerBezierManager.dispatch(
-                        commandEncoder,
-                        sortVp,
-                        profWrites(GpuProfilingPair.BezierEdgeOptim),
-                    );
-                }
-                this.edgeLayerBezierManager.dispatchSort(commandEncoder, sortVp);
-            }
-
             // Train coarse beziers against depth-aware blurred target
             if (this.viewerState.baseColorBeziersEnabled) {
                 if (!(this.viewerState.baseColorBezierTrainingPaused || defaultPause)) {
@@ -1212,11 +1206,38 @@ export class GpuRunner {
                     );
                 }
                 this.colorLayerBezierManager.dispatchSort(commandEncoder, sortVp);
+
+                // Render fine beziers into shared background so edge beziers see splat+coarse+fine
+                if (this.viewerState.edgeBeziersEnabled) {
+                    this.colorBezierForwardManager.setTarget(this.optimSplatTextureView!, this.optimWidth, this.optimHeight);
+                    this.colorBezierForwardManager.dispatch(commandEncoder, false);
+                }
             }
 
-            // 3.2 Restore full-res target for visualization (or turntable readback textures)
+            // Train edge beziers as a residual layer on top of splat+coarse+fine composite
+            if (this.viewerState.edgeBeziersEnabled) {
+                this.edgeLayerBezierManager.setBackwardTarget(
+                    this.optimEdgeTextureView!,
+                    this.optimDepthTextureView!,
+                    this.optimSplatTextureView!,
+                    this.optimTextureView!,
+                    this.optimWidth,
+                    this.optimHeight,
+                );
+                if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
+                    this.edgeLayerBezierManager.dispatch(
+                        commandEncoder,
+                        sortVp,
+                        profWrites(GpuProfilingPair.BezierEdgeOptim),
+                    );
+                }
+                this.edgeLayerBezierManager.dispatchSort(commandEncoder, sortVp);
+            }
+
+            // 3.2 Restore full-res targets for visualization (or turntable readback textures)
             if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
                 this.splatForwardManager.setTarget(this.fullSplatTextureView!, this.fullSplatDepthTextureView!, fullW, fullH);
+                this.colorBezierForwardManager.setTarget(this.fullColorBezierTextureView, fullW, fullH);
             }
 
             // 4. Run edge detection on full-res depth + full-res splat/bezier overlays

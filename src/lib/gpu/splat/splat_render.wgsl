@@ -123,7 +123,7 @@ fn frag(v: VsOut) -> @location(0) vec4f {
             let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
             if (fitted.x < 0.0) { return bg; }
             let px = vec2i(fitted * vec2f(textureDimensions(bezierViewTex)));
-            let e = textureLoad(bezierViewTex, px, 0).r;
+            let e = textureLoad(bezierViewTex, px, 0).a;
             return vec4f(e, e, e, 1.0);
         } else if (panel_idx < 4.5) {
             // Panel 4: Coarse bezier layer
@@ -167,7 +167,7 @@ fn frag(v: VsOut) -> @location(0) vec4f {
     let base = select(vec3f(0.05), splat_color, uniforms.splats_enabled > 0.5);
     
     let bezier_px = vec2i(right_half_uv * vec2f(textureDimensions(bezierViewTex)));
-    let edge_a = clamp(textureLoad(bezierViewTex, bezier_px, 0).r, 0.0, 1.0);
+    let edge_a = clamp(textureLoad(bezierViewTex, bezier_px, 0).a, 0.0, 1.0);
     
     let base_color_bezier_px = vec2i(right_half_uv * vec2f(textureDimensions(baseColorBezierViewTex)));
     let base_color_bezier = textureLoad(baseColorBezierViewTex, base_color_bezier_px, 0);
