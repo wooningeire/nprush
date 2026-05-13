@@ -167,9 +167,13 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
 
     let p = in.p_screen;
 
+    // Find closest segment, caching the winning segment endpoints to avoid
+    // re-evaluating bezier_at after the loop.
     var min_d2 = 1e9;
     var min_k = 1u;
     var min_u = 0.0;
+    var seg_prev = p0;
+    var seg_curr = p0;
     var prev = p0;
     for (var k = 1u; k <= N_SEG; k++) {
         let curr = bezier_at(p0, p1, p2, p3, f32(k) / f32(N_SEG));
@@ -183,23 +187,14 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
             min_d2 = d2;
             min_k = k;
             min_u = u;
+            seg_prev = prev;
+            seg_curr = curr;
         }
         prev = curr;
     }
-
     let min_d = sqrt(min_d2);
 
-    let t_prev = f32(min_k - 1u) / f32(N_SEG);
-    let t_curr = f32(min_k) / f32(N_SEG);
-    let best_prev = bezier_at(p0, p1, p2, p3, t_prev);
-    let best_curr = bezier_at(p0, p1, p2, p3, t_curr);
-    let best_seg = best_curr - best_prev;
-    let best_len = max(length(best_seg), 1e-4);
-    let best_dir = best_seg / best_len;
-    let best_proj = best_prev + min_u * best_seg;
-    let best_diff = p - best_proj;
-    let min_signed_cross = best_diff.x * (-best_dir.y) + best_diff.y * best_dir.x;
-
+    // Compute geometric alpha first — cheap, needed for early discard.
     let t = (f32(min_k - 1u) + min_u) / f32(N_SEG);
     let dt = t - 0.5;
     let pressure = 1.0 - 4.0 * dt * dt;
@@ -216,6 +211,24 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     let local_width = width * pressure;
     let local_softness = softness * pressure;
 
+    let inner = local_width - local_softness;
+    let outer = local_width + local_softness;
+    let a_geom = 1.0 - smoothstep(inner, outer, min_d);
+
+    // Early discard: skip SH + texture sample for fragments outside the soft band.
+    // brush_alpha ≤ 1 and local_opacity ≤ pressure, so a_geom * pressure is an
+    // upper bound on the final alpha.
+    if (a_geom * pressure < 0.001) { discard; }
+
+    // Brush UV — uses cached segment endpoints, no extra bezier_at calls.
+    let best_seg = seg_curr - seg_prev;
+    let best_len = max(length(best_seg), 1e-4);
+    let best_dir = best_seg / best_len;
+    let best_proj = seg_prev + min_u * best_seg;
+    let best_diff = p - best_proj;
+    let min_signed_cross = best_diff.x * (-best_dir.y) + best_diff.y * best_dir.x;
+
+    // SH direction + opacity (expensive: normalize, cross, dot).
     let pos_w = bezier_pos_world(b, t);
     let dl_b = bezier_dirs_sh(uniforms.cam_world.xyz, pos_w, bezier_deriv_world(b, t));
     let lx_b = dl_b.x;
@@ -225,16 +238,11 @@ fn fs_main(in: VsOut) -> @location(0) vec4f {
     let opacity = clamp(o_lin, 0.0, 1.0);
     let local_opacity = opacity * pressure;
 
-    let inner = local_width - local_softness;
-    let outer = local_width + local_softness;
-    let a_geom = 1.0 - smoothstep(inner, outer, min_d);
-
     let brush_u = t;
     let brush_v = clamp(min_signed_cross / max(local_width + local_softness, 1e-6) * 0.5 + 0.5, 0.0, 1.0);
     let brush_alpha = textureSample(brush_texture, brush_sampler, vec2f(brush_u, brush_v)).r;
 
     let a = clamp(a_geom * brush_alpha * local_opacity, 0.0, 0.999);
-
     if (a < 0.001) { discard; }
 
     let rr_lin = b.color.r + SH_C1_B * (ly_b * b.sh1_r.x + lz_b * b.sh1_r.y + lx_b * b.sh1_r.z);

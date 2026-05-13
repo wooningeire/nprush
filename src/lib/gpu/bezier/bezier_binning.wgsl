@@ -103,9 +103,15 @@ fn instantiate(@builtin(global_invocation_id) gid: vec3u) {
     let w = clip.w;
     let depth_key = ~bitcast<u32>(w); // Invert float to sort descending
 
+    // Reserve a contiguous block for all tiles at once — one atomic per curve
+    // instead of one per tile, reducing contention for long curves.
+    let tile_count = (tile_max_x - tile_min_x) * (tile_max_y - tile_min_y);
+    let base_idx = atomicAdd(&atomic_count, tile_count);
+    var local_i = 0u;
     for (var y = tile_min_y; y < tile_max_y; y++) {
         for (var x = tile_min_x; x < tile_max_x; x++) {
-            let idx = atomicAdd(&atomic_count, 1u);
+            let idx = base_idx + local_i;
+            local_i++;
             if (idx < binning_uniforms.max_instances) {
                 let tile_id = y * binning_uniforms.grid_width + x;
                 instance_keys[idx] = vec2u(depth_key, tile_id);
