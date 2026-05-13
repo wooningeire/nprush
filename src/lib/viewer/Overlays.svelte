@@ -48,10 +48,20 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
             </select>
         </label>
     </div>
+
+    <div class="instructions">
+        {#if viewerState.renderMode === RENDER_MODE_MULTIVIEW}
+            <b>Multiview mode:</b> The positions and colors of strokes are optimized for the entire camera motion path.
+            You'll have to give them time to train against some views from the path first!
+        {:else if viewerState.renderMode === RENDER_MODE_SINGLE_VIEW_REALTIME}
+            <b>Single-view/realtime mode:</b> Watch the strokes optimize for the camera in realtime!
+            If you render a turntable, strokes will move to adjust for each successive camera view.
+        {/if}
+    </div>
     
     <label>
         <input type="checkbox" bind:checked={viewerState.viewportRenderingFrozen} />
-        Freeze Viewport Render
+        Freeze viewport preview (faster)
     </label>
 
     <label
@@ -161,7 +171,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     <div class="turntable-section">
         <div class="section-title">Turntable</div>
 
-        {#if viewerState.renderMode === RENDER_MODE_MULTIVIEW}
+        {#if viewerState.renderMode === RENDER_MODE_MULTIVIEW}        
             <button
                 class="render-btn"
                 class:training-active={viewerState.turntableTraining}
@@ -522,5 +532,12 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 .disabled {
     opacity: 0.3;
     pointer-events: none;
+}
+
+.instructions {
+    max-width: 30ch;
+    margin: 1rem 0;
+
+    font-style: italic;
 }
 </style>
