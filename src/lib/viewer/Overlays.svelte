@@ -312,7 +312,6 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         padding: 0.5rem 1rem;
         border-radius: 8px;
         color: white;
-        font-family: sans-serif;
         font-size: 0.9rem;
         border: 1px solid rgba(255, 255, 255, 0.1);
 

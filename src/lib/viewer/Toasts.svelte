@@ -64,7 +64,6 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
     gap: 0.75rem;
     padding: 0.6rem 1rem;
     border-radius: 8px;
-    font-family: sans-serif;
     font-size: 0.875rem;
     color: white;
     backdrop-filter: blur(8px);

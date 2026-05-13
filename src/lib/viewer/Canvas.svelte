@@ -123,7 +123,6 @@ section {
     position: absolute;
     inset: 0;
     pointer-events: none;
-    font-family: system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.85);
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
     user-select: none;
