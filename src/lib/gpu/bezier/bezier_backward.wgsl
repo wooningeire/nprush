@@ -281,7 +281,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     // Edge beziers target a darkened version of the local image color so they read as outlines
     let actual_color = select(tgt_color, textureLoad(normalTex, global_id.xy, 0).rgb, is_edge_color_mode);
     let edge_strength = tgt_color.r; // edge map value (used for both coverage and color weighting)
-    let color_loss_weight = select(1.0, step(0.1, edge_strength), is_edge_color_mode);
+    // The edge compositor ignores learned RGB; keep edge training to alpha coverage only.
+    let color_loss_weight = select(1.0, 0.0, is_edge_color_mode);
     let dC_raw = 2.0 * (C_pred - actual_color) * color_loss_weight;
 
     // Luminance/contrast-weighted color loss.
@@ -619,15 +620,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         atomicAdd(&grads.data[base + 28u], i32(lz_b * k_o));
         atomicAdd(&grads.data[base + 29u], i32(lx_b * k_o));
 
-        // Accumulate this bezier's contribution to the color loss for ADC pruning.
+        // Accumulate the ADC pruning signal. Color layers use residual color
+        // loss; edge mode uses target-edge support so settled real edges survive
+        // while static orphan strokes with no matching edge are recycled.
         let color_loss_contrib = dot(dC * dC, vec3f(1.0)) * (T_prev * a);
-        adc.loss_accum[i] += color_loss_contrib;
+        let edge_support_contrib = edge_target * (T_prev * a);
+        adc.loss_accum[i] += select(color_loss_contrib, edge_support_contrib, is_edge_color_mode);
     }
 
     // Accumulate per-pixel residual loss for ADC seeding.
     // Use the uncovered MSE: pixels with high transmittance (no bezier covers them)
     // and high color error are the best candidates for new bezier placement.
-    let residual = dot(dC_raw * 0.5, dC_raw * 0.5) * T_final;
+    // In edge mode, seed only missing target-edge coverage. Off-edge coverage is
+    // handled by pruning and should not attract fresh curves back to stale marks.
+    let color_residual = dot(dC_raw * 0.5, dC_raw * 0.5) * T_final;
+    let missing_edge = max(edge_target - coverage, 0.0);
+    let edge_residual = missing_edge * missing_edge;
+    let residual = select(color_residual, edge_residual, is_edge_color_mode);
     let px_idx = global_id.y * dims.x + global_id.x;
     let FP_LOSS = 10000.0;
     atomicAdd(&pixel_loss[px_idx], i32(residual * FP_LOSS));

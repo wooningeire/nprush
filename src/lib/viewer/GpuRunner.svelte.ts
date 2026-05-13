@@ -372,7 +372,7 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.writeMode(2);
                 this.edgeLayerBezierManager.writeMaxWidth(0.005);
                 this.edgeLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
-                this.edgeLayerBezierManager.writeBgPenalty(1.0); // kill strays on background pixels
+                this.edgeLayerBezierManager.writeBgPenalty(0.0);
                 this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.colorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on fine bezier layer

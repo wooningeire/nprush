@@ -9,9 +9,11 @@ export const constants = {
     BEZIER_ADC_PERIOD: 25,
     BEZIER_TAU_POS: 0.0002,      // must be moving to clone
     BEZIER_TAU_LOSS: 0.001,      // kill if stuck AND contributing to loss
+    BEZIER_TAU_EDGE_SUPPORT: 0.001, // edge layer: kill static curves without target-edge support
     BEZIER_SPLIT_LEN_THRESHOLD: 0.25,
     BEZIER_MAX_SPAWNS: 512,
     BEZIER_SPAWN_TANGENT_LEN: 0.025,
+    BEZIER_EDGE_SPAWN_HALF_LEN_PX: 2.0,
     BEZIER_SPAWN_WIDTH: 0.015,
     BEZIER_SPAWN_SOFTNESS: 0.005,
     BEZIER_OFFSCREEN_MARGIN: 1.01,

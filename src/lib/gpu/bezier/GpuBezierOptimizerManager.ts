@@ -66,7 +66,6 @@ export class GpuBezierOptimizerManager {
 
     private readonly backwardBindGroupLayout: GPUBindGroupLayout;
     private readonly stepBindGroup: GPUBindGroup;
-    private readonly adcBindGroup: GPUBindGroup;
     private readonly initBindGroup: GPUBindGroup;
     private readonly adcBindGroupLayout: GPUBindGroupLayout;
 
@@ -80,6 +79,7 @@ export class GpuBezierOptimizerManager {
     private readonly histBuffer: GPUBuffer;
 
     private backwardBindGroup: GPUBindGroup | null = null;
+    private adcBindGroup: GPUBindGroup | null = null;
     private stepCount: number = 0;
     private adcPeriod: number = constants.BEZIER_ADC_PERIOD;
 
@@ -117,9 +117,9 @@ export class GpuBezierOptimizerManager {
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
 
-        // Two f32 per curve: positional gradient norm (grad_accum) and color
-        // loss contribution (loss_accum), both accumulated across each ADC
-        // period and reset to 0 inside the ADC shader.
+        // Two f32 per curve: positional gradient norm (grad_accum) and an ADC
+        // pruning signal (loss_accum). Color layers store color loss there;
+        // edge mode stores target-edge support so unsupported orphan strokes die.
         this.adcBuffer = device.createBuffer({
             label: "bezier adc buffer",
             size: this.numBeziers * 8,
@@ -357,6 +357,7 @@ export class GpuBezierOptimizerManager {
                 { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
                 { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
                 { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 6, visibility: GPUShaderStage.COMPUTE, texture: { sampleType: "float" } },
             ],
         });
         const adcModule = device.createShaderModule({
@@ -373,19 +374,6 @@ export class GpuBezierOptimizerManager {
                 bindGroupLayouts: [this.adcBindGroupLayout] 
             }),
             compute: { module: adcModule, entryPoint: "main" },
-        });
-
-        this.adcBindGroup = device.createBindGroup({
-            label: "bezier adc bind group",
-            layout: this.adcBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: this.bezierBuffer } },
-                { binding: 1, resource: { buffer: this.adamBuffer } },
-                { binding: 2, resource: { buffer: this.adcBuffer } },
-                { binding: 3, resource: { buffer: this.pixelLossBuffer } },
-                { binding: 4, resource: { buffer: this.bezierUniformsBuffer } },
-                { binding: 5, resource: { buffer: this.adcScratchBuffer } },
-            ],
         });
 
         // Radix sort pipelines
@@ -786,6 +774,20 @@ export class GpuBezierOptimizerManager {
                 { binding: 12, resource: { buffer: this.tileEndsBuffer } },
             ],
         });
+
+        this.adcBindGroup = this.device.createBindGroup({
+            label: "bezier adc bind group",
+            layout: this.adcBindGroupLayout,
+            entries: [
+                { binding: 0, resource: { buffer: this.bezierBuffer } },
+                { binding: 1, resource: { buffer: this.adamBuffer } },
+                { binding: 2, resource: { buffer: this.adcBuffer } },
+                { binding: 3, resource: { buffer: this.pixelLossBuffer } },
+                { binding: 4, resource: { buffer: this.bezierUniformsBuffer } },
+                { binding: 5, resource: { buffer: this.adcScratchBuffer } },
+                { binding: 6, resource: targetDepthTextureView },
+            ],
+        });
     }
 
     dispatchBinning(commandEncoder: GPUCommandEncoder, vpMat: Mat4) {
@@ -881,7 +883,7 @@ export class GpuBezierOptimizerManager {
         // ADC fires every adcPeriod steps; bezier_adc.wgsl reads the same value
         // from uniforms.adc_period_steps for grad/loss averaging.
         this.stepCount++;
-        if (this.stepCount % this.adcPeriod === 0) {
+        if (this.stepCount % this.adcPeriod === 0 && this.adcBindGroup) {
             pass.setPipeline(this.adcPipeline);
             pass.setBindGroup(0, this.adcBindGroup);
             pass.dispatchWorkgroups(1);
