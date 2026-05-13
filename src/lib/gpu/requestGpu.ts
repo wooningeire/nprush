@@ -9,13 +9,13 @@ export const requestGpu = async ({
 }) => {
     onStatusChange?.("accessing gpu adapter");
     if (navigator.gpu === undefined) {
-        onErr?.("webgpu not supported");
+        onErr?.("webgpu not supported by your browser");
         return null;
     }
 
     const adapter = await navigator.gpu.requestAdapter();
     if (adapter === null) {
-        onErr?.("could not get adapter");
+        onErr?.("could not get gpu adapter; may need to restart your device");
         return null;
     }
 
@@ -34,12 +34,12 @@ export const requestGpu = async ({
         // },
     });
     if (device === null) {
-        onErr?.("could not get device");
+        onErr?.("could not get gpu device; may need to restart your device");
         return null;
     }
 
     device.lost.then(() => {
-        onErr?.("gpu device was lost. please reload the page!");
+        onErr?.("gpu device was lost or took too long");
     });
 
     if (typeof window !== "undefined") {

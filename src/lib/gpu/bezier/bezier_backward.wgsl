@@ -323,10 +323,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
     let FP_SCALE_POS = f32({@BEZIER_FP_SCALE_POS});
     let FP_SCALE_COL = f32({@BEZIER_FP_SCALE_COL});
 
-    // Direction regularization (fine layer): flow from target/normal texels depends only on this pixel.
-    // Disabled for edge-color mode: coverage loss handles positioning, and the edge map gradient
-    // points perpendicular to contours which would misalign strokes.
-    let is_fine = uniforms.max_width > 0.0 && !is_edge_color_mode;
+    // Softness regularization applies to any layer with a max_width limit (fine + edge beziers).
+    // Direction regularization is disabled for edge-color mode: coverage loss handles positioning,
+    // and the edge map gradient points perpendicular to contours which would misalign strokes.
+    let has_width_limit = uniforms.max_width > 0.0;
+    let is_fine = has_width_limit && !is_edge_color_mode;
     var dir_flow_dir = vec2f(0.0);
     var dir_flow_use = false;
     if (is_fine) {
@@ -517,7 +518,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         // 1. Softness → 0: loss = REG_SOFT * softness^2
         //    d_soft += REG_SOFT * 2 * softness
         let REG_SOFT = 5.0;
-        dSoft += select(0.0, REG_SOFT * 2.0 * softness, is_fine);
+        dSoft += select(0.0, REG_SOFT * 2.0 * softness, has_width_limit);
 
         // 2. Direction regularization (flow_dir precomputed once per pixel above).
         const REG_DIR: f32 = 1.5;

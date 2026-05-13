@@ -1,6 +1,7 @@
 <script lang="ts">
-    import { fade } from "svelte/transition";
+    import { fade, fly } from "svelte/transition";
 import { toasts, dismissToast } from "./toast.svelte.ts";
+    import { flip } from "svelte/animate";
 </script>
 
 <div class="toast-container">
@@ -8,10 +9,31 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
         <div
             class="toast {toast.kind}"
             role="alert"
+            in:fly={{duration: 200}}
             out:fade={{duration: 200}}
+            animate:flip={{duration: 200}}
         >
-            <span class="message">{toast.message}</span>
-            <button class="close" onclick={() => dismissToast(toast.id)} aria-label="Dismiss">✕</button>
+            {#if toast.kind === "error"}
+                <div>🛑</div>
+            {/if}
+
+            <div class="message">
+                <div class="message-text">
+                    {toast.message}
+                </div>
+
+                {#if toast.kind === "error"}
+                    <div class="error-description">
+                        this is an error; you will need to reload the page
+                    </div>
+                {/if}
+            </div>
+
+            <button
+                class="close"
+                onclick={() => dismissToast(toast.id)}
+                aria-label="Dismiss"
+            >✕</button>
         </div>
     {/each}
 </div>
@@ -19,20 +41,26 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
 <style lang="scss">
 .toast-container {
     position: fixed;
-    bottom: 1.5rem;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 1000;
+
+    bottom: 1rem;
+    right: 1rem;
+    
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    align-items: center;
+    align-items: flex-end;
+
     pointer-events: none;
 }
 
 .toast {
+    pointer-events: all;
+
     display: flex;
     align-items: center;
+
+    text-align: right;
+
     gap: 0.75rem;
     padding: 0.6rem 1rem;
     border-radius: 8px;
@@ -41,15 +69,12 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
     color: white;
     backdrop-filter: blur(8px);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    pointer-events: all;
     max-width: 480px;
-    animation: slide-in 0.2s ease;
 
     &.info    { background: rgba(30, 30, 50, 0.85); border: 1px solid rgba(255,255,255,0.15); }
     &.success { background: rgba(5, 100, 60, 0.85);  border: 1px solid rgba(16,185,129,0.4); }
     &.error   { background: rgba(120, 20, 20, 0.85); border: 1px solid rgba(239,68,68,0.4); }
 
-    .message { flex: 1; }
 
     .close {
         background: none;
@@ -64,8 +89,10 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
     }
 }
 
-@keyframes slide-in {
-    from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
+.error-description {
+    opacity: 0.6;
+    
+    font-size: 0.8rem;
+    font-style: italic;
 }
 </style>
