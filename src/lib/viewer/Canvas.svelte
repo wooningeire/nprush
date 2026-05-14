@@ -114,7 +114,7 @@ let shiftHeld = $state(false);
 
 <style lang="scss">
 section {
-    width: 100vw;
+    width: 100%;
     height: 100vh;
     position: relative;
 }

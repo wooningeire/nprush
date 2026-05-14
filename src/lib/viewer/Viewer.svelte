@@ -2,8 +2,7 @@
 import { onMount } from "svelte";
 
 import Canvas from "./Canvas.svelte";
-import GpuProfilerHud from "./GpuProfilerHud.svelte";
-import Overlays from "./Overlays.svelte";
+import ControlPanel from "./Overlays.svelte";
 import Toasts from "./Toasts.svelte";
 import { ViewerState } from "./ViewerState.svelte.ts";
 
@@ -20,13 +19,15 @@ onMount(() => {
 </script>
 
 <main>
-    <Canvas
-        {viewerState}
-        bind:canvas
-    />
+    <viewer-content>
+        <ControlPanel {viewerState} />
 
-    <Overlays {viewerState} />
-    <GpuProfilerHud {viewerState} />
+        <Canvas
+            {viewerState}
+            bind:canvas
+        />
+    </viewer-content>
+
     <Toasts />
 </main>
 
@@ -41,5 +42,9 @@ main {
     > :global(*) {
         grid-area: 1/1;
     }
+}
+
+viewer-content {
+    display: flex;
 }
 </style>

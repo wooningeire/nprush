@@ -305,18 +305,11 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 
 <style lang="scss">
     .overlays {
-        position: absolute;
-        top: 1rem;
-        bottom: 1rem;
-        left: 1rem;
 
         overflow-y: auto;
 
         color: oklch(1 0 0);
-        background: rgba(0, 0, 0, 0.6);
-        backdrop-filter: blur(8px);
         padding: 1rem;
-        border-radius: 8px;
         border: 1px solid rgba(255, 255, 255, 0.1);
 
         label {

@@ -6,6 +6,14 @@ body {
     margin: 0;
 
     font-family: "Averia Libre", sans-serif;
+
+    background: radial-gradient(
+        circle at center,
+        oklch(0.3 0.03 190),
+        oklch(0.2 0.02 200),
+    );
+    
+    color: oklch(1 0 0);
 }
 
 input,
@@ -13,4 +21,5 @@ button,
 select {
     font-family: inherit;
     font-size: 1em;
+    color: inherit;
 }
