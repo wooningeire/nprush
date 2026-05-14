@@ -49,5 +49,7 @@ main {
 
 viewer-content {
     display: flex;
+
+    overflow: hidden;
 }
 </style>
