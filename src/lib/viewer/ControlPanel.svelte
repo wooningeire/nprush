@@ -10,7 +10,7 @@ import GpuProfilerCharts from "./GpuProfilerCharts.svelte";
 const {
     viewerState,
 }: {
-    viewerState: ViewerState;
+    viewerState: ViewerState,
 } = $props();
 
 const latDeg = $derived(Math.round(viewerState.turntableLatAmplitude * 180 / Math.PI));
@@ -305,10 +305,8 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 
 <style lang="scss">
     .overlays {
-
         overflow-y: auto;
 
-        color: oklch(1 0 0);
         padding: 1rem;
         border: 1px solid rgba(255, 255, 255, 0.1);
 

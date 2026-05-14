@@ -2,7 +2,7 @@
 import { onMount } from "svelte";
 
 import Canvas from "./Canvas.svelte";
-import ControlPanel from "./Overlays.svelte";
+import ControlPanel from "./ControlPanel.svelte";
 import Toasts from "./Toasts.svelte";
 import { ViewerState } from "./ViewerState.svelte.ts";
 
@@ -38,6 +38,9 @@ main {
     height: 100vh;
 
     display: grid;
+    align-items: stretch;
+
+    overflow: hidden;
 
     > :global(*) {
         grid-area: 1/1;
