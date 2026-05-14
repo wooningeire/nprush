@@ -33,8 +33,14 @@ struct SplatUniforms {
 @group(0) @binding(6) var<storage, read> tile_starts: array<u32>;
 @group(0) @binding(7) var<storage, read> tile_ends: array<u32>;
 
-fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32) -> vec2f {
-    let uv = (vec2f(px) + vec2f(0.5)) / vec2f(dims);
+fn hash2(p: vec2f) -> vec2f {
+    let q = vec2f(dot(p, vec2f(127.1, 311.7)), dot(p, vec2f(269.5, 183.3)));
+    return fract(sin(q) * 43758.5453);
+}
+
+fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32, seed: f32) -> vec2f {
+    let jitter = hash2(vec2f(px) + seed) - 0.5;
+    let uv = (vec2f(px) + 0.5 + jitter) / vec2f(dims);
     var p = uv * 2.0 - 1.0;
     p.y = -p.y;
     p.x = p.x * aspect;
@@ -163,7 +169,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
     if (global_id.x >= dims.x || global_id.y >= dims.y) { return; }
 
-    let p = pixel_to_p(global_id.xy, dims, aspect);
+    let p = pixel_to_p(global_id.xy, dims, aspect, splat_uniforms.extras.y);
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
 
     var C_pred = vec3f(0.0);

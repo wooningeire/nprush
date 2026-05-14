@@ -867,6 +867,12 @@ export class GpuBezierOptimizerManager {
             );
         }
 
+        this.device.queue.writeBuffer(
+            this.bezierUniformsBuffer,
+            84, // offset of seed (formerly _pad0)
+            new Float32Array([this.stepCount])
+        );
+
         const pass = commandEncoder.beginComputePass({
             label: "bezier backward and step pass",
             ...(timestampWrites ? { timestampWrites } : {}),

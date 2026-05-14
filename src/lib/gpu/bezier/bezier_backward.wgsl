@@ -28,7 +28,7 @@ struct BezierUniforms {
     prune_alpha_thresh: f32,
     prune_width_thresh: f32,
     bg_penalty: f32,
-    _pad0: f32,
+    seed: f32,
     _pad1: f32,
     adc_period_steps: f32,
     optim_width: f32,
@@ -141,8 +141,14 @@ var<workgroup> tile_tgt_luma: array<f32, TILE_CACHE_SZ>;
 var<workgroup> tile_tgt_gray: array<f32, TILE_CACHE_SZ>;
 var<workgroup> tile_norm_scalar: array<f32, TILE_CACHE_SZ>;
 
-fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32) -> vec2f {
-    let uv = (vec2f(px) + vec2f(0.5)) / vec2f(dims);
+fn hash2(p: vec2f) -> vec2f {
+    let q = vec2f(dot(p, vec2f(127.1, 311.7)), dot(p, vec2f(269.5, 183.3)));
+    return fract(sin(q) * 43758.5453);
+}
+
+fn pixel_to_p(px: vec2u, dims: vec2u, aspect: f32, seed: f32) -> vec2f {
+    let jitter = hash2(vec2f(px) + seed) - 0.5;
+    let uv = (vec2f(px) + 0.5 + jitter) / vec2f(dims);
     var p = uv * 2.0 - 1.0;
     p.y = -p.y;
     p.x = p.x * aspect;
@@ -188,7 +194,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         return;
     }
 
-    let p = pixel_to_p(global_id.xy, dims, aspect);
+    let p = pixel_to_p(global_id.xy, dims, aspect, uniforms.seed);
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
     let tgt_depth = textureLoad(targetDepthTex, global_id.xy, 0).r;
 

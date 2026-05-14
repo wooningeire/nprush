@@ -868,6 +868,12 @@ export class GpuSplatOptimizerManager {
             );
         }
 
+        this.device.queue.writeBuffer(
+            this.splatUniformsBuffer,
+            148, // offset of extras.y
+            new Float32Array([this.stepCount])
+        );
+
         const pass = commandEncoder.beginComputePass({
             label: "splat backward and step pass",
             ...(timestampWrites ? { timestampWrites } : {}),
