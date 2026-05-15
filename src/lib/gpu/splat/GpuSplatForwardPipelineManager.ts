@@ -120,7 +120,7 @@ export class GpuSplatForwardPipelineManager {
         }
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder, clear: boolean = false, draw: boolean = true, timestampWrites?: NonNullable<GPURenderPassDescriptor["timestampWrites"]>) {
+    addDispatches(commandEncoder: GPUCommandEncoder, clear: boolean = false, draw: boolean = true, timestampWrites?: NonNullable<GPURenderPassDescriptor["timestampWrites"]>) {
         if (!this.targetColorView || !this.targetDepthView || !this.bindGroup) return;
         const pass = commandEncoder.beginRenderPass({
             label: "splat forward render pass",

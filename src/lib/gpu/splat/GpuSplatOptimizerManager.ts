@@ -361,10 +361,10 @@ export class GpuSplatOptimizerManager {
         this.device.queue.writeBuffer(this.adamBuffer, this.numParams * 8 + 8, new Uint32Array([noKill ? 1 : 0]));
     }
 
-    addBinningDispatch(pass: GPUComputePassEncoder, vpMat: Mat4, commandEncoder: GPUCommandEncoder) {
-        const { width, height } = this.dims;
-        if (width === 0 || height === 0) return;
-        const gridWidth = Math.ceil(width / 16);
+    addBinningDispatches(pass: GPUComputePassEncoder, vpMat: Mat4, commandEncoder: GPUCommandEncoder) {
+        const { width: widthes, height } = this.dims;
+        if (widthes === 0 || height === 0) return;
+        const gridWidth = Math.ceil(widthes / 16);
         const gridHeight = Math.ceil(height / 16);
         const numTiles = gridWidth * gridHeight;
 
@@ -373,11 +373,11 @@ export class GpuSplatOptimizerManager {
         commandEncoder.clearBuffer(this.binningManager.tileEndsBuffer, 0, numTiles * 4);
         
         if (pass) {
-            this.binningManager.addDispatch(pass, vpMat, width, height);
+            this.binningManager.addDispatches(pass, vpMat, widthes, height);
         }
     }
 
-    addDispatch(pass: GPUComputePassEncoder) {
+    addOptimizationDispatches(pass: GPUComputePassEncoder) {
         if (!this.backwardBindGroup) return;
         const { width, height } = this.dims;
         if (width === 0 || height === 0) return;
@@ -405,12 +405,12 @@ export class GpuSplatOptimizerManager {
         }
     }
 
-    addEdgeDispatch(pass: GPUComputePassEncoder, width: number, height: number) {
-        this.edgeManager.addDispatch(pass, width, height);
+    addEdgeDispatches(pass: GPUComputePassEncoder, width: number, height: number) {
+        this.edgeManager.addDispatches(pass, width, height);
     }
 
-    addDepthSortDispatch(pass: GPUComputePassEncoder, vpMat: Mat4) {
-        this.depthSortManager.addDispatch(pass, vpMat);
+    addDepthSortDispatches(pass: GPUComputePassEncoder, vpMat: Mat4) {
+        this.depthSortManager.addDispatches(pass, vpMat);
     }
 
     addDraw(renderPassEncoder: GPURenderPassEncoder, mode: number) {

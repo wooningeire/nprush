@@ -91,7 +91,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         <input type="checkbox" bind:checked={viewerState.baseColorBeziersEnabled} />
         Coarse bezier
     </label>
-    {#if viewerState.baseColorBeziersEnabled}
+    {#if viewerState.coarseColorBeziersEnabled}
         <label class="sub">
             <input type="checkbox" bind:checked={viewerState.baseColorBezierTrainingPaused} />
             Pause training
@@ -101,7 +101,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         <input type="checkbox" bind:checked={viewerState.colorBeziersEnabled} />
         Fine bezier
     </label>
-    {#if viewerState.colorBeziersEnabled}
+    {#if viewerStatfineColorBeziersEnableded}
         <label class="sub">
             <input type="checkbox" bind:checked={viewerState.colorBezierTrainingPaused} />
             Pause training

@@ -5,7 +5,6 @@ import envmapSrc from "./envmap.wgsl?raw";
 // Must be drawn before the mesh pass (or with depth test = always + no depth write)
 // so the mesh always renders on top.
 export class GpuEnvmapPipelineManager {
-    private readonly device: GPUDevice;
     private readonly pipeline: GPURenderPipeline;
     private readonly bindGroup: GPUBindGroup;
 

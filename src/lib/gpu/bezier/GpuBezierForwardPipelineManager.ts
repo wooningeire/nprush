@@ -139,7 +139,7 @@ export class GpuBezierForwardPipelineManager {
         });
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder, clear: boolean = true, timestampWrites?: NonNullable<GPURenderPassDescriptor["timestampWrites"]>) {
+    addDispatches(commandEncoder: GPUCommandEncoder, clear: boolean = true, timestampWrites?: NonNullable<GPURenderPassDescriptor["timestampWrites"]>) {
         if (!this.bindGroup || !this.targetView) return;
         const pass = commandEncoder.beginRenderPass({
             label: "bezier forward pass",

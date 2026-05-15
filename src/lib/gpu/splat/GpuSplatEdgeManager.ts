@@ -58,7 +58,7 @@ export class GpuSplatEdgeManager {
         });
     }
 
-    addDispatch(pass: GPUComputePassEncoder, width: number, height: number) {
+    addDispatches(pass: GPUComputePassEncoder, width: number, height: number) {
         if (!this.bindGroup) return;
         pass.setPipeline(this.pipeline);
         pass.setBindGroup(0, this.bindGroup);

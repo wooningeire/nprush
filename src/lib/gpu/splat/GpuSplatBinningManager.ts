@@ -232,7 +232,7 @@ export class GpuSplatBinningManager {
         });
     }
 
-    addDispatch(pass: GPUComputePassEncoder, vpMat: Mat4, width: number, height: number) {
+    addDispatches(pass: GPUComputePassEncoder, vpMat: Mat4, width: number, height: number) {
         const gridWidth = Math.ceil(width / 16);
         const gridHeight = Math.ceil(height / 16);
 

@@ -141,7 +141,7 @@ export class GpuBezierDepthSortManager {
         });
     }
 
-    addDispatch(pass: GPUComputePassEncoder, vpMat: Mat4) {
+    addDispatches(pass: GPUComputePassEncoder, vpMat: Mat4) {
         const vpData = vpMat as Float32Array;
         for (let i = 0; i < 4; i++) {
             this.device.queue.writeBuffer(

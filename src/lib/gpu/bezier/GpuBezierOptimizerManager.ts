@@ -3,7 +3,7 @@ import stepModuleSrc from "./bezier_step.wgsl?raw";
 import adcModuleSrc from "./bezier_adc.wgsl?raw";
 import initModuleSrc from "./bezier_init.wgsl?raw";
 import type { Mat4 } from "wgpu-matrix";
-import { constants, injectWgslConstants } from "../constants";
+import { constants, injectWgslConstants } from "../constants.ts";
 import { GpuBezierBinningManager } from "./GpuBezierBinningManager.ts";
 import { GpuBezierDepthSortManager } from "./GpuBezierDepthSortManager.ts";
 
@@ -228,7 +228,7 @@ export class GpuBezierOptimizerManager {
         });
     }
 
-    addBinningDispatch(pass: GPUComputePassEncoder, vpMat: Mat4, commandEncoder: GPUCommandEncoder) {
+    addBinningDispatches(pass: GPUComputePassEncoder, vpMat: Mat4, commandEncoder: GPUCommandEncoder) {
         const { width, height } = this.dims;
         if (width === 0 || height === 0) return;
         const gridWidth = Math.ceil(width / 16);
@@ -240,11 +240,11 @@ export class GpuBezierOptimizerManager {
         commandEncoder.clearBuffer(this.binningManager.tileEndsBuffer, 0, numTiles * 4);
 
         if (pass) {
-            this.binningManager.addDispatch(pass, vpMat, width, height);
+            this.binningManager.addDispatches(pass, vpMat, width, height);
         }
     }
 
-    addDispatch(pass: GPUComputePassEncoder) {
+    addOptimizationDispatches(pass: GPUComputePassEncoder) {
         if (!this.backwardBindGroup || !this.adcBindGroup) return;
         const { width, height } = this.dims;
         if (width === 0 || height === 0) return;
@@ -273,8 +273,8 @@ export class GpuBezierOptimizerManager {
         }
     }
 
-    addSortDispatch(pass: GPUComputePassEncoder, vpMat: Mat4) {
-        this.sortManager.addDispatch(pass, vpMat);
+    addSortDispatches(pass: GPUComputePassEncoder, vpMat: Mat4) {
+        this.sortManager.addDispatches(pass, vpMat);
     }
 
     destroy() {

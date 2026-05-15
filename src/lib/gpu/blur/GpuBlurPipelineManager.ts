@@ -43,7 +43,7 @@ export class GpuBlurPipelineManager {
         });
     }
 
-    blur(
+    addDispatches(
         commandEncoder: GPUCommandEncoder,
         srcView: GPUTextureView,
         dstView: GPUTextureView,
