@@ -1,5 +1,5 @@
-import type { GpuUniformsBufferManager } from "./GpuUniformsBufferManager";
-import { constants, injectWgslConstants } from "./constants";
+import type { GpuUniformsBufferManager } from "./GpuUniformsBufferManager.ts";
+import { constants, injectWgslConstants } from "./constants.ts";
 import type { MeshData } from "./file-load/loadGlb.ts";
 import meshModuleSrc from "./mesh.wgsl?raw";
 
@@ -23,8 +23,8 @@ export class GpuMeshRenderPipelineManager {
     indexBuffer: GPUBuffer;
     indexCount: number;
 
-    private meshSplatsBuffer: GPUBuffer;
-    private meshUniformsBuffer: GPUBuffer;
+    meshSplatsBuffer: GPUBuffer;
+    meshUniformsBuffer: GPUBuffer;
     private splatsBgl: GPUBindGroupLayout;
     private splatsBindGroup: GPUBindGroup;
     public numMeshSplats = 0;

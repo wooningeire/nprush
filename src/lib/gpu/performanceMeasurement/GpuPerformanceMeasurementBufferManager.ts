@@ -23,7 +23,10 @@ export class GpuPerformanceMeasurementBufferManager {
         pairCount?: number;
     }) {
         const queryCount = pairCount * 2;
-        const byteSize = queryCount * 8;
+        const resultByteSize = queryCount * 8;
+        // WebGPU requires destinationOffset for resolveQuerySet to be a multiple of 256 bytes.
+        // We allocate 256 bytes per pair so we can resolve each pair individually at an aligned offset.
+        const resolveByteSize = pairCount * 256;
 
         const querySet = device.createQuerySet({
             type: "timestamp",
@@ -32,13 +35,13 @@ export class GpuPerformanceMeasurementBufferManager {
 
         const resolveBuffer = device.createBuffer({
             label: "gpu perf resolve buffer",
-            size: byteSize,
+            size: resolveByteSize,
             usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC,
         });
 
         const resultBuffer = device.createBuffer({
             label: "gpu perf readback buffer",
-            size: byteSize,
+            size: resultByteSize,
             usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
         });
 
@@ -58,12 +61,24 @@ export class GpuPerformanceMeasurementBufferManager {
     }
 
     /** Append resolve+copy immediately before `finish()` while `resultBuffer` is unmapped. */
-    addResolve(commandEncoder: GPUCommandEncoder) {
+    addResolve(commandEncoder: GPUCommandEncoder, activeIndices?: Set<number>) {
         if (this.resultBuffer.mapState !== "unmapped") return;
 
-        const q = this.querySet.count * 8;
-        commandEncoder.resolveQuerySet(this.querySet, 0, this.querySet.count, this.resolveBuffer, 0);
-        commandEncoder.copyBufferToBuffer(this.resolveBuffer, 0, this.resultBuffer, 0, q);
+        if (activeIndices) {
+            for (let i = 0; i < this.pairCount; i++) {
+                if (activeIndices.has(i)) {
+                    const startQuery = i * 2;
+                    const resolveOffset = i * 256;
+                    const resultOffset = i * 16;
+                    commandEncoder.resolveQuerySet(this.querySet, startQuery, 2, this.resolveBuffer, resolveOffset);
+                    commandEncoder.copyBufferToBuffer(this.resolveBuffer, resolveOffset, this.resultBuffer, resultOffset, 16);
+                }
+            }
+        } else {
+            const q = this.querySet.count * 8;
+            commandEncoder.resolveQuerySet(this.querySet, 0, this.querySet.count, this.resolveBuffer, 0);
+            commandEncoder.copyBufferToBuffer(this.resolveBuffer, 0, this.resultBuffer, 0, q);
+        }
     }
 
     /**

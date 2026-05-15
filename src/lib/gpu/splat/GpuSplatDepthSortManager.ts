@@ -169,7 +169,7 @@ export class GpuSplatDepthSortManager {
         });
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder, vpMat: Mat4) {
+    addDispatches(pass: GPUComputePassEncoder, vpMat: Mat4) {
         const vpData = vpMat as Float32Array;
 
         for (let i = 0; i < 4; i++) {
@@ -181,9 +181,6 @@ export class GpuSplatDepthSortManager {
 
         const nWorkgroups = Math.ceil(this.nSplats / 256);
 
-
-
-        const pass = commandEncoder.beginComputePass({ label: "splat sort pass" });
         pass.setPipeline(this.radixInitPipeline);
         pass.setBindGroup(0, this.sortBindGroupBtoA, [0]);
         pass.dispatchWorkgroups(nWorkgroups);
@@ -204,8 +201,6 @@ export class GpuSplatDepthSortManager {
             pass.setBindGroup(0, sourceBuffer, [offset]);
             pass.dispatchWorkgroups(nWorkgroups);
         }
-
-        pass.end();
     }
 
 

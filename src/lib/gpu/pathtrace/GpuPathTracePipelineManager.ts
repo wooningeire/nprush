@@ -1,11 +1,9 @@
 import pathTraceSrc from "./path_trace.wgsl?raw";
 import resolveSrc from "./path_trace_resolve.wgsl?raw";
 import { buildBvh } from "../bvh.ts";
-import { constants, injectWgslConstants } from "../constants";
+import { constants, injectWgslConstants } from "../constants.ts";
 import type { MeshData } from "../file-load/loadGlb.ts";
 
-// Progressive path tracer with BVH acceleration.
-// Each dispatch() adds one sample per pixel; reset() clears on camera move.
 export class GpuPathTracePipelineManager {
     private readonly device: GPUDevice;
 
@@ -155,7 +153,7 @@ export class GpuPathTracePipelineManager {
             label: "bvh tris", size: bvh.triIndices.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-        this.device.queue.writeBuffer(this.bvhTriBuffer, 0, bvh.triIndices);
+        this.device.queue.writeBuffer(this.bvhTriBuffer, 0, bvh.triIndices.buffer);
         this.numTris = bvh.triIndices.length / 3; // store reordered tri count
 
         this.ptBindGroup = null;
@@ -257,7 +255,7 @@ export class GpuPathTracePipelineManager {
         });
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
+    addDispatches(commandEncoder: GPUCommandEncoder, timestampWrites?: NonNullable<GPUComputePassDescriptor["timestampWrites"]>) {
         if (!this.accumBuffer || !this.outputTextureView ||
             !this.vertexBuffer || !this.bvhNodeBuffer || !this.bvhTriBuffer) return;
 

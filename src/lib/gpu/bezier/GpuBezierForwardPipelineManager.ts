@@ -3,7 +3,8 @@ import { constants, injectWgslConstants } from "../constants";
 
 export class GpuBezierForwardPipelineManager {
     private readonly device: GPUDevice;
-    private readonly pipeline: GPURenderPipeline;
+    private readonly pipeline1: GPURenderPipeline;
+    private readonly pipeline2: GPURenderPipeline;
     private readonly bindGroupLayout: GPUBindGroupLayout;
     private bindGroup: GPUBindGroup | null = null;
     private targetView: GPUTextureView | null = null;
@@ -70,38 +71,49 @@ export class GpuBezierForwardPipelineManager {
             for (const msg of info.messages) console.warn(`[bezier_forward] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
         });
 
-        this.pipeline = device.createRenderPipeline({
-            label: "bezier forward render pipeline",
-            layout: device.createPipelineLayout({ 
-                label: "bezier forward pipeline layout",
-                bindGroupLayouts: [this.bindGroupLayout] 
-            }),
-            vertex: {
-                module,
-                entryPoint: "vs_main",
+        const pipelineLayout = device.createPipelineLayout({ 
+            label: "bezier forward pipeline layout",
+            bindGroupLayouts: [this.bindGroupLayout] 
+        });
+
+        const blend = {
+            color: {
+                operation: "add" as const,
+                srcFactor: "one" as const,
+                dstFactor: "one-minus-src-alpha" as const,
             },
+            alpha: {
+                operation: "add" as const,
+                srcFactor: "one" as const,
+                dstFactor: "one-minus-src-alpha" as const,
+            },
+        };
+
+        this.pipeline1 = device.createRenderPipeline({
+            label: "bezier forward render pipeline (1 target)",
+            layout: pipelineLayout,
+            vertex: { module, entryPoint: "vs_main" },
             fragment: {
                 module,
                 entryPoint: "fs_main",
-                targets: [{
-                    format: "rgba8unorm",
-                    blend: {
-                        color: {
-                            operation: "add",
-                            srcFactor: "one",
-                            dstFactor: "one-minus-src-alpha",
-                        },
-                        alpha: {
-                            operation: "add",
-                            srcFactor: "one",
-                            dstFactor: "one-minus-src-alpha",
-                        },
-                    },
-                }],
+                targets: [{ format: "rgba8unorm", blend }],
             },
-            primitive: {
-                topology: "triangle-strip",
+            primitive: { topology: "triangle-strip" },
+        });
+
+        this.pipeline2 = device.createRenderPipeline({
+            label: "bezier forward render pipeline (2 targets)",
+            layout: pipelineLayout,
+            vertex: { module, entryPoint: "vs_main" },
+            fragment: {
+                module,
+                entryPoint: "fs_main",
+                targets: [
+                    { format: "rgba8unorm", blend },
+                    { format: "rgba8unorm", writeMask: 0 },
+                ],
             },
+            primitive: { topology: "triangle-strip" },
         });
     }
 
@@ -139,7 +151,15 @@ export class GpuBezierForwardPipelineManager {
         });
     }
 
-    dispatch(commandEncoder: GPUCommandEncoder, clear: boolean = true, timestampWrites?: NonNullable<GPURenderPassDescriptor["timestampWrites"]>) {
+    render(pass: GPURenderPassEncoder, isDualTarget: boolean = false) {
+        if (this.bindGroup) {
+            pass.setPipeline(isDualTarget ? this.pipeline2 : this.pipeline1);
+            pass.setBindGroup(0, this.bindGroup);
+            pass.draw(4, this.numBeziers);
+        }
+    }
+
+    addDispatches(commandEncoder: GPUCommandEncoder, clear: boolean = true, timestampWrites?: NonNullable<GPURenderPassDescriptor["timestampWrites"]>) {
         if (!this.bindGroup || !this.targetView) return;
         const pass = commandEncoder.beginRenderPass({
             label: "bezier forward pass",
@@ -153,9 +173,7 @@ export class GpuBezierForwardPipelineManager {
                 },
             ],
         });
-        pass.setPipeline(this.pipeline);
-        pass.setBindGroup(0, this.bindGroup);
-        pass.draw(4, this.numBeziers);
+        this.render(pass);
         pass.end();
     }
 
