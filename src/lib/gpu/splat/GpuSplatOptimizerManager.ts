@@ -1,6 +1,7 @@
 import backwardModuleSrc from "./splat_backward.wgsl?raw";
 import stepModuleSrc from "./splat_step.wgsl?raw";
-import renderModuleSrc from "./splat_render.wgsl?raw";
+import renderBlitModuleSrc from "./render_blit.wgsl?raw";
+import renderCompositeModuleSrc from "./render_composite.wgsl?raw";
 import adcModuleSrc from "./splat_adc.wgsl?raw";
 import edgeModuleSrc from "./splat_edge.wgsl?raw";
 import sortModuleSrc from "./splat_sort.wgsl?raw";
@@ -35,7 +36,11 @@ export class GpuSplatOptimizerManager {
     private readonly stepPipeline: GPUComputePipeline;
     private readonly adcPipeline: GPUComputePipeline;
     private readonly edgePipeline: GPUComputePipeline;
-    private readonly renderPipeline: GPURenderPipeline;
+    private readonly targetPipeline: GPURenderPipeline;
+    private readonly compositePipeline: GPURenderPipeline;
+    private readonly blitPipeline: GPURenderPipeline;
+    private readonly blitRPipeline: GPURenderPipeline;
+    private readonly blitAPipeline: GPURenderPipeline;
     private readonly radixInitPipeline: GPUComputePipeline;
     private readonly radixCountPipeline: GPUComputePipeline;
     private readonly radixScanPipeline: GPUComputePipeline;
@@ -77,12 +82,14 @@ export class GpuSplatOptimizerManager {
     private stepBindGroupLayout: GPUBindGroupLayout;
     private edgeBindGroupLayout: GPUBindGroupLayout;
     private renderBindGroupLayout: GPUBindGroupLayout;
+    private blitBindGroupLayout: GPUBindGroupLayout;
 
     private backwardBindGroup!: GPUBindGroup;
     private stepBindGroup: GPUBindGroup;
     private adcBindGroup: GPUBindGroup;
     private edgeBindGroup!: GPUBindGroup;
     private renderBindGroup!: GPUBindGroup;
+    private blitBindGroups: Record<number, GPUBindGroup> = {};
     
     private stepCount: number = 0;
 
@@ -387,13 +394,8 @@ export class GpuSplatOptimizerManager {
             compute: { module: edgeModule, entryPoint: "main" },
         });
 
-        const renderModule = device.createShaderModule({ label: "splat render", code: injectConstants(renderModuleSrc) });
-        renderModule.getCompilationInfo().then(info => {
-            for (const msg of info.messages) console.warn(`[splat_render] ${msg.type}: ${msg.message} (line ${msg.lineNum})`);
-        });
-        
         this.renderBindGroupLayout = device.createBindGroupLayout({
-            label: "splat render bind group layout",
+            label: "splat composite render bind group layout",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
                 { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
@@ -407,14 +409,65 @@ export class GpuSplatOptimizerManager {
             ],
         });
 
-        this.renderPipeline = device.createRenderPipeline({
-            label: "splat render pipeline",
+        this.blitBindGroupLayout = device.createBindGroupLayout({
+            label: "splat blit render bind group layout",
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+                { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform", hasDynamicOffset: true } },
+            ],
+        });
+
+        const compositeModule = device.createShaderModule({ label: "splat composite render", code: injectConstants(renderCompositeModuleSrc) });
+        const blitModule = device.createShaderModule({ label: "splat blit render", code: injectConstants(renderBlitModuleSrc) });
+
+        this.targetPipeline = device.createRenderPipeline({
+            label: "splat target render pipeline",
             layout: device.createPipelineLayout({ 
-                label: "splat render pipeline layout",
+                label: "splat target render pipeline layout",
                 bindGroupLayouts: [this.renderBindGroupLayout] 
             }),
-            vertex: { module: renderModule, entryPoint: "vert" },
-            fragment: { module: renderModule, entryPoint: "frag", targets: [{ format }] },
+            vertex: { module: compositeModule, entryPoint: "vert" },
+            fragment: { module: compositeModule, entryPoint: "frag_target", targets: [{ format }] },
+            primitive: { topology: "triangle-list" },
+        });
+
+        this.compositePipeline = device.createRenderPipeline({
+            label: "splat composite render pipeline",
+            layout: device.createPipelineLayout({ 
+                label: "splat composite render pipeline layout",
+                bindGroupLayouts: [this.renderBindGroupLayout] 
+            }),
+            vertex: { module: compositeModule, entryPoint: "vert" },
+            fragment: { module: compositeModule, entryPoint: "frag_composite", targets: [{ format }] },
+            primitive: { topology: "triangle-list" },
+        });
+
+        const blitLayout = device.createPipelineLayout({ 
+            label: "splat blit render pipeline layout",
+            bindGroupLayouts: [this.blitBindGroupLayout] 
+        });
+
+        this.blitPipeline = device.createRenderPipeline({
+            label: "splat blit render pipeline",
+            layout: blitLayout,
+            vertex: { module: blitModule, entryPoint: "vert" },
+            fragment: { module: blitModule, entryPoint: "frag_blit", targets: [{ format }] },
+            primitive: { topology: "triangle-list" },
+        });
+
+        this.blitRPipeline = device.createRenderPipeline({
+            label: "splat blit R render pipeline",
+            layout: blitLayout,
+            vertex: { module: blitModule, entryPoint: "vert" },
+            fragment: { module: blitModule, entryPoint: "frag_blit_r", targets: [{ format }] },
+            primitive: { topology: "triangle-list" },
+        });
+
+        this.blitAPipeline = device.createRenderPipeline({
+            label: "splat blit A render pipeline",
+            layout: blitLayout,
+            vertex: { module: blitModule, entryPoint: "vert" },
+            fragment: { module: blitModule, entryPoint: "frag_blit_a", targets: [{ format }] },
             primitive: { topology: "triangle-list" },
         });
         // Radix sort pipelines
@@ -741,6 +794,27 @@ export class GpuSplatOptimizerManager {
                 { binding: 8, resource: ptTextureView },
             ],
         });
+
+        const blitTextures: Record<number, GPUTextureView> = {
+            2: splatViewTextureView,
+            3: depthTextureView,
+            4: edgeTextureView,
+            5: bezierViewTextureView,
+            6: baseColorBezierViewTextureView,
+            7: colorBezierViewTextureView,
+        };
+
+        this.blitBindGroups = {};
+        for (const [mode, tex] of Object.entries(blitTextures)) {
+            this.blitBindGroups[Number(mode)] = this.device.createBindGroup({
+                label: `splat blit bind group mode ${mode}`,
+                layout: this.blitBindGroupLayout,
+                entries: [
+                    { binding: 0, resource: tex },
+                    { binding: 1, resource: { buffer: this.renderUniformsBuffer, size: 256 } },
+                ],
+            });
+        }
     }
 
     writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, meshSplatsEnabled: boolean, splatsEnabled: boolean, aspects: Record<number, number>) {
@@ -755,9 +829,8 @@ export class GpuSplatOptimizerManager {
                     colorEnabled ? 1 : 0, 
                     meshSplatsEnabled ? 1 : 0, 
                     splatsEnabled ? 1 : 0, 
-                    mode,
                     aspect,
-                    0, // padding
+                    0, 0, // padding
                 ])
             );
         }
@@ -923,9 +996,28 @@ export class GpuSplatOptimizerManager {
     }
 
     addDraw(renderPassEncoder: GPURenderPassEncoder, mode: number) {
-        if (!this.renderBindGroup) return;
-        renderPassEncoder.setPipeline(this.renderPipeline);
-        renderPassEncoder.setBindGroup(0, this.renderBindGroup, [mode * 256]);
+        if (mode === 0) {
+            if (!this.renderBindGroup) return;
+            renderPassEncoder.setPipeline(this.targetPipeline);
+            renderPassEncoder.setBindGroup(0, this.renderBindGroup, [mode * 256]);
+        } else if (mode === 1) {
+            if (!this.renderBindGroup) return;
+            renderPassEncoder.setPipeline(this.compositePipeline);
+            renderPassEncoder.setBindGroup(0, this.renderBindGroup, [mode * 256]);
+        } else {
+            const bg = this.blitBindGroups[mode];
+            if (!bg) return;
+            
+            if (mode === 3 || mode === 4) {
+                renderPassEncoder.setPipeline(this.blitRPipeline);
+            } else if (mode === 5) {
+                renderPassEncoder.setPipeline(this.blitAPipeline);
+            } else {
+                renderPassEncoder.setPipeline(this.blitPipeline);
+            }
+            
+            renderPassEncoder.setBindGroup(0, bg, [mode * 256]);
+        }
         renderPassEncoder.draw(6);
     }
 

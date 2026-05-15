@@ -696,11 +696,7 @@ export class GpuRunner {
         let canceled = false;
 
         const loop = async () => {
-
-            // Optim textures use a fixed 1:1 aspect so optimization is independent
-            // of the browser window size. Only the full-res display textures track
-            // the visible panel dimensions.
-            this.rebuildOptimTextures(1.0);
+            this.rebuildOptimTextures(1);
 
             // Full-res render textures use a fixed resolution from viewerState,
             // independent of the browser window size.

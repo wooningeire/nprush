@@ -339,7 +339,6 @@ export class ViewerState {
             const canvases = await canvasesPromise;
             const contexts: Record<string, GPUCanvasContext> = {};
 
-            // Re-configure canvases if they changed or we haven't yet
             for (const [id, canvas] of Object.entries(canvases)) {
                 const webgpuContext = canvas.getContext("webgpu");
                 if (webgpuContext === null) {

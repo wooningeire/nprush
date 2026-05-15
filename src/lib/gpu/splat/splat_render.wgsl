@@ -65,7 +65,7 @@ fn fitInPanel(panel_uv: vec2f, panel_aspect: f32, src_aspect: f32) -> vec2f {
 @fragment
 fn frag(v: VsOut) -> @location(0) vec4f {
     let mode = u32(uniforms.panel_mode);
-    let bg = vec4f(0.05, 0.05, 0.05, 1.0);
+    const bg = vec4f(0.05, 0.05, 0.05, 0);
 
     let splat_dims = vec2f(textureDimensions(splatViewTex));
     let splat_aspect = splat_dims.x / splat_dims.y;
