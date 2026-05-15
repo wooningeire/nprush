@@ -20,8 +20,12 @@ struct GradArray {
 struct SplatUniforms {
     vp: mat4x4f,
     vp_inv: mat4x4f,
-    cam_world: vec4f,
-    extras: vec4f,
+    cam_world: vec3f,
+    blur_enabled: u32,
+    step_count: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
 }
 
 @group(0) @binding(0) var<storage, read> splats: SplatArray;
@@ -169,7 +173,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
 
     if (global_id.x >= dims.x || global_id.y >= dims.y) { return; }
 
-    let p = pixel_to_p(global_id.xy, dims, aspect, splat_uniforms.extras.y);
+    let p = pixel_to_p(global_id.xy, dims, aspect, f32(splat_uniforms.step_count));
     let tgt_color = textureLoad(targetTex, global_id.xy, 0).rgb;
 
     var C_pred = vec3f(0.0);

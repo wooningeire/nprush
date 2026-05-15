@@ -1,11 +1,11 @@
 @group(0) @binding(0) var tex: texture_2d<f32>;
 
 struct RenderUniforms {
-    edge_beziers_enabled: f32,
-    base_color_beziers_enabled: f32,
-    color_beziers_enabled: f32,
-    mesh_splats_enabled: f32,
-    splats_enabled: f32,
+    edge_beziers_enabled: u32,
+    base_color_beziers_enabled: u32,
+    color_beziers_enabled: u32,
+    mesh_splats_enabled: u32,
+    splats_enabled: u32,
     canvas_aspect: f32,
     _pad1: f32,
     _pad2: f32,

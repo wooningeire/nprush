@@ -20,10 +20,10 @@ struct GradArray {
 struct AdamState {
     m: array<f32, {@NUM_PARAMS}u>,
     v: array<f32, {@NUM_PARAMS}u>,
-    t: f32,
-    pixel_count: f32,
-    no_kill: f32,
-    pad: f32,
+    t: u32,
+    pixel_count: u32,
+    no_kill: u32,
+    pad: u32,
 }
 
 struct ADCArray {
@@ -38,8 +38,12 @@ struct ADCArray {
 struct SplatUniforms {
     vp: mat4x4f,
     vp_inv: mat4x4f,
-    cam_world: vec4f,
-    extras: vec4f,
+    cam_world: vec3f,
+    blur_enabled: u32,
+    step_count: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
 }
 @group(0) @binding(4) var<uniform> splat_uniforms: SplatUniforms;
 
@@ -99,23 +103,23 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let splat_id = global_id.x;
     let current_t = adam.t;
     workgroupBarrier();
-    if (splat_id == 0u) { adam.t = current_t + 1.0; }
+    if (splat_id == 0u) { adam.t = current_t + 1u; }
     if (splat_id >= {@NUM_SPLATS}u) { return; }
 
     var s = splats.splats[splat_id];
     let base_idx = splat_id * {@SPLAT_PARAMS_PER_SPLAT}u;
-    let t = current_t + 1.0;
+    let t = current_t + 1;
     var pos_grad_norm2 = 0.0;
 
     let beta1 = {@ADAM_BETA1};
     let beta2 = {@ADAM_BETA2};
     let epsilon = {@ADAM_EPS};
-    let denom_m = 1.0 - pow(beta1, t);
-    let denom_v = 1.0 - pow(beta2, t);
+    let denom_m = 1.0 - pow(beta1, f32(t));
+    let denom_v = 1.0 - pow(beta2, f32(t));
     // Normalize gradients by pixel count, matching the bezier step convention.
     // The backward pass accumulates over all pixels in the tile, so we divide
     // by the total pixel count to get a per-pixel average gradient.
-    let pixel_norm = 1.0 / max(adam.pixel_count, 1.0);
+    let pixel_norm = 1.0 / max(f32(adam.pixel_count), 1.0);
 
     var params_arr = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
         s.pos_sx.x, s.pos_sx.y, s.pos_sx.z, s.pos_sx.w,
@@ -176,7 +180,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     s.color.a = select(s.color.a, 0.0, base_kill);
 
     // Single-view offscreen culling (guarded by no_kill for multiview/turntable)
-    if (s.color.a > 0.0 && adam.no_kill < 0.5) {
+    if (s.color.a > 0.0 && adam.no_kill == 0u) {
         let c = splat_uniforms.vp * vec4f(s.pos_sx.xyz, 1.0);
         let margin = 1.2;
         let offscreen = c.x < -margin*c.w || c.x > margin*c.w || c.y < -margin*c.w || c.y > margin*c.w || c.w < 0.1;

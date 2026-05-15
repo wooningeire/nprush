@@ -722,19 +722,20 @@ export class GpuSplatOptimizerManager {
             (invMat as Float32Array).byteOffset,
             (invMat as Float32Array).byteLength
         );
+        const extras = new ArrayBuffer(32);
+        const f32 = new Float32Array(extras);
+        const u32 = new Uint32Array(extras);
+        f32[0] = camWorldXYZ[0];
+        f32[1] = camWorldXYZ[1];
+        f32[2] = camWorldXYZ[2];
+        // u32[3] is padding (vec3 alignment)
+        u32[4] = blurEnabled ? 1 : 0;
+        u32[5] = this.stepCount;
+
         this.device.queue.writeBuffer(
             this.splatUniformsBuffer,
             128,
-            new Float32Array([
-                camWorldXYZ[0],
-                camWorldXYZ[1],
-                camWorldXYZ[2],
-                1.0,
-                blurEnabled ? 1 : 0,
-                0,
-                0,
-                0,
-            ])
+            extras
         );
     }
 
@@ -818,20 +819,22 @@ export class GpuSplatOptimizerManager {
     }
 
     writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, meshSplatsEnabled: boolean, splatsEnabled: boolean, aspects: Record<number, number>) {
+        const buffer = new ArrayBuffer(32);
+        const u32 = new Uint32Array(buffer);
+        const f32 = new Float32Array(buffer);
+        
+        u32[0] = edgeEnabled ? 1 : 0;
+        u32[1] = baseColorEnabled ? 1 : 0;
+        u32[2] = colorEnabled ? 1 : 0;
+        u32[3] = meshSplatsEnabled ? 1 : 0;
+        u32[4] = splatsEnabled ? 1 : 0;
+
         for (let mode = 0; mode < 10; mode++) {
-            const aspect = aspects[mode] ?? 1.0;
+            f32[5] = aspects[mode] ?? 1.0;
             this.device.queue.writeBuffer(
                 this.renderUniformsBuffer,
                 mode * 256,
-                new Float32Array([
-                    edgeEnabled ? 1 : 0, 
-                    baseColorEnabled ? 1 : 0, 
-                    colorEnabled ? 1 : 0, 
-                    meshSplatsEnabled ? 1 : 0, 
-                    splatsEnabled ? 1 : 0, 
-                    aspect,
-                    0, 0, // padding
-                ])
+                buffer
             );
         }
     }
@@ -843,18 +846,17 @@ export class GpuSplatOptimizerManager {
      * the gradient step for the new viewpoint.
      */
     resetAdam() {
-        // adamBuffer layout: m[numParams * f32] | v[numParams * f32] | t(f32) | pixel_count(f32) | pad(8)
-        // Zero m and v, reset t to 0. pixel_count is written each dispatch so
-        // we don't need to preserve it, but we invalidate the cache so it gets
-        // re-written on the next dispatch.
         this.device.queue.writeBuffer(
             this.adamBuffer,
             0,
-            new Float32Array(this.numParams * 2 + 1) // m + v + t, all zeros
+            new Float32Array(this.numParams * 2) // m + v
+        );
+        this.device.queue.writeBuffer(
+            this.adamBuffer,
+            this.numParams * 8,
+            new Uint32Array([0]) // t
         );
         this.cachedAdamPixelCount = null;
-        // Also reset ADC grad_accum so stale positional gradient norms from the
-        // previous view don't trigger spurious clone/kill decisions.
         this.device.queue.writeBuffer(
             this.adcBuffer,
             0,
@@ -863,11 +865,11 @@ export class GpuSplatOptimizerManager {
     }
 
     writeNoKill(noKill: boolean) {
-        // adamBuffer layout: m[N*4] | v[N*4] | t(4) | pixel_count(4) | no_kill(4) | pad(4)
+        // adamBuffer layout: m[N*4] | v[N*4] | t(u32) | pixel_count(u32) | no_kill(u32) | pad(4)
         this.device.queue.writeBuffer(
             this.adamBuffer,
             this.numParams * 8 + 8, // offset after t and pixel_count
-            new Float32Array([noKill ? 1 : 0])
+            new Uint32Array([noKill ? 1 : 0])
         );
     }
 
@@ -949,14 +951,14 @@ export class GpuSplatOptimizerManager {
             this.device.queue.writeBuffer(
                 this.adamBuffer,
                 this.numParams * 8 + 4,
-                new Float32Array([pixelCount])
+                new Uint32Array([pixelCount])
             );
         }
 
         this.device.queue.writeBuffer(
             this.splatUniformsBuffer,
-            148, // offset of extras.y
-            new Float32Array([this.stepCount])
+            148, // offset of step_count
+            new Uint32Array([this.stepCount])
         );
 
         const pass = commandEncoder.beginComputePass({

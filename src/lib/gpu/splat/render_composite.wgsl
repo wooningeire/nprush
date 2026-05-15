@@ -8,11 +8,11 @@
 @group(0) @binding(8) var ptTex: texture_2d<f32>;
 
 struct RenderUniforms {
-    edge_beziers_enabled: f32,
-    base_color_beziers_enabled: f32,
-    color_beziers_enabled: f32,
-    mesh_splats_enabled: f32,
-    splats_enabled: f32,
+    edge_beziers_enabled: u32,
+    base_color_beziers_enabled: u32,
+    color_beziers_enabled: u32,
+    mesh_splats_enabled: u32,
+    splats_enabled: u32,
     canvas_aspect: f32,
     _pad1: f32,
     _pad2: f32,
@@ -81,7 +81,7 @@ fn frag_composite(v: VsOut) -> @location(0) vec4f {
 
     let splat_px = vec2i(uv * splat_dims);
     let splat_color = textureLoad(splatViewTex, splat_px, 0).rgb;
-    let base = select(vec3f(0.05), splat_color, uniforms.splats_enabled > 0.5);
+    let base = select(vec3f(0.05), splat_color, uniforms.splats_enabled > 0u);
     
     let bezier_px = vec2i(uv * vec2f(textureDimensions(bezierViewTex)));
     let edge_a = clamp(textureLoad(bezierViewTex, bezier_px, 0).a, 0.0, 1.0);
@@ -93,10 +93,10 @@ fn frag_composite(v: VsOut) -> @location(0) vec4f {
     let color_bezier = textureLoad(colorBezierViewTex, color_bezier_px, 0);
     
     var composite = base;
-    composite = select(composite, composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb, uniforms.base_color_beziers_enabled > 0.5);
-    composite = select(composite, composite * (1.0 - color_bezier.a) + color_bezier.rgb, uniforms.color_beziers_enabled > 0.5);
+    composite = select(composite, composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb, uniforms.base_color_beziers_enabled > 0u);
+    composite = select(composite, composite * (1.0 - color_bezier.a) + color_bezier.rgb, uniforms.color_beziers_enabled > 0u);
     const EDGE_DARKEN: f32 = 0.5;
-    composite = select(composite, composite - edge_a * EDGE_DARKEN, uniforms.edge_beziers_enabled > 0.5);
+    composite = select(composite, composite - edge_a * EDGE_DARKEN, uniforms.edge_beziers_enabled > 0u);
 
     return vec4f(composite, 1.0);
 }
