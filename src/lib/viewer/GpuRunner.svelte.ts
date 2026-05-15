@@ -1106,7 +1106,7 @@ export class GpuRunner {
 
             // 3.1 Sort splats by depth for correct alpha blending order
             if (this.viewerState.splatsEnabled) {
-                this.splatOptimizerManager.dispatchSort(commandEncoder, sortVp);
+                this.splatOptimizerManager.dispatchDepthSort(commandEncoder, sortVp);
             }
 
             // 3.1b Render current splats at optim-res to use as background for bezier layers.

@@ -17,10 +17,7 @@ export class Camera {
     zNear = $state(0.01);
     zFar = $state(100);
     fov = $state(Math.PI / 2);
-
-    // Fixed 1:1 aspect so the projection is independent of the browser window size.
-    // Both the optim textures (OPTIM_SHORT × OPTIM_SHORT) and the full-res display
-    // textures use this same projection, keeping optimization stable across resizes.
+    
     readonly aspect = 1.0;
 
     readonly proj = $derived.by(() => mat4.perspective(this.fov, this.aspect, this.zNear, this.zFar));
