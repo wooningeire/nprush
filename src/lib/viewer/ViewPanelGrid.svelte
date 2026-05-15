@@ -2,6 +2,7 @@
 import {Draggable, Hotkey} from "@vaie/hui";
 import type { ViewerState } from "./ViewerState.svelte";
     import ViewPanel from "./ViewPanel.svelte";
+    import ViewSeparator from "./ViewSeparator.svelte";
 
 let {
     viewerState,
@@ -99,12 +100,18 @@ $effect(() => {
         >
             <view-panels-primary>
                 <ViewPanel bind:canvas={canvases.target} />
+                <ViewSeparator />
                 <ViewPanel bind:canvas={canvases.splats} />
             </view-panels-primary>
 
+            <ViewSeparator />
+
             <view-panels-strip>
-                {#each STRIP_LABELS as { id, text }}
+                {#each STRIP_LABELS as { id, text }, i}
                     <ViewPanel bind:canvas={canvases[id]} />
+                    {#if i < STRIP_LABELS.length - 1}
+                        <ViewSeparator />
+                    {/if}
                 {/each}
             </view-panels-strip>
         </views-container>
@@ -125,7 +132,7 @@ view-panels-primary {
     display: flex;
     align-items: stretch;
 
-    > :global(*) {
+    > :global(:not(view-separator)) {
         flex-grow: 1;
         flex-shrink: 1;
         flex-basis: 0;
@@ -137,7 +144,7 @@ view-panels-strip {
 
     display: flex;
 
-    > :global(*) {
+    > :global(:not(view-separator)) {
         flex-grow: 1;
         flex-shrink: 1;
         flex-basis: 0;

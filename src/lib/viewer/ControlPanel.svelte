@@ -18,7 +18,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
 </script>
 
 <div class="overlays">
-    <label class="upload-btn" title="Load a GLB file">
+    <label class="upload-btn">
         📂 Load a model (.glb)
         <input
             type="file"
