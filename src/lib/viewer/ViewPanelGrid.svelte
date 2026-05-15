@@ -3,6 +3,7 @@ import {Draggable, Hotkey} from "@vaie/hui";
 import type { ViewerState } from "./ViewerState.svelte";
     import ViewPanel from "./ViewPanel.svelte";
     import ViewSeparator from "./ViewSeparator.svelte";
+    import ViewPanelControlBox from "./ViewPanelControlBox.svelte";
 
 let {
     viewerState,
@@ -110,9 +111,10 @@ $effect(() => {
                     bind:canvas={canvases.splats}
                     label="render"
                 >
-                    <view-panel-overlay onpointerdown={event => event.stopPropagation()}>
+                    <ViewPanelControlBox>
                         <label>
-                            Render res: {viewerState.renderWidth}×{viewerState.renderHeight}
+                            Render res:
+                            
                             <input type="range" min="128" max="2048" step="128"
                                 value={viewerState.renderWidth}
                                 oninput={(e) => {
@@ -122,8 +124,10 @@ $effect(() => {
                                 }}
                                 disabled={viewerState.isCapturing || viewerState.isTurntableRendering}
                             />
+
+                            {viewerState.renderWidth}×{viewerState.renderHeight}
                         </label>
-                    </view-panel-overlay>
+                    </ViewPanelControlBox>
                 </ViewPanel>
             </view-panels-primary>
 
@@ -134,7 +138,8 @@ $effect(() => {
                     <ViewPanel
                         bind:canvas={canvases[id]}
                         label={text}
-                    />
+                    >
+                    </ViewPanel>
                     {#if i < STRIP_LABELS.length - 1}
                         <ViewSeparator />
                     {/if}
@@ -235,21 +240,5 @@ view-panels-strip {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-view-panel-overlay {
-    align-self: start;
-
-    width: 20ch;
-    padding: 0.5rem;
-
-    background: oklch(0.2 0.05 190 / 0.8);
-    backdrop-filter: blur(8px);
-
-    border-bottom-right-radius: 0.5rem;
-
-    > label > * {
-        width: 100%;
-    }
 }
 </style>
