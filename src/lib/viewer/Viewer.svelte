@@ -1,7 +1,7 @@
 <script lang="ts">
 import { onMount } from "svelte";
 
-import Canvas from "./Canvas.svelte";
+import ViewPanelGrid from "./ViewPanelGrid.svelte";
 import ControlPanel from "./ControlPanel.svelte";
 import Toasts from "./Toasts.svelte";
 import { ViewerState } from "./ViewerState.svelte.ts";
@@ -22,7 +22,7 @@ onMount(() => {
     <viewer-content>
         <ControlPanel {viewerState} />
 
-        <Canvas
+        <ViewPanelGrid
             {viewerState}
             bind:canvases
         />
