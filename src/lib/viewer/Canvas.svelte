@@ -5,25 +5,47 @@ import { STRIP_HEIGHT_FRAC } from "$/util";
 
 let {
     viewerState,
-    canvas = $bindable(),
+    canvases = $bindable(),
 }: {
     viewerState: ViewerState,
-    canvas?: HTMLCanvasElement | null;
+    canvases?: Record<string, HTMLCanvasElement>;
 } = $props();
 
-// Order and length must match NUM_PANELS in splat_render.wgsl. Each label
-// is positioned at i / STRIP_LABELS.length, so a missing entry shifts
-// every subsequent label out of alignment with its panel.
 const STRIP_LABELS = [
-    "Splat Color",
-    "Target Depth",
-    "Target Edges",
-    "Edge Beziers",
-    "Coarse bezier",
-    "Fine bezier",
+    { id: "splatColor", text: "Splat Color" },
+    { id: "targetDepth", text: "Target Depth" },
+    { id: "targetEdges", text: "Target Edges" },
+    { id: "edgeBeziers", text: "Edge Beziers" },
+    { id: "coarseBezier", text: "Coarse bezier" },
+    { id: "fineBezier", text: "Fine bezier" },
 ];
 
 let shiftHeld = $state(false);
+let container = $state<HTMLElement | null>(null);
+
+$effect(() => {
+    if (!canvases || !container) return;
+    const ro = new ResizeObserver(() => {
+        const dpr = window.devicePixelRatio || 1;
+        for (const canvas of Object.values(canvases)) {
+            if (!canvas) continue;
+            // Use parent because canvas itself might be 100% of parent
+            const rect = canvas.parentElement!.getBoundingClientRect();
+            const w = Math.round(rect.width * dpr);
+            const h = Math.round(rect.height * dpr);
+            if (canvas.width !== w || canvas.height !== h) {
+                canvas.width = w;
+                canvas.height = h;
+            }
+        }
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+});
+
+$effect(() => {
+    if (!canvases) canvases = {};
+});
 </script>
 
 <Hotkey
@@ -41,7 +63,7 @@ let shiftHeld = $state(false);
             if (button === 1) {
                 pointerEvent.preventDefault();
             } else if (button === 0) {
-                const rect = canvas!.getBoundingClientRect();
+                const rect = (pointerEvent.currentTarget as HTMLElement).getBoundingClientRect();
                 viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top);
                 pointerEvent.preventDefault();
             }
@@ -60,13 +82,12 @@ let shiftHeld = $state(false);
                     break;
                 
                 case 0: {
-                    const rect = canvas!.getBoundingClientRect();
+                    const rect = (pointerEvent.currentTarget as HTMLElement).getBoundingClientRect();
                     viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top);
                     break;
                 }
                 
                 case 2:
-                    // viewerState.onInteractionDrag(pointerEvent.clientX, pointerEvent.clientY, canvas!);
                     break;
 
                 default:
@@ -78,38 +99,45 @@ let shiftHeld = $state(false);
 
         onUp={({ pointerEvent }) => {
             if (pointerEvent.button === 2) {
-                // viewerState.onInteractionEnd();
             } else {
                 document.exitPointerLock();
             }
         }}
     >
         {#snippet dragTarget({ onpointerdown })}
-            <canvas
-                bind:this={canvas}
-                width={viewerState.width}
-                height={viewerState.height}
+            <div
+                bind:this={container}
+                class="views-container"
                 {onpointerdown}
                 oncontextmenu={(e) => { e.preventDefault(); }}
                 onwheel={(event) => {
                     viewerState.orbit.radius *= 2 ** (event.deltaY * 0.001);
                     event.preventDefault();
                 }}
-            ></canvas>
+                role="presentation"
+            >
+                <div class="main-views">
+                    <div class="view-panel">
+                        <div class="label main left">Target</div>
+                        <canvas bind:this={canvases.target}></canvas>
+                    </div>
+                    <div class="view-panel separator"></div>
+                    <div class="view-panel">
+                        <div class="label main right">Splats</div>
+                        <canvas bind:this={canvases.splats}></canvas>
+                    </div>
+                </div>
+                <div class="strip-views" style:--strip-frac={STRIP_HEIGHT_FRAC}>
+                    {#each STRIP_LABELS as { id, text }}
+                        <div class="view-panel">
+                            <div class="label strip">{text}</div>
+                            <canvas bind:this={canvases[id]}></canvas>
+                        </div>
+                    {/each}
+                </div>
+            </div>
         {/snippet}
     </Draggable>
-
-    <div class="labels" style:--strip-frac={STRIP_HEIGHT_FRAC}>
-        <div class="label main left">Target</div>
-        <div class="label main right">Splats</div>
-        {#each STRIP_LABELS as text, i}
-            <div
-                class="label strip"
-                style:left="{(i / STRIP_LABELS.length) * 100}%"
-                style:width="{(1 / STRIP_LABELS.length) * 100}%"
-            >{text}</div>
-        {/each}
-    </div>
 </section>
 
 <style lang="scss">
@@ -119,13 +147,48 @@ section {
     position: relative;
 }
 
-.labels {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    color: rgba(255, 255, 255, 0.85);
-    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
-    user-select: none;
+.views-container {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.main-views {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+}
+
+.strip-views {
+    height: calc(var(--strip-frac) * 100%);
+    display: flex;
+    flex-direction: row;
+    border-top: 2px solid #4d4d4d;
+}
+
+.view-panel {
+    flex: 1;
+    position: relative;
+    border-right: 2px solid #4d4d4d;
+    background: #0d0d0d;
+}
+
+.view-panel:last-child {
+    border-right: none;
+}
+
+.view-panel.separator {
+    flex: 0 0 2px;
+    background: #fff;
+    border: none;
+}
+
+.view-panel canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    object-fit: cover;
 }
 
 .label {
@@ -134,6 +197,10 @@ section {
     font-weight: 500;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.85);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+    pointer-events: none;
+    z-index: 10;
 }
 
 .label.main {
@@ -149,7 +216,8 @@ section {
 }
 
 .label.strip {
-    top: calc((1 - var(--strip-frac)) * 100% + 4px);
+    top: 4px;
+    width: 100%;
     text-align: center;
     padding: 0 4px;
     box-sizing: border-box;

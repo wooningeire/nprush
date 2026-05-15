@@ -325,9 +325,9 @@ export class ViewerState {
     }
 
     static mount({
-        canvasPromise,
+        canvasesPromise,
     }: {
-        canvasPromise: Promise<HTMLCanvasElement>,
+        canvasesPromise: Promise<Record<string, HTMLCanvasElement>>,
     }) {
         const state = new ViewerState();
         
@@ -338,7 +338,6 @@ export class ViewerState {
             const t0 = showToast("loading meshes & gpu…", "info", 0);
             const [gpu, mesh, groundMesh, groundPbrMesh] = await Promise.all([
                 requestGpu({
-                    canvas: await canvasPromise,
                     onStatusChange: (text) => showToast(text, "info", 2500),
                     onErr: (text) => showToast(text, "error", 0),
                 }),
@@ -368,7 +367,7 @@ export class ViewerState {
 
             const gpuRunner = new GpuRunner({
                 device: gpu.device,
-                context: gpu.context,
+                canvases: await canvasesPromise,
                 format: gpu.format,
                 camera: state.camera,
                 viewerState: state,

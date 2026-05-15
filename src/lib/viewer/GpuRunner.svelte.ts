@@ -79,10 +79,11 @@ class MultiviewDataset {
 
 export class GpuRunner {
     private readonly device: GPUDevice;
-    private readonly context: GPUCanvasContext;
     private readonly format: GPUTextureFormat;
     private readonly camera: Camera;
     private readonly viewerState: ViewerState;
+    private readonly canvases: Record<string, HTMLCanvasElement>;
+    private readonly contexts: Record<string, GPUCanvasContext> = {};
 
     readonly uniformsManager: GpuUniformsBufferManager;
     readonly meshRenderPipelineManager: GpuMeshRenderPipelineManager;
@@ -181,7 +182,7 @@ export class GpuRunner {
 
     constructor({
         device,
-        context,
+        canvases,
         format,
         camera,
         viewerState,
@@ -195,7 +196,7 @@ export class GpuRunner {
         gpuTimestampSupported,
     }: {
         device: GPUDevice,
-        context: GPUCanvasContext,
+        canvases: Record<string, HTMLCanvasElement>,
         format: GPUTextureFormat,
         camera: Camera,
         viewerState: ViewerState,
@@ -209,7 +210,7 @@ export class GpuRunner {
         gpuTimestampSupported: boolean,
     }) {
         this.device = device;
-        this.context = context;
+        this.canvases = canvases;
         this.format = format;
         this.camera = camera;
         this.viewerState = viewerState;
@@ -340,6 +341,7 @@ export class GpuRunner {
                 this.viewerState.colorBeziersEnabled,
                 this.viewerState.meshSplatsEnabled,
                 this.viewerState.splatsEnabled,
+                this.getCanvasAspects()
             ));
             /** Splat view-projection + eye position (for SH) are written each frame inside loop(). */
             $effect(() => {
@@ -745,9 +747,21 @@ export class GpuRunner {
         let canceled = false;
 
         const loop = async () => {
-            const currentTexture = this.context.getCurrentTexture();
-            const width = currentTexture.width;
-            const height = currentTexture.height;
+            // Re-configure canvases if they changed or we haven't yet
+            for (const [id, canvas] of Object.entries(this.canvases)) {
+                if (canvas && !this.contexts[id]) {
+                    const ctx = canvas.getContext("webgpu");
+                    if (ctx) {
+                        ctx.configure({
+                            device: this.device,
+                            format: this.format,
+                            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+                            alphaMode: "premultiplied",
+                        });
+                        this.contexts[id] = ctx;
+                    }
+                }
+            }
 
             // Optim textures use a fixed 1:1 aspect so optimization is independent
             // of the browser window size. Only the full-res display textures track
@@ -1287,7 +1301,7 @@ export class GpuRunner {
                 }
             }
 
-            // 5. Render Splat Visualization to Screen View (uses full-res textures)
+            // 5. Render Splat Visualization to Screen Views (uses full-res textures)
             const ptView = this.pathTracePipelineManager.outputTextureView ?? this.dummyTextureView!;
             this.splatOptimizerManager.setRenderTarget(
                 this.targetTextureView!,
@@ -1300,21 +1314,49 @@ export class GpuRunner {
                 ptView,
             );
 
-            const screenView = currentTexture.createView();
-            const finalPassEncoder = commandEncoder.beginRenderPass({
-                label: "final render pass",
-                ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.FinalCompositor) } : {}),
-                colorAttachments: [
-                    {
-                        clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
-                        loadOp: "clear",
-                        storeOp: "store",
-                        view: screenView,
-                    },
-                ],
-            });
-            this.splatOptimizerManager.addDraw(finalPassEncoder);
-            finalPassEncoder.end();
+            const aspects = this.getCanvasAspects();
+            this.splatOptimizerManager.writeRenderUniforms(
+                this.viewerState.edgeBeziersEnabled,
+                this.viewerState.baseColorBeziersEnabled,
+                this.viewerState.colorBeziersEnabled,
+                this.viewerState.meshSplatsEnabled,
+                this.viewerState.splatsEnabled,
+                aspects
+            );
+
+            const PANEL_MODES: Record<string, number> = {
+                target: 0,
+                splats: 1,
+                splatColor: 2,
+                targetDepth: 3,
+                targetEdges: 4,
+                edgeBeziers: 5,
+                coarseBezier: 6,
+                fineBezier: 7,
+            };
+
+            for (const [id, ctx] of Object.entries(this.contexts)) {
+                const mode = PANEL_MODES[id];
+                if (mode === undefined) continue;
+
+                const screenTex = ctx.getCurrentTexture();
+                const screenView = screenTex.createView();
+                
+                const finalPassEncoder = commandEncoder.beginRenderPass({
+                    label: `final render pass for ${id}`,
+                    ...(recordGpu && id === "target" ? { timestampWrites: profWrites(GpuProfilingPair.FinalCompositor) } : {}),
+                    colorAttachments: [
+                        {
+                            clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
+                            loadOp: "clear",
+                            storeOp: "store",
+                            view: screenView,
+                        },
+                    ],
+                });
+                this.splatOptimizerManager.addDraw(finalPassEncoder, mode);
+                finalPassEncoder.end();
+            }
 
             if (recordGpu && this.gpuPerfBuffers) {
                 this.gpuPerfBuffers.addResolve(commandEncoder);
@@ -1342,14 +1384,19 @@ export class GpuRunner {
                 const { resolve, reject } = this.capturePromise;
                 this.capturePromise = null;
 
-                const texture = currentTexture;
-                const width = texture.width;
-                const height = texture.height;
+                const mainCtx = this.contexts["target"];
+                if (mainCtx) {
+                    const texture = mainCtx.getCurrentTexture();
+                    const width = texture.width;
+                    const height = texture.height;
 
-                readTextureToImageData(this.device, texture, width, height, this.format)
-                    .then(imageDataToBlob)
-                    .then(resolve)
-                    .catch(reject);
+                    readTextureToImageData(this.device, texture, width, height, this.format)
+                        .then(imageDataToBlob)
+                        .then(resolve)
+                        .catch(reject);
+                } else {
+                    reject(new Error("Target canvas context not found"));
+                }
             }
 
             const pendingTurntable = this.turntableCaptureQueue.dequeue();
@@ -1397,5 +1444,27 @@ export class GpuRunner {
             cancelAnimationFrame(handle);
             canceled = true;
         };
+    }
+    private getCanvasAspects(): Record<number, number> {
+        const PANEL_MODES: Record<string, number> = {
+            target: 0,
+            splats: 1,
+            splatColor: 2,
+            targetDepth: 3,
+            targetEdges: 4,
+            edgeBeziers: 5,
+            coarseBezier: 6,
+            fineBezier: 7,
+        };
+        const aspects: Record<number, number> = {};
+        for (const [id, canvas] of Object.entries(this.canvases)) {
+            const mode = PANEL_MODES[id];
+            if (mode !== undefined && canvas) {
+                const w = canvas.clientWidth;
+                const h = canvas.clientHeight;
+                aspects[mode] = (w && h) ? (w / h) : 1.0;
+            }
+        }
+        return aspects;
     }
 }

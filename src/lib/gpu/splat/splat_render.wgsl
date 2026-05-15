@@ -13,6 +13,9 @@ struct RenderUniforms {
     color_beziers_enabled: f32,
     mesh_splats_enabled: f32,
     splats_enabled: f32,
+    panel_mode: f32,
+    canvas_aspect: f32,
+    _pad: f32,
 }
 @group(0) @binding(7) var<uniform> uniforms: RenderUniforms;
 
@@ -36,9 +39,6 @@ fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
     o.uv = vec2f(x * 0.5 + 0.5, 0.5 - y * 0.5);
     return o;
 }
-
-const STRIP_HEIGHT: f32 = {@SPLAT_RENDER_STRIP_HEIGHT};
-const NUM_PANELS: f32 = {@SPLAT_RENDER_NUM_PANELS};
 
 // Fit a source with given aspect into a panel with given aspect
 fn fitInPanel(panel_uv: vec2f, panel_aspect: f32, src_aspect: f32) -> vec2f {
@@ -64,123 +64,108 @@ fn fitInPanel(panel_uv: vec2f, panel_aspect: f32, src_aspect: f32) -> vec2f {
 
 @fragment
 fn frag(v: VsOut) -> @location(0) vec4f {
-    // targetTex is sized to the visible main panel (half-width x height-minus-strip),
-    // so its aspect IS the splat coordinate aspect. The full canvas aspect is recovered
-    // by undoing the half-width and the strip-fraction adjustments.
-    let dims = vec2f(textureDimensions(targetTex));
-    let splat_aspect = dims.x / dims.y;
-    let screen_aspect = splat_aspect * 2.0 * (1.0 - STRIP_HEIGHT);
-    
-    // Bottom strip: show intermediate textures
-    if (v.uv.y > (1.0 - STRIP_HEIGHT)) {
-        let strip_uv_y = (v.uv.y - (1.0 - STRIP_HEIGHT)) / STRIP_HEIGHT;
-        let panel_idx = floor(v.uv.x * NUM_PANELS);
-        let panel_uv_x = fract(v.uv.x * NUM_PANELS);
-        
-        // Add thin separator between panels
-        if (panel_uv_x < 0.005 || panel_uv_x > 0.995) {
-            return vec4f(0.3, 0.3, 0.3, 1.0);
-        }
-        
-        // Top border of the strip
-        if (strip_uv_y < 0.01) {
-            return vec4f(0.3, 0.3, 0.3, 1.0);
-        }
-        
-        // Each panel's pixel aspect ratio
-        let panel_aspect = screen_aspect / (NUM_PANELS * STRIP_HEIGHT);
-        let panel_uv = vec2f(panel_uv_x, strip_uv_y);
-        
-        let depth_dims = vec2f(textureDimensions(targetDepthTex));
-        let edge_dims = vec2f(textureDimensions(targetEdgeTex));
-        let depth_aspect = depth_dims.x / depth_dims.y;
-        let edge_aspect = edge_dims.x / edge_dims.y;
-        
-        let bg = vec4f(0.05, 0.05, 0.05, 1.0);
-        
-        if (panel_idx < 0.5) {
-            // Panel 0: Splat color, in the splats' native aspect-correct domain
-            let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
-            if (fitted.x < 0.0) { return bg; }
-            let px = vec2i(fitted * vec2f(textureDimensions(splatViewTex)));
-            return textureLoad(splatViewTex, px, 0);
-        } else if (panel_idx < 1.5) {
-            // Panel 1: Target depth
-            let fitted = fitInPanel(panel_uv, panel_aspect, depth_aspect);
-            if (fitted.x < 0.0) { return bg; }
-            let px = vec2i(fitted * depth_dims);
-            let d = textureLoad(targetDepthTex, px, 0).r;
-            return vec4f(d, d, d, 1.0);
-        } else if (panel_idx < 2.5) {
-            // Panel 2: Target edges
-            let fitted = fitInPanel(panel_uv, panel_aspect, edge_aspect);
-            if (fitted.x < 0.0) { return bg; }
-            let px = vec2i(fitted * edge_dims);
-            let e = textureLoad(targetEdgeTex, px, 0).r;
-            return vec4f(e, e, e, 1.0);
-        } else if (panel_idx < 3.5) {
-            // Panel 3: Edge layer
-            let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
-            if (fitted.x < 0.0) { return bg; }
-            let px = vec2i(fitted * vec2f(textureDimensions(bezierViewTex)));
-            let e = textureLoad(bezierViewTex, px, 0).a;
-            return vec4f(e, e, e, 1.0);
-        } else if (panel_idx < 4.5) {
-            // Panel 4: Coarse bezier layer
-            let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
-            if (fitted.x < 0.0) { return bg; }
-            let px = vec2i(fitted * vec2f(textureDimensions(baseColorBezierViewTex)));
-            return textureLoad(baseColorBezierViewTex, px, 0);
-        } else {
-            // Panel 5: Fine bezier layer
-            let fitted = fitInPanel(panel_uv, panel_aspect, splat_aspect);
-            if (fitted.x < 0.0) { return bg; }
-            let px = vec2i(fitted * vec2f(textureDimensions(colorBezierViewTex)));
-            return textureLoad(colorBezierViewTex, px, 0);
-        }
-    }
-    
-    let main_uv_y = v.uv.y / (1.0 - STRIP_HEIGHT);
+    let mode = u32(uniforms.panel_mode);
+    let bg = vec4f(0.05, 0.05, 0.05, 1.0);
 
-    // Left half: path-traced result (upsampled from optim resolution)
-    if (v.uv.x < 0.498) {
-        let tx = v.uv.x * 2.0;
+    let splat_dims = vec2f(textureDimensions(splatViewTex));
+    let splat_aspect = splat_dims.x / splat_dims.y;
+    
+    // Use fitInPanel to avoid aspect distortion in different canvases
+    var uv = v.uv;
+
+    // Target
+    if (mode == 0u) {
+        uv = fitInPanel(v.uv, uniforms.canvas_aspect, splat_aspect);
+        if (uv.x < 0.0) { return bg; }
         let pt_dims = vec2f(textureDimensions(ptTex));
-        let px = vec2i(vec2f(tx, main_uv_y) * pt_dims);
+        let px = vec2i(uv * pt_dims);
         let pt_color = textureLoad(ptTex, clamp(px, vec2i(0), vec2i(pt_dims) - 1), 0);
-        // Overlay target mesh render faintly if PT not yet accumulated (alpha channel = 0)
-        let raster_px = vec2i(vec2f(tx, main_uv_y) * dims);
-        let raster = textureLoad(targetTex, clamp(raster_px, vec2i(0), vec2i(dims) - 1), 0);
-        
+        let raster_dims = vec2f(textureDimensions(targetTex));
+        let raster_px = vec2i(uv * raster_dims);
+        let raster = textureLoad(targetTex, clamp(raster_px, vec2i(0), vec2i(raster_dims) - 1), 0);
         return select(raster, pt_color, pt_color.a > 0.0);
     }
 
-    // Separator
-    if (v.uv.x < 0.502) {
-        return vec4f(1.0);
+    // Splats Composite
+    if (mode == 1u) {
+        uv = fitInPanel(v.uv, uniforms.canvas_aspect, splat_aspect);
+        if (uv.x < 0.0) { return bg; }
+        let splat_px = vec2i(uv * splat_dims);
+        let splat_color = textureLoad(splatViewTex, splat_px, 0).rgb;
+        let base = select(vec3f(0.05), splat_color, uniforms.splats_enabled > 0.5);
+        
+        let bezier_px = vec2i(uv * vec2f(textureDimensions(bezierViewTex)));
+        let edge_a = clamp(textureLoad(bezierViewTex, bezier_px, 0).a, 0.0, 1.0);
+        
+        let base_color_bezier_px = vec2i(uv * vec2f(textureDimensions(baseColorBezierViewTex)));
+        let base_color_bezier = textureLoad(baseColorBezierViewTex, base_color_bezier_px, 0);
+        
+        let color_bezier_px = vec2i(uv * vec2f(textureDimensions(colorBezierViewTex)));
+        let color_bezier = textureLoad(colorBezierViewTex, color_bezier_px, 0);
+        
+        var composite = base;
+        composite = select(composite, composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb, uniforms.base_color_beziers_enabled > 0.5);
+        composite = select(composite, composite * (1.0 - color_bezier.a) + color_bezier.rgb, uniforms.color_beziers_enabled > 0.5);
+        const EDGE_DARKEN: f32 = 0.5;
+        composite = select(composite, composite - edge_a * EDGE_DARKEN, uniforms.edge_beziers_enabled > 0.5);
+
+        return vec4f(composite, 1.0);
     }
 
-    // Right half: splats.
-    let right_half_uv = vec2f((v.uv.x - 0.5) * 2.0, main_uv_y);
-    let splat_px = vec2i(right_half_uv * vec2f(textureDimensions(splatViewTex)));
-    let splat_color = textureLoad(splatViewTex, splat_px, 0).rgb;
-    let base = select(vec3f(0.05), splat_color, uniforms.splats_enabled > 0.5);
-    
-    let bezier_px = vec2i(right_half_uv * vec2f(textureDimensions(bezierViewTex)));
-    let edge_a = clamp(textureLoad(bezierViewTex, bezier_px, 0).a, 0.0, 1.0);
-    
-    let base_color_bezier_px = vec2i(right_half_uv * vec2f(textureDimensions(baseColorBezierViewTex)));
-    let base_color_bezier = textureLoad(baseColorBezierViewTex, base_color_bezier_px, 0);
-    
-    let color_bezier_px = vec2i(right_half_uv * vec2f(textureDimensions(colorBezierViewTex)));
-    let color_bezier = textureLoad(colorBezierViewTex, color_bezier_px, 0);
-    
-    var composite = base;
-    composite = select(composite, composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb, uniforms.base_color_beziers_enabled > 0.5);
-    composite = select(composite, composite * (1.0 - color_bezier.a) + color_bezier.rgb, uniforms.color_beziers_enabled > 0.5);
-    // Edge outlines: multiply-darken the underlying composite by edge alpha — no learned color bleed
-    const EDGE_DARKEN: f32 = 0.5;
-    composite = select(composite, composite - edge_a * EDGE_DARKEN, uniforms.edge_beziers_enabled > 0.5);
+    // Splat Color
+    if (mode == 2u) {
+        uv = fitInPanel(v.uv, uniforms.canvas_aspect, splat_aspect);
+        if (uv.x < 0.0) { return bg; }
+        let px = vec2i(uv * splat_dims);
+        return textureLoad(splatViewTex, px, 0);
+    }
 
-    return vec4f(composite, 1.0);
+    // Target Depth
+    if (mode == 3u) {
+        let depth_dims = vec2f(textureDimensions(targetDepthTex));
+        let depth_aspect = depth_dims.x / depth_dims.y;
+        uv = fitInPanel(v.uv, uniforms.canvas_aspect, depth_aspect);
+        if (uv.x < 0.0) { return bg; }
+        let px = vec2i(uv * depth_dims);
+        let d = textureLoad(targetDepthTex, px, 0).r;
+        return vec4f(d, d, d, 1.0);
+    }
+
+    // Target Edges
+    if (mode == 4u) {
+        let edge_dims = vec2f(textureDimensions(targetEdgeTex));
+        let edge_aspect = edge_dims.x / edge_dims.y;
+        uv = fitInPanel(v.uv, uniforms.canvas_aspect, edge_aspect);
+        if (uv.x < 0.0) { return bg; }
+        let px = vec2i(uv * edge_dims);
+        let e = textureLoad(targetEdgeTex, px, 0).r;
+        return vec4f(e, e, e, 1.0);
+    }
+
+    // Edge Beziers
+    if (mode == 5u) {
+        uv = fitInPanel(v.uv, uniforms.canvas_aspect, splat_aspect);
+        if (uv.x < 0.0) { return bg; }
+        let px = vec2i(uv * vec2f(textureDimensions(bezierViewTex)));
+        let e = textureLoad(bezierViewTex, px, 0).a;
+        return vec4f(e, e, e, 1.0);
+    }
+
+    // Coarse Bezier
+    if (mode == 6u) {
+        uv = fitInPanel(v.uv, uniforms.canvas_aspect, splat_aspect);
+        if (uv.x < 0.0) { return bg; }
+        let px = vec2i(uv * vec2f(textureDimensions(baseColorBezierViewTex)));
+        return textureLoad(baseColorBezierViewTex, px, 0);
+    }
+
+    // Fine Bezier
+    if (mode == 7u) {
+        uv = fitInPanel(v.uv, uniforms.canvas_aspect, splat_aspect);
+        if (uv.x < 0.0) { return bg; }
+        let px = vec2i(uv * vec2f(textureDimensions(colorBezierViewTex)));
+        return textureLoad(colorBezierViewTex, px, 0);
+    }
+
+    return vec4f(0.0);
 }

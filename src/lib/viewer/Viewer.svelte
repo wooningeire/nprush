@@ -6,15 +6,15 @@ import ControlPanel from "./ControlPanel.svelte";
 import Toasts from "./Toasts.svelte";
 import { ViewerState } from "./ViewerState.svelte.ts";
 
-let canvas = $state<HTMLCanvasElement | null>(null);
-let canvasPromise = Promise.withResolvers<HTMLCanvasElement>();
+let canvases = $state<Record<string, HTMLCanvasElement>>({});
+let canvasesPromise = Promise.withResolvers<Record<string, HTMLCanvasElement>>();
 
 const viewerState = ViewerState.mount({
-    canvasPromise: canvasPromise.promise,
+    canvasesPromise: canvasesPromise.promise,
 });
 
 onMount(() => {
-    canvasPromise.resolve(canvas!);
+    canvasesPromise.resolve(canvases);
 });
 </script>
 
@@ -24,7 +24,7 @@ onMount(() => {
 
         <Canvas
             {viewerState}
-            bind:canvas
+            bind:canvases
         />
     </viewer-content>
 

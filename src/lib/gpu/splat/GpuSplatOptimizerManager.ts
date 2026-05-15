@@ -133,7 +133,7 @@ export class GpuSplatOptimizerManager {
 
         this.renderUniformsBuffer = device.createBuffer({
             label: "splat render uniforms buffer",
-            size: 32,
+            size: 256 * 10,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
@@ -402,7 +402,7 @@ export class GpuSplatOptimizerManager {
                 { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
                 { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
                 { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
-                { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
+                { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform", hasDynamicOffset: true } },
                 { binding: 8, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
             ],
         });
@@ -737,18 +737,30 @@ export class GpuSplatOptimizerManager {
                 { binding: 4, resource: bezierViewTextureView },
                 { binding: 5, resource: baseColorBezierViewTextureView },
                 { binding: 6, resource: colorBezierViewTextureView },
-                { binding: 7, resource: { buffer: this.renderUniformsBuffer } },
+                { binding: 7, resource: { buffer: this.renderUniformsBuffer, size: 256 } },
                 { binding: 8, resource: ptTextureView },
             ],
         });
     }
 
-    writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, meshSplatsEnabled: boolean, splatsEnabled: boolean) {
-        this.device.queue.writeBuffer(
-            this.renderUniformsBuffer,
-            0,
-            new Float32Array([edgeEnabled ? 1 : 0, baseColorEnabled ? 1 : 0, colorEnabled ? 1 : 0, meshSplatsEnabled ? 1 : 0, splatsEnabled ? 1 : 0])
-        );
+    writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, meshSplatsEnabled: boolean, splatsEnabled: boolean, aspects: Record<number, number>) {
+        for (let mode = 0; mode < 10; mode++) {
+            const aspect = aspects[mode] ?? 1.0;
+            this.device.queue.writeBuffer(
+                this.renderUniformsBuffer,
+                mode * 256,
+                new Float32Array([
+                    edgeEnabled ? 1 : 0, 
+                    baseColorEnabled ? 1 : 0, 
+                    colorEnabled ? 1 : 0, 
+                    meshSplatsEnabled ? 1 : 0, 
+                    splatsEnabled ? 1 : 0, 
+                    mode,
+                    aspect,
+                    0, // padding
+                ])
+            );
+        }
     }
 
     /**
@@ -910,10 +922,10 @@ export class GpuSplatOptimizerManager {
         pass.end();
     }
 
-    addDraw(renderPassEncoder: GPURenderPassEncoder) {
+    addDraw(renderPassEncoder: GPURenderPassEncoder, mode: number) {
         if (!this.renderBindGroup) return;
         renderPassEncoder.setPipeline(this.renderPipeline);
-        renderPassEncoder.setBindGroup(0, this.renderBindGroup);
+        renderPassEncoder.setBindGroup(0, this.renderBindGroup, [mode * 256]);
         renderPassEncoder.draw(6);
     }
 
