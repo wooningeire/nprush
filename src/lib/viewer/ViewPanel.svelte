@@ -1,10 +1,12 @@
 <script lang="ts">
-import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount, type Snippet } from "svelte";
 
 let {
     canvas = $bindable(),
+    children,
 }: {
     canvas: HTMLCanvasElement | null,
+    children?: Snippet,
 } = $props();
 
 let width = $state<number | null>(null);
@@ -39,15 +41,22 @@ onDestroy(() => {
     bind:clientHeight={() => null, newHeight => height = newHeight}
 >
     <canvas bind:this={canvas}></canvas>
+
+    {@render children?.()}
 </view-panel>
 
 <style lang="scss">
 view-panel {
     display: grid;
-    place-items: center;
+
+    > :global(*) {
+        grid-area: 1/1;
+    }
 }
 
 canvas {
+    place-self: center;
+
     max-width: 100%;
     max-height: 100%;
 }

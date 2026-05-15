@@ -6,7 +6,7 @@ import type { ViewerState } from "./ViewerState.svelte";
 
 let {
     viewerState,
-    canvases = $bindable(),
+    canvases = $bindable({}),
 }: {
     viewerState: ViewerState,
     canvases?: Record<string, HTMLCanvasElement>;
@@ -91,8 +91,8 @@ $effect(() => {
     {#snippet dragTarget({ onpointerdown })}
         <views-container
             {onpointerdown}
-            oncontextmenu={event => event.preventDefault()}
-            onwheel={event => {
+            oncontextmenu={(event: PointerEvent) => event.preventDefault()}
+            onwheel={(event: WheelEvent) => {
                 viewerState.orbit.zoom(event.deltaY);
                 event.preventDefault();
             }}
@@ -100,8 +100,25 @@ $effect(() => {
         >
             <view-panels-primary>
                 <ViewPanel bind:canvas={canvases.target} />
+                
                 <ViewSeparator />
-                <ViewPanel bind:canvas={canvases.splats} />
+
+                <ViewPanel bind:canvas={canvases.splats}>
+                    <view-panel-overlay onpointerdown={event => event.stopPropagation()}>
+                        <label>
+                            Render res: {viewerState.renderWidth}×{viewerState.renderHeight}
+                            <input type="range" min="128" max="2048" step="128"
+                                value={viewerState.renderWidth}
+                                oninput={(e) => {
+                                    const v = parseInt((e.target as HTMLInputElement).value);
+                                    viewerState.renderWidth = v;
+                                    viewerState.renderHeight = v;
+                                }}
+                                disabled={viewerState.isCapturing || viewerState.isTurntableRendering}
+                            />
+                        </label>
+                    </view-panel-overlay>
+                </ViewPanel>
             </view-panels-primary>
 
             <ViewSeparator />
@@ -140,7 +157,7 @@ view-panels-primary {
 }
 
 view-panels-strip {
-    height: calc(20%);
+    height: 20%;
 
     display: flex;
 
@@ -209,5 +226,21 @@ view-panels-strip {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+view-panel-overlay {
+    align-self: start;
+
+    width: 20ch;
+    padding: 0.5rem;
+
+    background: oklch(0.2 0.05 190 / 0.8);
+    backdrop-filter: blur(8px);
+
+    border-bottom-right-radius: 0.5rem;
+
+    > label > * {
+        width: 100%;
+    }
 }
 </style>
