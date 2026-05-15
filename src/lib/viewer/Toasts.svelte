@@ -6,7 +6,7 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
 </script>
 
 <div class="toast-container">
-    {#each toasts as toast (toast.id)}
+    {#each toasts as toast (toast)}
         <div
             class="toast {toast.kind}"
             role="alert"
@@ -32,7 +32,7 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
 
             <button
                 class="close"
-                onclick={() => dismissToast(toast.id)}
+                onclick={() => dismissToast(toast)}
                 aria-label="Dismiss"
             >✕</button>
         </div>
@@ -70,6 +70,10 @@ import { toasts, dismissToast } from "./toast.svelte.ts";
     backdrop-filter: blur(8px);
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
     max-width: 480px;
+
+    &.warning {
+        background: oklch(0.3 0.05 40 / 0.85);
+    }
 
     &.info    { background: rgba(30, 30, 50, 0.85); border: 1px solid rgba(255,255,255,0.15); }
     &.success { background: rgba(5, 100, 60, 0.85);  border: 1px solid rgba(16,185,129,0.4); }

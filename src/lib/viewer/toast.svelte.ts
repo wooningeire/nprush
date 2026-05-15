@@ -1,22 +1,35 @@
-export type ToastKind = "info" | "error" | "success";
+import { SvelteSet } from "svelte/reactivity";
 
-export interface Toast {
-    id: number;
-    message: string;
-    kind: ToastKind;
-}
+export type ToastKind = "info" | "warning" | "error" | "success";
 
-let nextId = 0;
-export const toasts = $state<Toast[]>([]);
+export type Toast = {
+    message: string,
+    kind: ToastKind,
+};
 
-export function showToast(message: string, kind: ToastKind = "info", duration = 4000): number {
-    const id = nextId++;
-    toasts.push({ id, message, kind });
-    if (duration > 0) setTimeout(() => dismissToast(id), duration);
-    return id;
-}
+export const toasts = $state(new SvelteSet<Toast>());
 
-export function dismissToast(id: number) {
-    const idx = toasts.findIndex(t => t.id === id);
-    if (idx !== -1) toasts.splice(idx, 1);
-}
+export const showToast = (message: string, kind: ToastKind = "info", duration = 4000) => {
+    const toast = {
+        message,
+        kind
+    };
+
+    toasts.add(toast);
+
+    if (duration > 0) {
+        dismissToast(toast, duration);
+    }
+
+    return toast;
+};
+
+export const dismissToast = (toast: Toast, delay = 0) => {
+    if (delay === 0) {
+        toasts.delete(toast);
+    } else {
+        setTimeout(() => {
+            toasts.delete(toast);
+        }, delay);
+    }
+};

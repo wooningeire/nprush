@@ -116,7 +116,7 @@ export class ViewerState {
             downloadBlob(blob, `nprush-render-${Date.now()}.png`);
         } catch (e) {
             console.error("Failed to take screenshot", e);
-            showToast(`Screenshot failed: ${(e as Error)?.message ?? e}`, "error");
+            showToast(`Screenshot failed: ${(e as Error)?.message ?? e}`, "warning");
         } finally {
             this.isCapturing = false;
         }
@@ -326,6 +326,7 @@ export class ViewerState {
         const state = new ViewerState();
         
         let stopLoop: (() => void) | null = null;
+
         onMount(async () => {
             // Kick off mesh load and gpu request concurrently; both are awaited
             // before we build the runner since the mesh is a constructor input.
