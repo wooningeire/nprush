@@ -63,6 +63,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         <input type="checkbox" bind:checked={viewerState.viewportRenderingFrozen} />
         Freeze viewport preview (faster)
     </label>
+    
 
     <label
         class="gpu-profiler-toggle"
@@ -88,22 +89,22 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         </label>
     {/if}
     <label>
-        <input type="checkbox" bind:checked={viewerState.baseColorBeziersEnabled} />
+        <input type="checkbox" bind:checked={viewerState.coarseColorBeziersEnabled} />
         Coarse bezier
     </label>
     {#if viewerState.coarseColorBeziersEnabled}
         <label class="sub">
-            <input type="checkbox" bind:checked={viewerState.baseColorBezierTrainingPaused} />
+            <input type="checkbox" bind:checked={viewerState.coarseColorBezierTrainingPaused} />
             Pause training
         </label>
     {/if}
     <label>
-        <input type="checkbox" bind:checked={viewerState.colorBeziersEnabled} />
+        <input type="checkbox" bind:checked={viewerState.fineColorBeziersEnabled} />
         Fine bezier
     </label>
-    {#if viewerStatfineColorBeziersEnableded}
+    {#if viewerState.fineColorBeziersEnabled}
         <label class="sub">
-            <input type="checkbox" bind:checked={viewerState.colorBezierTrainingPaused} />
+            <input type="checkbox" bind:checked={viewerState.fineColorBezierTrainingPaused} />
             Pause training
         </label>
     {/if}

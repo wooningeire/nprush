@@ -1084,147 +1084,169 @@ export class GpuRunner {
                 );
             }
 
-            // 2. Run edge detection and optimizer dispatches in consolidated passes.
+            // 2. Optimization Pass (Compute)
             const defaultPause = this.viewerState.renderMode === RENDER_MODE_MULTIVIEW && (!this.viewerState.turntableTraining || !this.viewerState.multiviewDatasetReady);
             
-            this.splatOptimizerManager.addBinningDispatches(null as any, sortVp, commandEncoder); // Clear buffers
+            // Clear all binning and sorting buffers
+            this.splatOptimizerManager.addBinningDispatches(null as any, sortVp, commandEncoder);
+            if (this.viewerState.coarseColorBeziersEnabled) this.baseColorLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
+            if (this.viewerState.fineColorBeziersEnabled) this.colorLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
+            if (this.viewerState.edgeBeziersEnabled) this.edgeLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
 
-            const splatComputePass = commandEncoder.beginComputePass({
-                label: "splat compute pass (edge, backward, sort)",
-                ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.SplatBackwardStep) } : {}),
+            // Edge detection (optim res)
+            const edgeOptimPass = commandEncoder.beginComputePass({
+                label: "splat edge detection (optim res)",
+                ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.SplatEdgeDetectOptim) } : {}),
             });
-            
-            this.splatOptimizerManager.addEdgeDispatches(splatComputePass, this.optimWidth, this.optimHeight);
-            
+            this.splatOptimizerManager.addEdgeDispatches(edgeOptimPass, this.optimWidth, this.optimHeight);
+            edgeOptimPass.end();
+
+            // Splat optimization
             const splatPause = this.viewerState.splatTrainingPaused || defaultPause;
             if (this.viewerState.splatsEnabled && !splatPause) {
-                this.splatOptimizerManager.addBinningDispatches(splatComputePass, sortVp, commandEncoder);
-                this.splatOptimizerManager.addOptimizationDispatches(splatComputePass);
+                const splatOptPass = commandEncoder.beginComputePass({
+                    label: "splat optimization compute",
+                    ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.SplatOptimization) } : {}),
+                });
+                this.splatOptimizerManager.addBinningDispatches(splatOptPass, sortVp, commandEncoder);
+                this.splatOptimizerManager.addOptimizationDispatches(splatOptPass);
+                splatOptPass.end();
             }
-            
             if (this.viewerState.splatsEnabled) {
-                this.splatOptimizerManager.addDepthSortDispatches(splatComputePass, sortVp);
+                const splatSortPass = commandEncoder.beginComputePass({ label: "splat depth sort" });
+                this.splatOptimizerManager.addDepthSortDispatches(splatSortPass, sortVp);
+                splatSortPass.end();
             }
-            splatComputePass.end();
 
-            // 3. Render current splats at optim-res to use as background for bezier layers.
-            this.splatForwardManager.setTarget(
-                this.optimSplatTextureView!,
-                this.optimSplatDepthTextureView!,
-                this.optimWidth,
-                this.optimHeight
-            );
-            this.splatForwardManager.addDispatches(
-                commandEncoder,
-                true,
-                this.viewerState.splatsEnabled,
-                profWrites(GpuProfilingPair.SplatRasterOptim),
-            );
-
-            // 4. Coarse Bezier pass
+            // Coarse Bezier optimization
             if (this.viewerState.coarseColorBeziersEnabled) {
-                this.baseColorLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder); // Clear buffers
-                
-                const coarseComputePass = commandEncoder.beginComputePass({
-                    label: "coarse bezier compute pass",
-                    ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierCoarseOptim) } : {}),
-                });
-                
                 if (!(this.viewerState.coarseColorBezierTrainingPaused || defaultPause)) {
-                    this.baseColorLayerBezierManager.addBinningDispatches(coarseComputePass, sortVp, commandEncoder);
-                    this.baseColorLayerBezierManager.addOptimizationDispatches(coarseComputePass);
+                    const coarseOptPass = commandEncoder.beginComputePass({
+                        label: "coarse bezier optimization compute",
+                        ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierCoarseOptimization) } : {}),
+                    });
+                    this.baseColorLayerBezierManager.addBinningDispatches(coarseOptPass, sortVp, commandEncoder);
+                    this.baseColorLayerBezierManager.addOptimizationDispatches(coarseOptPass);
+                    coarseOptPass.end();
                 }
-                this.baseColorLayerBezierManager.addSortDispatches(coarseComputePass, sortVp);
-                coarseComputePass.end();
-
-                this.baseColorBezierForwardManager.setTarget(this.optimSplatTextureView!, this.optimWidth, this.optimHeight);
-                this.baseColorBezierForwardManager.addDispatches(commandEncoder, false);
+                const coarseSortPass = commandEncoder.beginComputePass({ label: "coarse bezier sort" });
+                this.baseColorLayerBezierManager.addSortDispatches(coarseSortPass, sortVp);
+                coarseSortPass.end();
             }
 
-            // 5. Fine Bezier pass
+            // Fine Bezier optimization
             if (this.viewerState.fineColorBeziersEnabled) {
-                this.colorLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder); // Clear buffers
-                
-                const fineComputePass = commandEncoder.beginComputePass({
-                    label: "fine bezier compute pass",
-                    ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierFineOptim) } : {}),
-                });
-                
                 if (!(this.viewerState.fineColorBezierTrainingPaused || defaultPause)) {
-                    this.colorLayerBezierManager.addBinningDispatches(fineComputePass, sortVp, commandEncoder);
-                    this.colorLayerBezierManager.addOptimizationDispatches(fineComputePass);
+                    const fineOptPass = commandEncoder.beginComputePass({
+                        label: "fine bezier optimization compute",
+                        ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierFineOptimization) } : {}),
+                    });
+                    this.colorLayerBezierManager.addBinningDispatches(fineOptPass, sortVp, commandEncoder);
+                    this.colorLayerBezierManager.addOptimizationDispatches(fineOptPass);
+                    fineOptPass.end();
                 }
-                this.colorLayerBezierManager.addSortDispatches(fineComputePass, sortVp);
-                fineComputePass.end();
-
-                if (this.viewerState.edgeBeziersEnabled) {
-                    this.colorBezierForwardManager.setTarget(this.optimSplatTextureView!, this.optimWidth, this.optimHeight);
-                    this.colorBezierForwardManager.addDispatches(commandEncoder, false);
-                }
+                const fineSortPass = commandEncoder.beginComputePass({ label: "fine bezier sort" });
+                this.colorLayerBezierManager.addSortDispatches(fineSortPass, sortVp);
+                fineSortPass.end();
             }
 
-            // 6. Edge Bezier pass + Full-res Edge Detect
-            if (this.viewerState.edgeBeziersEnabled || (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers)) {
-                if (this.viewerState.edgeBeziersEnabled) {
-                    this.edgeLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder); // Clear buffers
+            // Edge Bezier optimization
+            if (this.viewerState.edgeBeziersEnabled) {
+                if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
+                    const edgeOptPass = commandEncoder.beginComputePass({
+                        label: "edge bezier optimization compute",
+                        ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierEdgeOptimization) } : {}),
+                    });
+                    this.edgeLayerBezierManager.addBinningDispatches(edgeOptPass, sortVp, commandEncoder);
+                    this.edgeLayerBezierManager.addOptimizationDispatches(edgeOptPass);
+                    edgeOptPass.end();
                 }
-                
-                const lastComputePass = commandEncoder.beginComputePass({
-                    label: "last compute pass (edge beziers, full edge detect)",
-                    ...(recordGpu && this.viewerState.edgeBeziersEnabled ? { timestampWrites: profWrites(GpuProfilingPair.BezierEdgeOptim) } : {}),
-                });
-
-                if (this.viewerState.edgeBeziersEnabled) {
-                    if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
-                        this.edgeLayerBezierManager.addBinningDispatches(lastComputePass, sortVp, commandEncoder);
-                        this.edgeLayerBezierManager.addOptimizationDispatches(lastComputePass);
-                    }
-                    this.edgeLayerBezierManager.addSortDispatches(lastComputePass, sortVp);
-                }
-
-                if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
-                    this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!, this.targetNormalTextureView ?? undefined);
-                    this.splatOptimizerManager.addEdgeDispatches(lastComputePass, fullW, fullH);
-                    // Reset for next frame
-                    this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!, this.optimNormalTextureView!);
-                }
-                
-                lastComputePass.end();
+                const edgeSortPass = commandEncoder.beginComputePass({ label: "edge bezier sort" });
+                this.edgeLayerBezierManager.addSortDispatches(edgeSortPass, sortVp);
+                edgeSortPass.end();
             }
 
-            // 7. Full-res visualization raster
             if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
+                this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!, this.targetNormalTextureView!);
+
+                const edgeFullPass = commandEncoder.beginComputePass({
+                    label: "splat edge detection (full res)",
+                    ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.EdgeDetectFull) } : {}),
+                });
+                this.splatOptimizerManager.addEdgeDispatches(edgeFullPass, fullW, fullH);
+                edgeFullPass.end();
+                // Reset target for next frame
+                this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!, this.optimNormalTextureView!);
+            }
+
+            // 3. Render Pass (Optim-Res)
+            // Group Splat and Coarse Bezier which target the same texture
+            this.splatForwardManager.setTarget(this.optimSplatTextureView!, this.optimSplatDepthTextureView!, this.optimWidth, this.optimHeight);
+            this.baseColorBezierForwardManager.setTarget(this.optimSplatTextureView!, this.optimWidth, this.optimHeight);
+
+            const optimRenderPass = commandEncoder.beginRenderPass({
+                label: "optim-res render pass",
+                ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.SplatForwardOptim) } : {}),
+                colorAttachments: [
+                    {
+                        view: this.optimSplatTextureView!,
+                        clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
+                        loadOp: "clear",
+                        storeOp: "store",
+                    },
+                    {
+                        view: this.optimSplatDepthTextureView!,
+                        clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+                        loadOp: "clear",
+                        storeOp: "store",
+                    },
+                ],
+            });
+
+            this.splatForwardManager.render(optimRenderPass, this.viewerState.splatsEnabled);
+            if (this.viewerState.coarseColorBeziersEnabled) {
+                this.baseColorBezierForwardManager.render(optimRenderPass, true);
+            }
+            optimRenderPass.end();
+
+            // 4. Full-res Visualization Renders
+            if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
+                // Splat Full-res
                 this.splatForwardManager.setTarget(this.fullSplatTextureView!, this.fullSplatDepthTextureView!, fullW, fullH);
                 this.splatForwardManager.addDispatches(
-                    commandEncoder,
-                    true,
+                    commandEncoder, 
+                    true, 
                     this.viewerState.splatsEnabled,
-                    profWrites(GpuProfilingPair.SplatRasterFull),
+                    recordGpu ? profWrites(GpuProfilingPair.SplatForwardFull) : undefined
                 );
                 
+                // Edge Bezier Full-res
                 if (this.viewerState.edgeBeziersEnabled) {
+                    this.bezierForwardManager.setTarget(this.fullBezierTextureView!, fullW, fullH);
                     this.bezierForwardManager.addDispatches(
-                        commandEncoder,
+                        commandEncoder, 
                         true,
-                        profWrites(GpuProfilingPair.BezierEdgeRasterFull),
+                        recordGpu ? profWrites(GpuProfilingPair.BezierEdgeForwardFull) : undefined
                     );
                 }
                 
+                // Coarse Bezier Full-res
                 if (this.viewerState.coarseColorBeziersEnabled) {
                     this.baseColorBezierForwardManager.setTarget(this.fullBaseColorBezierTextureView!, fullW, fullH);
                     this.baseColorBezierForwardManager.addDispatches(
-                        commandEncoder,
+                        commandEncoder, 
                         true,
-                        profWrites(GpuProfilingPair.BezierCoarseRasterFull),
+                        recordGpu ? profWrites(GpuProfilingPair.BezierCoarseForwardFull) : undefined
                     );
                 }
                 
+                // Fine Bezier Full-res
                 if (this.viewerState.fineColorBeziersEnabled) {
                     this.colorBezierForwardManager.setTarget(this.fullColorBezierTextureView!, fullW, fullH);
                     this.colorBezierForwardManager.addDispatches(
-                        commandEncoder,
+                        commandEncoder, 
                         true,
-                        profWrites(GpuProfilingPair.BezierFineRasterFull),
+                        recordGpu ? profWrites(GpuProfilingPair.BezierFineForwardFull) : undefined
                     );
                 }
             }
@@ -1287,7 +1309,7 @@ export class GpuRunner {
             }
 
             if (recordGpu && this.gpuPerfBuffers) {
-                this.gpuPerfBuffers.addResolve(commandEncoder);
+                this.gpuPerfBuffers.addResolve(commandEncoder, activeProfilerIndices);
             }
 
             this.device.queue.submit([commandEncoder.finish()]);

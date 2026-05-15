@@ -368,11 +368,11 @@ export class GpuSplatOptimizerManager {
         const gridHeight = Math.ceil(height / 16);
         const numTiles = gridWidth * gridHeight;
 
-        commandEncoder.clearBuffer(this.binningManager.binningAtomicBuffer, 0, 4);
-        commandEncoder.clearBuffer(this.binningManager.tileStartsBuffer, 0, numTiles * 4);
-        commandEncoder.clearBuffer(this.binningManager.tileEndsBuffer, 0, numTiles * 4);
-        
-        if (pass) {
+        if (!pass) {
+            commandEncoder.clearBuffer(this.binningManager.binningAtomicBuffer, 0, 4);
+            commandEncoder.clearBuffer(this.binningManager.tileStartsBuffer, 0, numTiles * 4);
+            commandEncoder.clearBuffer(this.binningManager.tileEndsBuffer, 0, numTiles * 4);
+        } else {
             this.binningManager.addDispatches(pass, vpMat, widthes, height);
         }
     }
