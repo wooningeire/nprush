@@ -42,7 +42,6 @@ export const constants = {
     SPLAT_MAX_TILE_SPLATS: 4096,
     SPLAT_FP_SCALE_POS: 10000.0,
     SPLAT_FP_SCALE_COL: 100000.0,
-    SPLAT_RENDER_STRIP_HEIGHT: 0.18,
     SPLAT_RENDER_NUM_PANELS: 6.0,
     SPLAT_EDGE_THRESHOLD: 0.01,        // depth Laplacian: step H fires at ~H
     SPLAT_EDGE_NORMAL_THRESHOLD: 1.5,  // normal Laplacian: ~0.52 at 30°, ~1.41 at 90°

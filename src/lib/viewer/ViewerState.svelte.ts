@@ -3,7 +3,6 @@ import { Camera } from "./Camera.svelte.ts";
 import { CameraOrbit } from "./CameraOrbit.svelte.ts";
 import { requestGpu } from "$/gpu/requestGpu";
 import { GpuRunner } from "./GpuRunner.svelte.ts";
-import { constants } from "$/gpu/constants";
 import { loadGlb, parseGlbBuffer } from "../gpu/file-load/loadGlb.ts";
 import artelorianUrl from "$/assets/artelorian.glb?url";
 import groundUrl from "$/assets/ground.glb?url";
@@ -15,7 +14,6 @@ import { loadHdrTexture } from "../gpu/file-load/loadHdrTexture.ts";
 import { loadTexture } from "../gpu/file-load/loadTexture.ts";
 import { buildBvh, raycastBvh, type BvhResult } from "../gpu/bvh.ts";
 import { vec4 } from "wgpu-matrix";
-import { STRIP_HEIGHT_FRAC } from "$/util";
 import { downloadBlob, openFrameWriter } from "../util/export.ts";
 import {
     RENDER_MODE_MULTIVIEW,
@@ -81,7 +79,7 @@ export class ViewerState {
         }
         
         const targetWidth = this.width / 2;
-        const targetHeight = this.height * (1 - STRIP_HEIGHT_FRAC);
+        const targetHeight = this.height / 2;
         
         // Ignore clicks in the bottom strip
         if (y > targetHeight) return;

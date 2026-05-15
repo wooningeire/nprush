@@ -1,7 +1,6 @@
 <script lang="ts">
 import {Draggable, Hotkey} from "@vaie/hui";
 import type { ViewerState } from "./ViewerState.svelte";
-import { STRIP_HEIGHT_FRAC } from "$/util";
     import ViewPanel from "./ViewPanel.svelte";
 
 let {
@@ -97,14 +96,11 @@ $effect(() => {
                 <ViewPanel bind:canvas={canvases.splats} />
             </view-panels-primary>
 
-            <div class="strip-views" style:--strip-frac={STRIP_HEIGHT_FRAC}>
+            <view-panels-strip>
                 {#each STRIP_LABELS as { id, text }}
-                    <div class="view-panel">
-                        <div class="label strip">{text}</div>
-                        <canvas bind:this={canvases[id]}></canvas>
-                    </div>
+                    <ViewPanel bind:canvas={canvases[id]} />
                 {/each}
-            </div>
+            </view-panels-strip>
         </views-container>
     {/snippet}
 </Draggable>
@@ -130,11 +126,10 @@ view-panels-primary {
     }
 }
 
-.strip-views {
-    height: calc(var(--strip-frac) * 100%);
+view-panels-strip {
+    height: calc(20%);
+    
     display: flex;
-    flex-direction: row;
-    border-top: 2px solid #4d4d4d;
 }
 
 .view-panel {
