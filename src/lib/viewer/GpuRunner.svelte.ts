@@ -21,69 +21,19 @@ import { vec3, type Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants";
 import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
 import { readTextureToImageData, imageDataToBlob } from "$/gpu/file-save/readback.ts";
+import type { MultiviewDataset } from "./MultiviewDataset.ts";
 
 const OPTIM_SHORT = constants.OPTIM_SHORT;
 
-// The edge layer is now cubic bezier curves. A handful is enough since each
-// curve is a 1D primitive that natively traces a contour.
 const NUM_EDGE_LAYER_BEZIERS = constants.NUM_EDGE_LAYER_BEZIERS;
 
-/**
- * Fixed prerendered multiview dataset.
- *
- * Holds N converged path-traced images (one per camera view) plus the
- * corresponding camera matrices. Each texture is rgba8unorm at optim-res.
- * Memory: N × W × H × 4 bytes — 32 views at 128×128 ≈ 2 MB.
- */
-class MultiviewDataset {
-    readonly textures: GPUTexture[];
-    readonly textureViews: GPUTextureView[];
-    /** Per-view viewProjMat (16 f32 each). */
-    readonly viewProjMats: Float32Array[];
-    /** Per-view viewMat (16 f32 each). */
-    readonly viewMats: Float32Array[];
-    /** Per-view invViewProjMat (16 f32 each). */
-    readonly invViewProjMats: Float32Array[];
-    /** Per-view invViewMat — camera-from-world; origin maps to eye position for SH. */
-    readonly invViewMats: Float32Array[];
-    readonly numViews: number;
-
-    constructor(device: GPUDevice, numViews: number, width: number, height: number) {
-        this.numViews = numViews;
-        this.textures = [];
-        this.textureViews = [];
-        this.viewProjMats = [];
-        this.viewMats = [];
-        this.invViewProjMats = [];
-        this.invViewMats = [];
-        for (let i = 0; i < numViews; i++) {
-            const tex = device.createTexture({
-                label: `multiview dataset slot ${i}`,
-                size: [width, height],
-                format: "rgba8unorm",
-                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-            });
-            this.textures.push(tex);
-            this.textureViews.push(tex.createView({ label: `multiview view ${i}` }));
-            this.viewProjMats.push(new Float32Array(16));
-            this.viewMats.push(new Float32Array(16));
-            this.invViewProjMats.push(new Float32Array(16));
-            this.invViewMats.push(new Float32Array(16));
-        }
-    }
-
-    destroy() {
-        for (const tex of this.textures) tex.destroy();
-    }
-}
 
 export class GpuRunner {
     private readonly device: GPUDevice;
     private readonly format: GPUTextureFormat;
     private readonly camera: Camera;
     private readonly viewerState: ViewerState;
-    private readonly canvases: Record<string, HTMLCanvasElement>;
-    private readonly contexts: Record<string, GPUCanvasContext> = {};
+    private readonly contexts: Record<string, GPUCanvasContext>;
 
     readonly uniformsManager: GpuUniformsBufferManager;
     readonly meshRenderPipelineManager: GpuMeshRenderPipelineManager;
@@ -172,7 +122,6 @@ export class GpuRunner {
     private capturePromise: { resolve: (blob: Blob) => void, reject: (err: Error) => void } | null = null;
     private readonly turntableCaptureQueue = new TurntableFrameCaptureQueue();
 
-    // Prerendered multiview dataset — null until prerenderDataset() completes.
     private multiviewDataset: MultiviewDataset | null = null;
     /** Dataset slot reused for consecutive frames before resampling; -1 means unset. */
     private multiviewTrainingHeldDatasetIndex = -1;
@@ -182,7 +131,7 @@ export class GpuRunner {
 
     constructor({
         device,
-        canvases,
+        contexts,
         format,
         camera,
         viewerState,
@@ -196,7 +145,7 @@ export class GpuRunner {
         gpuTimestampSupported,
     }: {
         device: GPUDevice,
-        canvases: Record<string, HTMLCanvasElement>,
+        contexts: Record<string, GPUCanvasContext>,
         format: GPUTextureFormat,
         camera: Camera,
         viewerState: ViewerState,
@@ -210,7 +159,7 @@ export class GpuRunner {
         gpuTimestampSupported: boolean,
     }) {
         this.device = device;
-        this.canvases = canvases;
+        this.contexts = contexts;
         this.format = format;
         this.camera = camera;
         this.viewerState = viewerState;
@@ -497,9 +446,9 @@ export class GpuRunner {
     }
 
     async prerenderDataset(): Promise<void> {
-        const vs = this.viewerState;
-        const numViews = vs.multiviewNumViews as number;
-        const samplesPerView = vs.turntableMinSamplesPerView as number;
+        const viewerState = this.viewerState;
+        const numViews = viewerState.multiviewNumViews as number;
+        const samplesPerView = viewerState.turntableMinSamplesPerView as number;
 
         // Wait until optim textures are ready (loop may not have run yet).
         while (!this.optimTextureView || this.optimWidth === 0) {
@@ -514,31 +463,31 @@ export class GpuRunner {
         this.multiviewDataset = null;
         const dataset = new MultiviewDataset(this.device, numViews, ow, oh);
 
-        vs.multiviewPrerendering = true;
-        vs.multiviewPrerenderProgress = 0;
-        vs.multiviewDatasetReady = false;
+        viewerState.multiviewPrerendering = true;
+        viewerState.multiviewPrerenderProgress = 0;
+        viewerState.multiviewDatasetReady = false;
 
         try {
             for (let i = 0; i < numViews; i++) {
-                if (!vs.turntableTraining) break; // canceled
+                if (!viewerState.turntableTraining) break; // canceled
 
                 // Sample a deterministic view position spread evenly around the path.
                 const t = i / numViews;
-                const p = evaluateTurntablePath(t, vs.turntableBaseLong, vs.getTurntablePathParams());
-                vs.orbit.long = p.long;
-                vs.orbit.lat = p.lat;
-                vs.orbit.radius = p.radius;
+                const p = evaluateTurntablePath(t, viewerState.turntableBaseLong, viewerState.getTurntablePathParams());
+                viewerState.orbit.long = p.long;
+                viewerState.orbit.lat = p.lat;
+                viewerState.orbit.radius = p.radius;
 
                 // Reset PT accumulation for this new view.
                 this.pathTracePipelineManager.reset();
 
                 // Accumulate PT samples — one per rAF tick.
                 for (let s = 0; s < samplesPerView; s++) {
-                    if (!vs.turntableTraining) break;
+                    if (!viewerState.turntableTraining) break;
                     await new Promise<void>(r => requestAnimationFrame(() => r()));
                 }
 
-                if (!vs.turntableTraining) break;
+                if (!viewerState.turntableTraining) break;
 
                 // The main loop submits path-trace+resolve on rAF without waiting. If we copy
                 // the output texture immediately when our rAF promise resolves, we can race
@@ -564,13 +513,13 @@ export class GpuRunner {
                 dataset.invViewProjMats[i].set(this.camera.viewProjInvMat as Float32Array);
                 dataset.invViewMats[i].set(this.camera.viewInvMat as Float32Array);
 
-                vs.multiviewPrerenderProgress = (i + 1) / numViews;
+                viewerState.multiviewPrerenderProgress = (i + 1) / numViews;
             }
         } finally {
-            vs.multiviewPrerendering = false;
-            if (vs.turntableTraining) {
+            viewerState.multiviewPrerendering = false;
+            if (viewerState.turntableTraining) {
                 this.multiviewDataset = dataset;
-                vs.multiviewDatasetReady = true;
+                viewerState.multiviewDatasetReady = true;
                 // Reset Adam so training starts fresh from the new dataset.
                 this.splatOptimizerManager.resetAdam();
                 this.edgeLayerBezierManager.resetAdam();
@@ -747,21 +696,6 @@ export class GpuRunner {
         let canceled = false;
 
         const loop = async () => {
-            // Re-configure canvases if they changed or we haven't yet
-            for (const [id, canvas] of Object.entries(this.canvases)) {
-                if (canvas && !this.contexts[id]) {
-                    const ctx = canvas.getContext("webgpu");
-                    if (ctx) {
-                        ctx.configure({
-                            device: this.device,
-                            format: this.format,
-                            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
-                            alphaMode: "premultiplied",
-                        });
-                        this.contexts[id] = ctx;
-                    }
-                }
-            }
 
             // Optim textures use a fixed 1:1 aspect so optimization is independent
             // of the browser window size. Only the full-res display textures track
@@ -1166,8 +1100,6 @@ export class GpuRunner {
                 );
             }
 
-            const profileRound = recordGpu;
-
             if (this.viewerState.splatsEnabled && !(this.viewerState.splatTrainingPaused || defaultPause)) {
                 this.splatOptimizerManager.dispatch(
                     commandEncoder,
@@ -1435,10 +1367,10 @@ export class GpuRunner {
                 })();
             }
 
-            handle = requestAnimationFrame(() => void loop());
+            handle = requestAnimationFrame(loop);
         };
 
-        handle = requestAnimationFrame(() => void loop());
+        handle = requestAnimationFrame(loop);
 
         return () => {
             cancelAnimationFrame(handle);
@@ -1457,12 +1389,11 @@ export class GpuRunner {
             fineBezier: 7,
         };
         const aspects: Record<number, number> = {};
-        for (const [id, canvas] of Object.entries(this.canvases)) {
+        for (const [id, context] of Object.entries(this.contexts)) {
+            const canvas = context.canvas;
             const mode = PANEL_MODES[id];
             if (mode !== undefined && canvas) {
-                const w = canvas.clientWidth;
-                const h = canvas.clientHeight;
-                aspects[mode] = (w && h) ? (w / h) : 1.0;
+                aspects[mode] = canvas.width / canvas.height;
             }
         }
         return aspects;

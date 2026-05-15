@@ -1,16 +1,16 @@
-import { dismissToast, showToast } from "./toast.svelte.ts";
-import type { ViewerState } from "./ViewerState.svelte.ts";
-import { requestGpu } from "$/gpu/requestGpu";
-import { loadGlb } from "../gpu/file-load/loadGlb.ts";
+import { dismissToast, showToast } from "../../viewer/toast.svelte.ts";
+import type { ViewerState } from "../../viewer/ViewerState.svelte.ts";
+import { requestGpu } from "./requestGpu.ts";
+import { loadGlb } from "../file-load/loadGlb.ts";
 import artelorianUrl from "$/assets/artelorian.glb?url";
 import groundUrl from "$/assets/ground.glb?url";
 import hdrUrl from "$/assets/lakeside_sunrise_2k.hdr?url";
 import brushUrl from "$/assets/brush.png?url";
 import groundAlbedoUrl from "$/assets/brown_mud_03_diff_2k.jpg?url";
 import groundNormalUrl from "$/assets/brown_mud_03_nor_gl_2k.png?url";
-import { loadHdrTexture } from "../gpu/file-load/loadHdrTexture.ts";
-import { loadTexture } from "../gpu/file-load/loadTexture.ts";
-import { buildBvh } from "../gpu/bvh.ts";
+import { loadHdrTexture } from "../file-load/loadHdrTexture.ts";
+import { loadTexture } from "../file-load/loadTexture.ts";
+import { buildBvh } from "../bvh.ts";
 
 export const loadInitialAssetsAndGpu = async (state: ViewerState) => {
     const loadingToast = showToast("loading gpu & meshes…", "info", 0);

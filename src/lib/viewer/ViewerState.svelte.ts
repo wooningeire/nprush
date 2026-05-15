@@ -14,7 +14,7 @@ import { evaluateTurntablePath, type TurntablePathParams } from "./turntable/tur
 import { runTurntableExport } from "./turntable/turntableExport.ts";
 import { GPU_PROFILER_PAIR_COUNT, GPU_PROFILER_HISTORY_FRAMES } from "$/gpu/performanceMeasurement/gpuProfilerPairs";
 import { showToast, dismissToast } from "./toast.svelte.ts";
-import { loadInitialAssetsAndGpu } from "./loadInitialAssetsAndGpu.ts";
+import { loadInitialAssetsAndGpu } from "../gpu/setup/loadInitialAssetsAndGpu.ts";
 
 export class ViewerState {
     width = $state(300);
@@ -333,9 +333,33 @@ export class ViewerState {
                 groundNormalTexture,
             } = initialLoadResult;
 
+    
+
+
+            const canvases = await canvasesPromise;
+            const contexts: Record<string, GPUCanvasContext> = {};
+
+            // Re-configure canvases if they changed or we haven't yet
+            for (const [id, canvas] of Object.entries(canvases)) {
+                const webgpuContext = canvas.getContext("webgpu");
+                if (webgpuContext === null) {
+                    showToast("couldn't attach WebGPU to a canvas", "error", 0);
+                    return;
+                }
+
+                webgpuContext.configure({
+                    device: gpu.device,
+                    format: gpu.format,
+                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+                    alphaMode: "premultiplied",
+                });
+                contexts[id] = webgpuContext;
+            }
+
+
             const gpuRunner = new GpuRunner({
                 device: gpu.device,
-                canvases: await canvasesPromise,
+                contexts,
                 format: gpu.format,
                 camera: state.camera,
                 viewerState: state,
