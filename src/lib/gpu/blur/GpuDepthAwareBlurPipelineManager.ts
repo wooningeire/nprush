@@ -43,7 +43,7 @@ export class GpuDepthAwareBlurPipelineManager {
         });
     }
 
-    addDispatches(
+    blur(
         commandEncoder: GPUCommandEncoder,
         colorView: GPUTextureView,
         depthView: GPUTextureView,

@@ -19,13 +19,10 @@ struct VsOut {
 
 @vertex
 fn vert(@builtin(vertex_index) vi: u32) -> VsOut {
-    let pos = array<vec2f, 3>(
-        vec2f(-1.0, -1.0),
-        vec2f( 3.0, -1.0),
-        vec2f(-1.0,  3.0)
-    );
-    let x = pos[vi].x;
-    let y = pos[vi].y;
+    let quad_x = array<f32, 6>(-1.0,  1.0, -1.0, -1.0,  1.0,  1.0);
+    let quad_y = array<f32, 6>(-1.0, -1.0,  1.0,  1.0, -1.0,  1.0);
+    let x = quad_x[vi];
+    let y = quad_y[vi];
 
     var o: VsOut;
     o.pos = vec4f(x, y, 0.0, 1.0);

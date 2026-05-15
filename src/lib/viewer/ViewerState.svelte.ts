@@ -26,13 +26,13 @@ export class ViewerState {
     renderHeight = $state(256);
 
     edgeBeziersEnabled = $state(false);
-    coarseColorBeziersEnabled = $state(true);
-    fineColorBeziersEnabled = $state(true);
+    baseColorBeziersEnabled = $state(true);
+    colorBeziersEnabled = $state(true);
     splatsEnabled = $state(true);
     splatTrainingPaused = $state(false);
     edgeBezierTrainingPaused = $state(false);
-    coarseColorBezierTrainingPaused = $state(false);
-    fineColorBezierTrainingPaused = $state(false);
+    baseColorBezierTrainingPaused = $state(false);
+    colorBezierTrainingPaused = $state(false);
     compareBlurred = $state(true);
     blurRadius = $state(16);
     meshSplatsEnabled = $state(false);

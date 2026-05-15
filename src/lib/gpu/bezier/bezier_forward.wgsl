@@ -150,13 +150,8 @@ fn vs_main(
     return out;
 }
 
-struct FragOut {
-    @location(0) color: vec4f,
-    @location(1) depth: vec4f,
-}
-
 @fragment
-fn fs_main(in: VsOut) -> FragOut {
+fn fs_main(in: VsOut) -> @location(0) vec4f {
     let ii = in.bezier_idx;
     let b = beziers.items[ii];
 
@@ -255,8 +250,5 @@ fn fs_main(in: VsOut) -> FragOut {
     let bb_lin = b.color.b + SH_C1_B * (ly_b * b.sh1_b.x + lz_b * b.sh1_b.y + lx_b * b.sh1_b.z);
     let rgb_vis = max(vec3f(rr_lin, gg_lin, bb_lin), vec3f(0.0));
 
-    var out: FragOut;
-    out.color = vec4f(rgb_vis * a, a);
-    out.depth = vec4f(0.0);
-    return out;
+    return vec4f(rgb_vis * a, a);
 }

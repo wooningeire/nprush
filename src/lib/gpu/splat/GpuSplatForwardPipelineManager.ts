@@ -120,15 +120,7 @@ export class GpuSplatForwardPipelineManager {
         }
     }
 
-    render(pass: GPURenderPassEncoder, draw: boolean = true) {
-        if (draw && this.bindGroup) {
-            pass.setPipeline(this.pipeline);
-            pass.setBindGroup(0, this.bindGroup);
-            pass.draw(6, this.numSplats);
-        }
-    }
-
-    addDispatches(commandEncoder: GPUCommandEncoder, clear: boolean = false, draw: boolean = true, timestampWrites?: NonNullable<GPURenderPassDescriptor["timestampWrites"]>) {
+    dispatch(commandEncoder: GPUCommandEncoder, clear: boolean = false, draw: boolean = true, timestampWrites?: NonNullable<GPURenderPassDescriptor["timestampWrites"]>) {
         if (!this.targetColorView || !this.targetDepthView || !this.bindGroup) return;
         const pass = commandEncoder.beginRenderPass({
             label: "splat forward render pass",
@@ -148,7 +140,11 @@ export class GpuSplatForwardPipelineManager {
                 },
             ],
         });
-        this.render(pass, draw);
+        if (draw) {
+            pass.setPipeline(this.pipeline);
+            pass.setBindGroup(0, this.bindGroup);
+            pass.draw(6, this.numSplats);
+        }
         pass.end();
     }
 
