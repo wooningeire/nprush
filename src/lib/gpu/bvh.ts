@@ -199,7 +199,7 @@ function buildNode(tris: BuildTri[]): number {
     return nodeIdx;
 }
 
-export function buildBvh(verts: Float32Array, indices: Uint32Array): BvhResult {
+export const buildBvh = (verts: Float32Array, indices: Uint32Array): BvhResult => {
     nodeCount = 0;
     outTris = [];
 
@@ -220,7 +220,7 @@ export function buildBvh(verts: Float32Array, indices: Uint32Array): BvhResult {
         nodes: nodeBuf.slice(0, nodeCount * NODE_BYTES),
         triIndices: new Uint32Array(outTris),
     };
-}
+};
 
 export function raycastBvh(
     bvh: BvhResult,
