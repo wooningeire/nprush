@@ -7,6 +7,7 @@ type Point = { x: number; y: number };
 
 const TURN_SCALE = 0.01;
 const PAN_SCALE = 0.003;
+const ZOOM_SCALE = 0.001;
 
 export class CameraOrbit implements CameraControlScheme {
     radius = $state(1);
@@ -55,5 +56,9 @@ export class CameraOrbit implements CameraControlScheme {
         } else {
             this.long = mod(this.long + movement.x * TURN_SCALE, REV);
         }
+    }
+
+    zoom(deltaY: number) {
+        this.radius *= 2 ** (deltaY * 0.001);
     }
 }

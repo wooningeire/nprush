@@ -11,6 +11,7 @@ let {
     canvases?: Record<string, HTMLCanvasElement>;
 } = $props();
 
+
 const STRIP_LABELS = [
     { id: "splatColor", text: "Splat Color" },
     { id: "targetDepth", text: "Target Depth" },
@@ -25,23 +26,26 @@ let container = $state<HTMLElement | null>(null);
 
 $effect(() => {
     if (!canvases || !container) return;
+
     const ro = new ResizeObserver(() => {
-        const dpr = window.devicePixelRatio || 1;
         for (const canvas of Object.values(canvases)) {
             if (!canvas) continue;
             // Use parent because canvas itself might be 100% of parent
             const rect = canvas.parentElement!.getBoundingClientRect();
-            const w = Math.round(rect.width * dpr);
-            const h = Math.round(rect.height * dpr);
+
+            const w = Math.round(rect.width * devicePixelRatio);
+            const h = Math.round(rect.height * devicePixelRatio);
             if (canvas.width !== w || canvas.height !== h) {
                 canvas.width = w;
                 canvas.height = h;
             }
         }
     });
+
     ro.observe(container);
     return () => ro.disconnect();
 });
+
 
 $effect(() => {
     if (!canvases) canvases = {};
@@ -109,9 +113,9 @@ $effect(() => {
                 bind:this={container}
                 class="views-container"
                 {onpointerdown}
-                oncontextmenu={(e) => { e.preventDefault(); }}
-                onwheel={(event) => {
-                    viewerState.orbit.radius *= 2 ** (event.deltaY * 0.001);
+                oncontextmenu={event => event.preventDefault()}
+                onwheel={event => {
+                    viewerState.orbit.zoom(event.deltaY);
                     event.preventDefault();
                 }}
                 role="presentation"
