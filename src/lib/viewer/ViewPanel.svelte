@@ -3,9 +3,11 @@ import { onDestroy, onMount, type Snippet } from "svelte";
 
 let {
     canvas = $bindable(),
+    label = null,
     children,
 }: {
     canvas: HTMLCanvasElement | null,
+    label?: string | null,
     children?: Snippet,
 } = $props();
 
@@ -42,6 +44,10 @@ onDestroy(() => {
 >
     <canvas bind:this={canvas}></canvas>
 
+    {#if label !== null}
+        <view-panel-label>{label}</view-panel-label>
+    {/if}
+
     {@render children?.()}
 </view-panel>
 
@@ -59,5 +65,14 @@ canvas {
 
     max-width: 100%;
     max-height: 100%;
+}
+
+view-panel-label {
+    align-self: start;
+    justify-self: end;
+
+    padding: 0.5rem;
+
+    font-size: 0.8rem;
 }
 </style>

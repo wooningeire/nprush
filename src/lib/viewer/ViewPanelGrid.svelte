@@ -99,11 +99,17 @@ $effect(() => {
             role="presentation"
         >
             <view-panels-primary>
-                <ViewPanel bind:canvas={canvases.target} />
+                <ViewPanel
+                    bind:canvas={canvases.target}
+                    label="target"
+                />
                 
                 <ViewSeparator />
 
-                <ViewPanel bind:canvas={canvases.splats}>
+                <ViewPanel
+                    bind:canvas={canvases.splats}
+                    label="render"
+                >
                     <view-panel-overlay onpointerdown={event => event.stopPropagation()}>
                         <label>
                             Render res: {viewerState.renderWidth}×{viewerState.renderHeight}
@@ -125,7 +131,10 @@ $effect(() => {
 
             <view-panels-strip>
                 {#each STRIP_LABELS as { id, text }, i}
-                    <ViewPanel bind:canvas={canvases[id]} />
+                    <ViewPanel
+                        bind:canvas={canvases[id]}
+                        label={text}
+                    />
                     {#if i < STRIP_LABELS.length - 1}
                         <ViewSeparator />
                     {/if}
