@@ -40,8 +40,11 @@ $effect(() => {
         if (button === 1) {
             pointerEvent.preventDefault();
         } else if (button === 0) {
-            const rect = (pointerEvent.currentTarget as HTMLElement).getBoundingClientRect();
-            viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top);
+            const target = pointerEvent.target as HTMLElement;
+            if (target.tagName.toLowerCase() === 'canvas') {
+                const rect = target.getBoundingClientRect();
+                viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top, rect.width, rect.height);
+            }
             pointerEvent.preventDefault();
         }
     }}
@@ -59,8 +62,11 @@ $effect(() => {
                 break;
             
             case 0: {
-                const rect = (pointerEvent.currentTarget as HTMLElement).getBoundingClientRect();
-                viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top);
+                const target = pointerEvent.target as HTMLElement;
+                if (target.tagName.toLowerCase() === 'canvas') {
+                    const rect = target.getBoundingClientRect();
+                    viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top, rect.width, rect.height);
+                }
                 break;
             }
             
@@ -128,8 +134,14 @@ view-panels-primary {
 
 view-panels-strip {
     height: calc(20%);
-    
+
     display: flex;
+
+    > :global(*) {
+        flex-grow: 1;
+        flex-shrink: 1;
+        flex-basis: 0;
+    }
 }
 
 .view-panel {

@@ -73,22 +73,18 @@ export class ViewerState {
         screenDims: { width: () => this.width, height: () => this.height },
     });
 
-    onPaintDrag(x: number, y: number) {
+    onPaintDrag(x: number, y: number, targetWidth: number, targetHeight: number) {
         if (!this.meshBvh || !this.meshVerts || !this.runner || !this.meshSplatsEnabled) {
             return;
         }
         
-        const targetWidth = this.width / 2;
-        const targetHeight = this.height / 2;
-        
-        // Ignore clicks in the bottom strip
-        if (y > targetHeight) return;
-        
-        // Map x to either the left or right half
-        const localX = x % targetWidth;
-        
-        const ndcX = (localX / targetWidth) * 2 - 1;
+        const ndcX = (x / targetWidth) * 2 - 1;
         const ndcY = -((y / targetHeight) * 2 - 1);
+        
+        if (ndcX < -1 || ndcX > 1 || ndcY < -1 || ndcY > 1) {
+            return;
+        }
+
         
         const originNdC = [ndcX, ndcY, 0, 1];
         const targetNdC = [ndcX, ndcY, 1, 1];
