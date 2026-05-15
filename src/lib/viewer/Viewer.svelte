@@ -49,6 +49,8 @@ main {
 
 viewer-content {
     display: flex;
+    align-items: stretch;
+    
 
     overflow: hidden;
 }

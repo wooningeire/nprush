@@ -2,6 +2,7 @@
 import {Draggable, Hotkey} from "@vaie/hui";
 import type { ViewerState } from "./ViewerState.svelte";
 import { STRIP_HEIGHT_FRAC } from "$/util";
+    import ViewPanel from "./ViewPanel.svelte";
 
 let {
     viewerState,
@@ -22,29 +23,6 @@ const STRIP_LABELS = [
 ];
 
 let shiftHeld = $state(false);
-let container = $state<HTMLElement | null>(null);
-
-$effect(() => {
-    if (!canvases || !container) return;
-
-    const ro = new ResizeObserver(() => {
-        for (const canvas of Object.values(canvases)) {
-            if (!canvas) continue;
-            // Use parent because canvas itself might be 100% of parent
-            const rect = canvas.parentElement!.getBoundingClientRect();
-
-            const w = Math.round(rect.width * devicePixelRatio);
-            const h = Math.round(rect.height * devicePixelRatio);
-            if (canvas.width !== w || canvas.height !== h) {
-                canvas.width = w;
-                canvas.height = h;
-            }
-        }
-    });
-
-    ro.observe(container);
-    return () => ro.disconnect();
-});
 
 
 $effect(() => {
@@ -58,110 +36,98 @@ $effect(() => {
     onKeyUp={() => shiftHeld = false}
 />
 
-<section
-    bind:clientWidth={null, clientWidth => viewerState.width = clientWidth!}
-    bind:clientHeight={null, clientHeight => viewerState.height = clientHeight!}
->
-    <Draggable
-        onDown={({ button, pointerEvent }) => {
-            if (button === 1) {
+<Draggable
+    onDown={({ button, pointerEvent }) => {
+        if (button === 1) {
+            pointerEvent.preventDefault();
+        } else if (button === 0) {
+            const rect = (pointerEvent.currentTarget as HTMLElement).getBoundingClientRect();
+            viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top);
+            pointerEvent.preventDefault();
+        }
+    }}
+
+    onDrag={async ({ movement, button, pointerEvent }) => {
+        switch (button) {
+            case 1:
+                if (shiftHeld) {
+                    viewerState.orbit.pan(movement);
+                } else {
+                    viewerState.orbit.turn(movement);
+                }
+
                 pointerEvent.preventDefault();
-            } else if (button === 0) {
+                break;
+            
+            case 0: {
                 const rect = (pointerEvent.currentTarget as HTMLElement).getBoundingClientRect();
                 viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top);
-                pointerEvent.preventDefault();
+                break;
             }
-        }}
+            
+            case 2:
+                break;
 
-        onDrag={async ({ movement, button, pointerEvent }) => {
-            switch (button) {
-                case 1:
-                    if (shiftHeld) {
-                        viewerState.orbit.pan(movement);
-                    } else {
-                        viewerState.orbit.turn(movement);
-                    }
+            default:
+                break;
+        }
 
-                    pointerEvent.preventDefault();
-                    break;
-                
-                case 0: {
-                    const rect = (pointerEvent.currentTarget as HTMLElement).getBoundingClientRect();
-                    viewerState.onPaintDrag(pointerEvent.clientX - rect.left, pointerEvent.clientY - rect.top);
-                    break;
-                }
-                
-                case 2:
-                    break;
+        pointerEvent.preventDefault();
+    }}
 
-                default:
-                    break;
-            }
+    onUp={({ pointerEvent }) => {
+        if (pointerEvent.button === 2) {
+        } else {
+            document.exitPointerLock();
+        }
+    }}
+>
+    {#snippet dragTarget({ onpointerdown })}
+        <views-container
+            {onpointerdown}
+            oncontextmenu={event => event.preventDefault()}
+            onwheel={event => {
+                viewerState.orbit.zoom(event.deltaY);
+                event.preventDefault();
+            }}
+            role="presentation"
+        >
+            <view-panels-primary>
+                <ViewPanel bind:canvas={canvases.target} />
+                <ViewPanel bind:canvas={canvases.splats} />
+            </view-panels-primary>
 
-            pointerEvent.preventDefault();
-        }}
-
-        onUp={({ pointerEvent }) => {
-            if (pointerEvent.button === 2) {
-            } else {
-                document.exitPointerLock();
-            }
-        }}
-    >
-        {#snippet dragTarget({ onpointerdown })}
-            <div
-                bind:this={container}
-                class="views-container"
-                {onpointerdown}
-                oncontextmenu={event => event.preventDefault()}
-                onwheel={event => {
-                    viewerState.orbit.zoom(event.deltaY);
-                    event.preventDefault();
-                }}
-                role="presentation"
-            >
-                <div class="main-views">
+            <div class="strip-views" style:--strip-frac={STRIP_HEIGHT_FRAC}>
+                {#each STRIP_LABELS as { id, text }}
                     <div class="view-panel">
-                        <div class="label main left">Target</div>
-                        <canvas bind:this={canvases.target}></canvas>
+                        <div class="label strip">{text}</div>
+                        <canvas bind:this={canvases[id]}></canvas>
                     </div>
-                    <div class="view-panel separator"></div>
-                    <div class="view-panel">
-                        <div class="label main right">Splats</div>
-                        <canvas bind:this={canvases.splats}></canvas>
-                    </div>
-                </div>
-                <div class="strip-views" style:--strip-frac={STRIP_HEIGHT_FRAC}>
-                    {#each STRIP_LABELS as { id, text }}
-                        <div class="view-panel">
-                            <div class="label strip">{text}</div>
-                            <canvas bind:this={canvases[id]}></canvas>
-                        </div>
-                    {/each}
-                </div>
+                {/each}
             </div>
-        {/snippet}
-    </Draggable>
-</section>
+        </views-container>
+    {/snippet}
+</Draggable>
 
 <style lang="scss">
-section {
-    width: 100%;
-    height: 100vh;
-    position: relative;
-}
+views-container {
+    flex-grow: 1;
 
-.views-container {
-    width: 100%;
-    height: 100%;
     display: flex;
     flex-direction: column;
 }
 
-.main-views {
-    flex: 1;
+view-panels-primary {
+    flex-grow: 1;
+
     display: flex;
-    flex-direction: row;
+    align-items: stretch;
+
+    > :global(*) {
+        flex-grow: 1;
+        flex-shrink: 1;
+        flex-basis: 0;
+    }
 }
 
 .strip-views {
