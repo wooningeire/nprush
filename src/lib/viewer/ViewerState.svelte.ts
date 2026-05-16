@@ -58,10 +58,16 @@ export class ViewerState {
 
     runner = $state<GpuRunner | null>(null);
     
-    readonly orbit = new CameraOrbit();
-    readonly camera = new Camera({
-        controlScheme: this.orbit,
+    readonly viewportOrbit = new CameraOrbit();
+    readonly viewportCamera = new Camera({
+        controlScheme: this.viewportOrbit,
         screenDims: { width: () => this.width, height: () => this.height },
+    });
+    
+    readonly backendOrbit = new CameraOrbit();
+    readonly backendCamera = new Camera({
+        controlScheme: this.backendOrbit,
+        screenDims: { width: () => this.renderWidth, height: () => this.renderHeight },
     });
 
     onPaintDrag(x: number, y: number, targetWidth: number, targetHeight: number) {
@@ -80,8 +86,8 @@ export class ViewerState {
         const originNdC = [ndcX, ndcY, 0, 1];
         const targetNdC = [ndcX, ndcY, 1, 1];
         
-        const originWorldW = vec4.transformMat4(originNdC, this.camera.viewProjInvMat);
-        const targetWorldW = vec4.transformMat4(targetNdC, this.camera.viewProjInvMat);
+        const originWorldW = vec4.transformMat4(originNdC, this.viewportCamera.viewProjInvMat);
+        const targetWorldW = vec4.transformMat4(targetNdC, this.viewportCamera.viewProjInvMat);
         
         const origin = [originWorldW[0]/originWorldW[3], originWorldW[1]/originWorldW[3], originWorldW[2]/originWorldW[3]] as [number, number, number];
         const target = [targetWorldW[0]/targetWorldW[3], targetWorldW[1]/targetWorldW[3], targetWorldW[2]/targetWorldW[3]] as [number, number, number];
@@ -194,9 +200,14 @@ export class ViewerState {
             return;
         }
         // Snapshot current camera as the base reference
-        this._turntableBaseLong = this.orbit.long;
-        this.turntableLatCenter = this.orbit.lat;
-        this.turntableRadiusCenter = this.orbit.radius;
+        this._turntableBaseLong = this.viewportOrbit.long;
+        this.turntableLatCenter = this.viewportOrbit.lat;
+        this.turntableRadiusCenter = this.viewportOrbit.radius;
+        
+        this.backendOrbit.long = this.viewportOrbit.long;
+        this.backendOrbit.lat = this.viewportOrbit.lat;
+        this.backendOrbit.radius = this.viewportOrbit.radius;
+        
         this.turntableViewFrames = 0;
         this.multiviewDatasetReady = false;
         this.turntableTraining = true;
@@ -247,9 +258,9 @@ export class ViewerState {
         this.turntableCanceled = false;
         this.turntableProgress = 0;
 
-        const origLong = this.orbit.long;
-        const origLat = this.orbit.lat;
-        const origRadius = this.orbit.radius;
+        const origLong = this.backendOrbit.long;
+        const origLat = this.backendOrbit.lat;
+        const origRadius = this.backendOrbit.radius;
 
         const baseLong = this.turntableTraining ? this.turntableBaseLong : origLong;
         const turntableParams = this.getTurntablePathParams();
@@ -261,7 +272,7 @@ export class ViewerState {
                 isCanceled: () => this.turntableCanceled,
                 captureFrame: () => this.runner!.captureTurntableFrame(),
                 writer,
-                orbit: this.orbit,
+                orbit: this.backendOrbit,
                 restoreOrbit: { long: origLong, lat: origLat, radius: origRadius },
                 evalAtT: t => {
                     const p = evaluateTurntablePath(t, baseLong, turntableParams);
@@ -360,7 +371,8 @@ export class ViewerState {
                 device: gpu.device,
                 contexts,
                 format: gpu.format,
-                camera: state.camera,
+                viewportCamera: state.viewportCamera,
+                backendCamera: state.backendCamera,
                 viewerState: state,
                 mesh: primaryMesh,
                 groundMesh,

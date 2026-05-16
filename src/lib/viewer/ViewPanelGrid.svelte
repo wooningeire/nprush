@@ -55,9 +55,9 @@ $effect(() => {
         switch (button) {
             case 1:
                 if (shiftHeld) {
-                    viewerState.orbit.pan(movement);
+                    viewerState.viewportOrbit.pan(movement);
                 } else {
-                    viewerState.orbit.turn(movement);
+                    viewerState.viewportOrbit.turn(movement);
                 }
 
                 pointerEvent.preventDefault();
@@ -94,7 +94,7 @@ $effect(() => {
             {onpointerdown}
             oncontextmenu={(event: PointerEvent) => event.preventDefault()}
             onwheel={(event: WheelEvent) => {
-                viewerState.orbit.zoom(event.deltaY);
+                viewerState.viewportOrbit.zoom(event.deltaY);
                 event.preventDefault();
             }}
             role="presentation"

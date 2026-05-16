@@ -6,31 +6,31 @@ const OPTIMIZATION_SHORT = constants.OPTIMIZATION_SHORT;
 
 export class GpuTextureManager {
     // Full-res textures
-    fullResColorTexture: GPUTexture | null = null;
-    fullResColorTextureView: GPUTextureView | null = null;
-    fullResDepthTexture: GPUTexture | null = null;
-    fullResDepthTextureView: GPUTextureView | null = null;
-    fullResZBufferTexture: GPUTexture | null = null;
-    fullResZBufferTextureView: GPUTextureView | null = null;
-    fullResNormalTexture: GPUTexture | null = null;
-    fullResNormalTextureView: GPUTextureView | null = null;
-    fullResEdgeTexture: GPUTexture | null = null;
-    fullResEdgeTextureView: GPUTextureView | null = null;
-    fullResSplatColorTexture: GPUTexture | null = null;
-    fullResSplatColorTextureView: GPUTextureView | null = null;
-    fullResSplatDepthTexture: GPUTexture | null = null;
-    fullResSplatDepthTextureView: GPUTextureView | null = null;
-    fullResEdgeBezierTexture: GPUTexture | null = null;
-    fullResEdgeBezierTextureView: GPUTextureView | null = null;
-    fullResCoarseBezierTexture: GPUTexture | null = null;
-    fullResCoarseBezierTextureView: GPUTextureView | null = null;
-    fullResFineBezierTexture: GPUTexture | null = null;
-    fullResFineBezierTextureView: GPUTextureView | null = null;
-    fullResBlurredTexture: GPUTexture | null = null;
-    fullResBlurTempTexture: GPUTexture | null = null;
+    displayResColorTexture: GPUTexture | null = null;
+    displayResColorTextureView: GPUTextureView | null = null;
+    displayResDepthTexture: GPUTexture | null = null;
+    displayResDepthTextureView: GPUTextureView | null = null;
+    displayResZBufferTexture: GPUTexture | null = null;
+    displayResZBufferTextureView: GPUTextureView | null = null;
+    displayResNormalTexture: GPUTexture | null = null;
+    displayResNormalTextureView: GPUTextureView | null = null;
+    displayResEdgeTexture: GPUTexture | null = null;
+    displayResEdgeTextureView: GPUTextureView | null = null;
+    displayResSplatColorTexture: GPUTexture | null = null;
+    displayResSplatColorTextureView: GPUTextureView | null = null;
+    displayResSplatDepthTexture: GPUTexture | null = null;
+    displayResSplatDepthTextureView: GPUTextureView | null = null;
+    displayResEdgeBezierTexture: GPUTexture | null = null;
+    displayResEdgeBezierTextureView: GPUTextureView | null = null;
+    displayResCoarseBezierTexture: GPUTexture | null = null;
+    displayResCoarseBezierTextureView: GPUTextureView | null = null;
+    displayResFineBezierTexture: GPUTexture | null = null;
+    displayResFineBezierTextureView: GPUTextureView | null = null;
+    displayResBlurredTexture: GPUTexture | null = null;
+    displayResBlurTempTexture: GPUTexture | null = null;
     
-    fullResWidth = 0;
-    fullResHeight = 0;
+    displayResWidth = 0;
+    displayResHeight = 0;
 
     // Optimization textures
     optimizationColorTexture: GPUTexture | null = null;
@@ -72,105 +72,105 @@ export class GpuTextureManager {
         this.dummyTextureView = this.dummyTexture.createView();
     }
 
-    recreateFullResTextures(width: number, height: number): boolean {
-        if (width === this.fullResWidth && height === this.fullResHeight && this.fullResColorTexture) {
+    recreateDisplayResTextures(width: number, height: number): boolean {
+        if (width === this.displayResWidth && height === this.displayResHeight && this.displayResColorTexture) {
             return false;
         }
 
-        this.destroyFullRes();
+        this.destroyDisplayRes();
 
-        this.fullResWidth = width;
-        this.fullResHeight = height;
+        this.displayResWidth = width;
+        this.displayResHeight = height;
 
-        this.fullResColorTexture = this.device.createTexture({
-            label: "full-res color texture",
+        this.displayResColorTexture = this.device.createTexture({
+            label: "display-res color texture",
             size: [width, height],
             format: this.format,
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
-        this.fullResColorTextureView = this.fullResColorTexture.createView();
+        this.displayResColorTextureView = this.displayResColorTexture.createView();
         
-        this.fullResNormalTexture = this.device.createTexture({
-            label: "full-res normal texture",
+        this.displayResNormalTexture = this.device.createTexture({
+            label: "display-res normal texture",
             size: [width, height],
             format: this.format,
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
-        this.fullResNormalTextureView = this.fullResNormalTexture.createView();
+        this.displayResNormalTextureView = this.displayResNormalTexture.createView();
 
-        this.fullResDepthTexture = this.device.createTexture({
-            label: "full-res depth visualization",
+        this.displayResDepthTexture = this.device.createTexture({
+            label: "display-res depth visualization",
             size: [width, height],
             format: "r16float",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
-        this.fullResDepthTextureView = this.fullResDepthTexture.createView();
+        this.displayResDepthTextureView = this.displayResDepthTexture.createView();
 
-        this.fullResZBufferTexture = this.device.createTexture({
-            label: "full-res z-buffer",
+        this.displayResZBufferTexture = this.device.createTexture({
+            label: "display-res z-buffer",
             size: [width, height],
             format: MESH_DEPTH_FORMAT,
             usage: GPUTextureUsage.RENDER_ATTACHMENT,
         });
-        this.fullResZBufferTextureView = this.fullResZBufferTexture.createView();
+        this.displayResZBufferTextureView = this.displayResZBufferTexture.createView();
 
-        this.fullResEdgeTexture = this.device.createTexture({
-            label: "full-res edge map",
+        this.displayResEdgeTexture = this.device.createTexture({
+            label: "display-res edge map",
             size: [width, height],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
-        this.fullResEdgeTextureView = this.fullResEdgeTexture.createView();
+        this.displayResEdgeTextureView = this.displayResEdgeTexture.createView();
 
-        this.fullResSplatColorTexture = this.device.createTexture({
-            label: "full-res splat color",
+        this.displayResSplatColorTexture = this.device.createTexture({
+            label: "display-res splat color",
             size: [width, height],
             format: "rgba8unorm",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
         });
-        this.fullResSplatColorTextureView = this.fullResSplatColorTexture.createView();
+        this.displayResSplatColorTextureView = this.displayResSplatColorTexture.createView();
 
-        this.fullResSplatDepthTexture = this.device.createTexture({
-            label: "full-res splat depth",
+        this.displayResSplatDepthTexture = this.device.createTexture({
+            label: "display-res splat depth",
             size: [width, height],
             format: "rgba8unorm",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
-        this.fullResSplatDepthTextureView = this.fullResSplatDepthTexture.createView();
+        this.displayResSplatDepthTextureView = this.displayResSplatDepthTexture.createView();
 
-        this.fullResEdgeBezierTexture = this.device.createTexture({
-            label: "full-res edge bezier view",
+        this.displayResEdgeBezierTexture = this.device.createTexture({
+            label: "display-res edge bezier view",
             size: [width, height],
             format: "rgba8unorm",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
         });
-        this.fullResEdgeBezierTextureView = this.fullResEdgeBezierTexture.createView();
+        this.displayResEdgeBezierTextureView = this.displayResEdgeBezierTexture.createView();
 
-        this.fullResCoarseBezierTexture = this.device.createTexture({
-            label: "full-res coarse bezier view",
+        this.displayResCoarseBezierTexture = this.device.createTexture({
+            label: "display-res coarse bezier view",
             size: [width, height],
             format: "rgba8unorm",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
         });
-        this.fullResCoarseBezierTextureView = this.fullResCoarseBezierTexture.createView();
+        this.displayResCoarseBezierTextureView = this.displayResCoarseBezierTexture.createView();
 
-        this.fullResFineBezierTexture = this.device.createTexture({
-            label: "full-res fine bezier view",
+        this.displayResFineBezierTexture = this.device.createTexture({
+            label: "display-res fine bezier view",
             size: [width, height],
             format: "rgba8unorm",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
         });
-        this.fullResFineBezierTextureView = this.fullResFineBezierTexture.createView();
+        this.displayResFineBezierTextureView = this.displayResFineBezierTexture.createView();
 
-        this.fullResBlurredTexture = this.device.createTexture({
-            label: "full-res blurred target",
+        this.displayResBlurredTexture = this.device.createTexture({
+            label: "display-res blurred target",
             size: [width, height],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
 
-        this.fullResBlurTempTexture = this.device.createTexture({
-            label: "full-res blur temp",
+        this.displayResBlurTempTexture = this.device.createTexture({
+            label: "display-res blur temp",
             size: [width, height],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
@@ -282,42 +282,42 @@ export class GpuTextureManager {
         return true;
     }
 
-    destroyFullRes() {
-        this.fullResColorTexture?.destroy();
-        this.fullResDepthTexture?.destroy();
-        this.fullResZBufferTexture?.destroy();
-        this.fullResNormalTexture?.destroy();
-        this.fullResEdgeTexture?.destroy();
-        this.fullResSplatColorTexture?.destroy();
-        this.fullResSplatDepthTexture?.destroy();
-        this.fullResEdgeBezierTexture?.destroy();
-        this.fullResCoarseBezierTexture?.destroy();
-        this.fullResFineBezierTexture?.destroy();
-        this.fullResBlurredTexture?.destroy();
-        this.fullResBlurTempTexture?.destroy();
+    destroyDisplayRes() {
+        this.displayResColorTexture?.destroy();
+        this.displayResDepthTexture?.destroy();
+        this.displayResZBufferTexture?.destroy();
+        this.displayResNormalTexture?.destroy();
+        this.displayResEdgeTexture?.destroy();
+        this.displayResSplatColorTexture?.destroy();
+        this.displayResSplatDepthTexture?.destroy();
+        this.displayResEdgeBezierTexture?.destroy();
+        this.displayResCoarseBezierTexture?.destroy();
+        this.displayResFineBezierTexture?.destroy();
+        this.displayResBlurredTexture?.destroy();
+        this.displayResBlurTempTexture?.destroy();
         
-        this.fullResColorTexture = null;
-        this.fullResColorTextureView = null;
-        this.fullResDepthTexture = null;
-        this.fullResDepthTextureView = null;
-        this.fullResZBufferTexture = null;
-        this.fullResZBufferTextureView = null;
-        this.fullResNormalTexture = null;
-        this.fullResNormalTextureView = null;
-        this.fullResEdgeTexture = null;
-        this.fullResEdgeTextureView = null;
-        this.fullResSplatColorTexture = null;
-        this.fullResSplatColorTextureView = null;
-        this.fullResSplatDepthTexture = null;
-        this.fullResSplatDepthTextureView = null;
-        this.fullResEdgeBezierTexture = null;
-        this.fullResEdgeBezierTextureView = null;
-        this.fullResCoarseBezierTexture = null;
-        this.fullResCoarseBezierTextureView = null;
-        this.fullResFineBezierTexture = null;
-        this.fullResFineBezierTextureView = null;
-        this.fullResBlurredTexture = null;
-        this.fullResBlurTempTexture = null;
+        this.displayResColorTexture = null;
+        this.displayResColorTextureView = null;
+        this.displayResDepthTexture = null;
+        this.displayResDepthTextureView = null;
+        this.displayResZBufferTexture = null;
+        this.displayResZBufferTextureView = null;
+        this.displayResNormalTexture = null;
+        this.displayResNormalTextureView = null;
+        this.displayResEdgeTexture = null;
+        this.displayResEdgeTextureView = null;
+        this.displayResSplatColorTexture = null;
+        this.displayResSplatColorTextureView = null;
+        this.displayResSplatDepthTexture = null;
+        this.displayResSplatDepthTextureView = null;
+        this.displayResEdgeBezierTexture = null;
+        this.displayResEdgeBezierTextureView = null;
+        this.displayResCoarseBezierTexture = null;
+        this.displayResCoarseBezierTextureView = null;
+        this.displayResFineBezierTexture = null;
+        this.displayResFineBezierTextureView = null;
+        this.displayResBlurredTexture = null;
+        this.displayResBlurTempTexture = null;
     }
 
     destroyOptimization() {
@@ -358,7 +358,7 @@ export class GpuTextureManager {
     }
 
     destroy() {
-        this.destroyFullRes();
+        this.destroyDisplayRes();
         this.destroyOptimization();
         this.dummyTexture?.destroy();
         this.dummyTexture = null;

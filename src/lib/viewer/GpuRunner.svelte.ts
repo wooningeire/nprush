@@ -24,7 +24,8 @@ import { GpuTextureManager } from "./GpuTextureManager.ts";
 export class GpuRunner {
     private readonly device: GPUDevice;
     private readonly format: GPUTextureFormat;
-    private readonly camera: Camera;
+    private readonly viewportCamera: Camera;
+    private readonly backendCamera: Camera;
     private readonly viewerState: ViewerState;
     private readonly contexts: Record<string, GPUCanvasContext>;
 
@@ -60,7 +61,8 @@ export class GpuRunner {
         device,
         contexts,
         format,
-        camera,
+        viewportCamera,
+        backendCamera,
         viewerState,
         mesh,
         groundMesh,
@@ -74,7 +76,8 @@ export class GpuRunner {
         device: GPUDevice,
         contexts: Record<string, GPUCanvasContext>,
         format: GPUTextureFormat,
-        camera: Camera,
+        viewportCamera: Camera,
+        backendCamera: Camera,
         viewerState: ViewerState,
         mesh: MeshData,
         groundMesh: MeshData | null,
@@ -88,7 +91,8 @@ export class GpuRunner {
         this.device = device;
         this.contexts = contexts;
         this.format = format;
-        this.camera = camera;
+        this.viewportCamera = viewportCamera;
+        this.backendCamera = backendCamera;
         this.viewerState = viewerState;
         this.textures = new GpuTextureManager(device, format);
         this.matcapTextureView = matcapTexture.createView();
@@ -190,7 +194,8 @@ export class GpuRunner {
 
         this.turntable = new TurntableController({
             device,
-            camera,
+            viewportCamera,
+            backendCamera,
             viewerState,
             managers: {
                 uniformsManager: this.uniformsManager,
@@ -206,12 +211,18 @@ export class GpuRunner {
         });
 
         this.destroy = $effect.root(() => {
-            $effect(() => this.uniformsManager.writeViewProjMat(this.camera.viewProjMat));
-            $effect(() => this.uniformsManager.writeViewMat(this.camera.viewMat));
-            $effect(() => this.uniformsManager.writeInvViewProjMat(this.camera.viewProjInvMat));
+            const activeCamera = $derived(
+                this.viewerState.turntableTraining || this.viewerState.isTurntableRendering
+                    ? this.backendCamera 
+                    : this.viewportCamera
+            );
+
+            $effect(() => this.uniformsManager.writeViewProjMat(activeCamera.viewProjMat));
+            $effect(() => this.uniformsManager.writeViewMat(activeCamera.viewMat));
+            $effect(() => this.uniformsManager.writeInvViewProjMat(activeCamera.viewProjInvMat));
             $effect(() => {
                 // Write invViewProjMat to path tracer and reset accumulation on camera change
-                this.pathTracePipelineManager.writeInvViewProjMat(this.camera.viewProjInvMat as Float32Array);
+                this.pathTracePipelineManager.writeInvViewProjMat(activeCamera.viewProjInvMat as Float32Array);
                 this.pathTracePipelineManager.reset();
             });
             $effect(() => {
@@ -240,7 +251,7 @@ export class GpuRunner {
                 // Reset Adam on camera change for ordinary navigation. Multiview uses
                 // dataset views without moving the orbit. Single-view turntable export
                 // moves the camera each frame but should accumulate optimizer state.
-                this.camera.viewProjMat;
+                activeCamera.viewProjMat;
                 if (this.viewerState.isTurntableRendering) return;
                 this.splatOptimizerManager.resetAdam();
                 this.edgeLayerBezierManager.resetAdam();
@@ -250,17 +261,17 @@ export class GpuRunner {
             /** Bezier optimizers skip multiview; turntable+dataset assigns their VP inside loop(). */
             $effect(() => {
                 if (this.viewerState.renderMode !== RENDER_MODE_MULTIVIEW) {
-                    this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
-                    this.coarseColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
-                    this.fineColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
-                    this.edgeLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
-                    this.coarseColorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
-                    this.fineColorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+                    this.edgeLayerBezierManager.writeVPMatrix(activeCamera.viewProjMat);
+                    this.coarseColorLayerBezierManager.writeVPMatrix(activeCamera.viewProjMat);
+                    this.fineColorLayerBezierManager.writeVPMatrix(activeCamera.viewProjMat);
+                    this.edgeLayerBezierManager.writeVPInvMatrix(activeCamera.viewProjInvMat);
+                    this.coarseColorLayerBezierManager.writeVPInvMatrix(activeCamera.viewProjInvMat);
+                    this.fineColorLayerBezierManager.writeVPInvMatrix(activeCamera.viewProjInvMat);
                 }
             });
-            $effect(() => this.edgeBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
-            $effect(() => this.coarseColorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
-            $effect(() => this.fineColorBezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
+            $effect(() => this.edgeBezierForwardManager.writeVPMatrix(activeCamera.viewProjMat));
+            $effect(() => this.coarseColorBezierForwardManager.writeVPMatrix(activeCamera.viewProjMat));
+            $effect(() => this.fineColorBezierForwardManager.writeVPMatrix(activeCamera.viewProjMat));
             $effect(() => {
                 // mode=2: coverage loss (positions on edges) + color loss from normalTex weighted by edge strength
                 this.edgeLayerBezierManager.writeMode(2);
@@ -392,28 +403,28 @@ export class GpuRunner {
         const loop = async () => {
             this.recreateOptimizationTextures(1);
 
-            const fullResWidth = Math.max(1, this.viewerState.renderWidth);
-            const fullResHeight = Math.max(1, this.viewerState.renderHeight);
+            const displayResWidth = Math.max(1, this.viewerState.renderWidth);
+            const displayResHeight = Math.max(1, this.viewerState.renderHeight);
             
-            if (this.textures.recreateFullResTextures(fullResWidth, fullResHeight)) {
-                this.splatForwardManager.setTarget(this.textures.fullResSplatColorTextureView!, this.textures.fullResSplatDepthTextureView!, fullResWidth, fullResHeight);
-                this.edgeBezierForwardManager.setTarget(this.textures.fullResEdgeBezierTextureView!, fullResWidth, fullResHeight);
-                this.coarseColorBezierForwardManager.setTarget(this.textures.fullResCoarseBezierTextureView!, fullResWidth, fullResHeight);
-                this.fineColorBezierForwardManager.setTarget(this.textures.fullResFineBezierTextureView!, fullResWidth, fullResHeight);
+            if (this.textures.recreateDisplayResTextures(displayResWidth, displayResHeight)) {
+                this.splatForwardManager.setTarget(this.textures.displayResSplatColorTextureView!, this.textures.displayResSplatDepthTextureView!, displayResWidth, displayResHeight);
+                this.edgeBezierForwardManager.setTarget(this.textures.displayResEdgeBezierTextureView!, displayResWidth, displayResHeight);
+                this.coarseColorBezierForwardManager.setTarget(this.textures.displayResCoarseBezierTextureView!, displayResWidth, displayResHeight);
+                this.fineColorBezierForwardManager.setTarget(this.textures.displayResFineBezierTextureView!, displayResWidth, displayResHeight);
 
                 this.splatOptimizerManager.setRenderTarget(
-                    this.textures.fullResColorTextureView!,
-                    this.textures.fullResSplatColorTextureView!,
-                    this.textures.fullResDepthTextureView!,
-                    this.textures.fullResEdgeTextureView!,
-                    this.textures.fullResEdgeBezierTextureView!,
-                    this.textures.fullResCoarseBezierTextureView!,
-                    this.textures.fullResFineBezierTextureView!,
+                    this.textures.displayResColorTextureView!,
+                    this.textures.displayResSplatColorTextureView!,
+                    this.textures.displayResDepthTextureView!,
+                    this.textures.displayResEdgeTextureView!,
+                    this.textures.displayResEdgeBezierTextureView!,
+                    this.textures.displayResCoarseBezierTextureView!,
+                    this.textures.displayResFineBezierTextureView!,
                     this.textures.dummyTextureView!, // PT not ready yet at setup time
                 );
             }
 
-            if (!this.textures.fullResColorTextureView || !this.textures.fullResDepthTextureView || !this.textures.optimizationColorTextureView) {
+            if (!this.textures.displayResColorTextureView || !this.textures.displayResDepthTextureView || !this.textures.optimizationColorTextureView) {
                 if (!canceled) requestAnimationFrame(() => void loop());
                 return;
             }
@@ -474,23 +485,23 @@ export class GpuRunner {
                             clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
                             loadOp: "clear",
                             storeOp: "store",
-                            view: this.textures.fullResColorTextureView!,
+                            view: this.textures.displayResColorTextureView!,
                         },
                         {
                             clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
                             loadOp: "clear",
                             storeOp: "store",
-                            view: this.textures.fullResDepthTextureView!,
+                            view: this.textures.displayResDepthTextureView!,
                         },
                         {
                             clearValue: { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
                             loadOp: "clear",
                             storeOp: "store",
-                            view: this.textures.fullResNormalTextureView!,
+                            view: this.textures.displayResNormalTextureView!,
                         },
                     ],
                     depthStencilAttachment: {
-                        view: this.textures.fullResZBufferTextureView!,
+                        view: this.textures.displayResZBufferTextureView!,
                         depthClearValue: 1.0,
                         depthLoadOp: "clear",
                         depthStoreOp: "store",
@@ -723,13 +734,13 @@ export class GpuRunner {
             }
 
             if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
-                this.splatOptimizerManager.setEdgeTarget(this.textures.fullResDepthTextureView!, this.textures.fullResEdgeTextureView!, this.textures.fullResNormalTextureView!);
+                this.splatOptimizerManager.setEdgeTarget(this.textures.displayResDepthTextureView!, this.textures.displayResEdgeTextureView!, this.textures.displayResNormalTextureView!);
 
                 const edgeFullPass = commandEncoder.beginComputePass({
                     label: "splat edge detection (full res)",
                     ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.EdgeDetectFull) } : {}),
                 });
-                this.splatOptimizerManager.addEdgeDispatches(edgeFullPass, fullResWidth, fullResHeight);
+                this.splatOptimizerManager.addEdgeDispatches(edgeFullPass, displayResWidth, displayResHeight);
                 edgeFullPass.end();
                 // Reset target for next frame
                 this.splatOptimizerManager.setEdgeTarget(this.textures.optimizationDepthTextureView!, this.textures.optimizationEdgeTextureView!, this.textures.optimizationNormalTextureView!);
@@ -768,7 +779,7 @@ export class GpuRunner {
             // 4. Full-res Visualization Renders
             if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
                 // Splat Full-res
-                this.splatForwardManager.setTarget(this.textures.fullResSplatColorTextureView!, this.textures.fullResSplatDepthTextureView!, fullResWidth, fullResHeight);
+                this.splatForwardManager.setTarget(this.textures.displayResSplatColorTextureView!, this.textures.displayResSplatDepthTextureView!, displayResWidth, displayResHeight);
                 this.splatForwardManager.addDispatches(
                     commandEncoder, 
                     true, 
@@ -778,7 +789,7 @@ export class GpuRunner {
                 
                 // Edge Bezier Full-res
                 if (this.viewerState.edgeBeziersEnabled) {
-                    this.edgeBezierForwardManager.setTarget(this.textures.fullResEdgeBezierTextureView!, fullResWidth, fullResHeight);
+                    this.edgeBezierForwardManager.setTarget(this.textures.displayResEdgeBezierTextureView!, displayResWidth, displayResHeight);
                     this.edgeBezierForwardManager.addDispatches(
                         commandEncoder, 
                         true,
@@ -788,7 +799,7 @@ export class GpuRunner {
                 
                 // Coarse Bezier Full-res
                 if (this.viewerState.coarseColorBeziersEnabled) {
-                    this.coarseColorBezierForwardManager.setTarget(this.textures.fullResCoarseBezierTextureView!, fullResWidth, fullResHeight);
+                    this.coarseColorBezierForwardManager.setTarget(this.textures.displayResCoarseBezierTextureView!, displayResWidth, displayResHeight);
                     this.coarseColorBezierForwardManager.addDispatches(
                         commandEncoder, 
                         true,
@@ -798,7 +809,7 @@ export class GpuRunner {
                 
                 // Fine Bezier Full-res
                 if (this.viewerState.fineColorBeziersEnabled) {
-                    this.fineColorBezierForwardManager.setTarget(this.textures.fullResFineBezierTextureView!, fullResWidth, fullResHeight);
+                    this.fineColorBezierForwardManager.setTarget(this.textures.displayResFineBezierTextureView!, displayResWidth, displayResHeight);
                     this.fineColorBezierForwardManager.addDispatches(
                         commandEncoder, 
                         true,
@@ -810,13 +821,13 @@ export class GpuRunner {
             // 5. Render Splat Visualization to Screen Views (uses full-res textures)
             const ptView = this.pathTracePipelineManager.outputTextureView ?? this.textures.dummyTextureView!;
             this.splatOptimizerManager.setRenderTarget(
-                this.textures.fullResColorTextureView!,
-                this.textures.fullResSplatColorTextureView!,
-                this.textures.fullResDepthTextureView!,
-                this.textures.fullResEdgeTextureView!,
-                this.textures.fullResEdgeBezierTextureView!,
-                this.textures.fullResCoarseBezierTextureView!,
-                this.textures.fullResFineBezierTextureView!,
+                this.textures.displayResColorTextureView!,
+                this.textures.displayResSplatColorTextureView!,
+                this.textures.displayResDepthTextureView!,
+                this.textures.displayResEdgeTextureView!,
+                this.textures.displayResEdgeBezierTextureView!,
+                this.textures.displayResCoarseBezierTextureView!,
+                this.textures.displayResFineBezierTextureView!,
                 ptView,
             );
 
@@ -906,12 +917,12 @@ export class GpuRunner {
             }
 
             this.turntable.resolvePendingCapture(
-                fullResWidth,
-                fullResHeight,
-                this.textures.fullResSplatColorTexture,
-                this.textures.fullResCoarseBezierTexture,
-                this.textures.fullResFineBezierTexture,
-                this.textures.fullResEdgeBezierTexture,
+                displayResWidth,
+                displayResHeight,
+                this.textures.displayResSplatColorTexture,
+                this.textures.displayResCoarseBezierTexture,
+                this.textures.displayResFineBezierTexture,
+                this.textures.displayResEdgeBezierTexture,
             );
 
             handle = requestAnimationFrame(loop);

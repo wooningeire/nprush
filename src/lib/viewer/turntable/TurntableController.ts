@@ -46,7 +46,8 @@ export interface TurntableGpuManagers {
  */
 export class TurntableController {
 	private readonly device: GPUDevice;
-	private readonly camera: Camera;
+	private readonly viewportCamera: Camera;
+	private readonly backendCamera: Camera;
 	private readonly viewerState: ViewerState;
 	private readonly managers: TurntableGpuManagers;
 
@@ -59,12 +60,14 @@ export class TurntableController {
 
 	constructor(opts: {
 		device: GPUDevice;
-		camera: Camera;
+		viewportCamera: Camera;
+		backendCamera: Camera;
 		viewerState: ViewerState;
 		managers: TurntableGpuManagers;
 	}) {
 		this.device = opts.device;
-		this.camera = opts.camera;
+		this.viewportCamera = opts.viewportCamera;
+		this.backendCamera = opts.backendCamera;
 		this.viewerState = opts.viewerState;
 		this.managers = opts.managers;
 	}
@@ -165,9 +168,9 @@ export class TurntableController {
 				// Sample a deterministic view position spread evenly around the path.
 				const t = i / numViews;
 				const p = evaluateTurntablePath(t, viewerState.turntableBaseLong, viewerState.getTurntablePathParams());
-				viewerState.orbit.long = p.long;
-				viewerState.orbit.lat = p.lat;
-				viewerState.orbit.radius = p.radius;
+				viewerState.backendOrbit.long = p.long;
+				viewerState.backendOrbit.lat = p.lat;
+				viewerState.backendOrbit.radius = p.radius;
 
 				// Reset PT accumulation for this new view.
 				this.managers.pathTracePipelineManager.reset();
@@ -199,10 +202,10 @@ export class TurntableController {
 				}
 
 				// Store the camera matrices for this view.
-				dataset.viewProjMats[i].set(this.camera.viewProjMat as Float32Array);
-				dataset.viewMats[i].set(this.camera.viewMat as Float32Array);
-				dataset.invViewProjMats[i].set(this.camera.viewProjInvMat as Float32Array);
-				dataset.invViewMats[i].set(this.camera.viewInvMat as Float32Array);
+				dataset.viewProjMats[i].set(this.backendCamera.viewProjMat as Float32Array);
+				dataset.viewMats[i].set(this.backendCamera.viewMat as Float32Array);
+				dataset.invViewProjMats[i].set(this.backendCamera.viewProjInvMat as Float32Array);
+				dataset.invViewMats[i].set(this.backendCamera.viewInvMat as Float32Array);
 
 				viewerState.multiviewPrerenderProgress = (i + 1) / numViews;
 			}
@@ -238,7 +241,6 @@ export class TurntableController {
 	 */
 	resolveFrameView(): TurntableFrameView {
 		const viewerState = this.viewerState;
-		const camera = this.camera;
 
 		if (
 			viewerState.turntableTraining
@@ -284,15 +286,24 @@ export class TurntableController {
 			return { datasetView, sortVp, vpInv, invView };
 		}
 
-		// Not training from dataset — use the live camera.
+		if (viewerState.isTurntableRendering || viewerState.turntableTraining) {
+			return {
+				datasetView: null,
+				sortVp: this.backendCamera.viewProjMat as Mat4,
+				vpInv: this.backendCamera.viewProjInvMat as Mat4,
+				invView: this.backendCamera.viewInvMat as Mat4,
+			};
+		}
+
+		// Not training from dataset and not exporting — use the live camera.
 		this.heldDatasetIndex = -1;
 		this.framesHeldOnDataset = 0;
 
 		return {
 			datasetView: null,
-			sortVp: camera.viewProjMat as Mat4,
-			vpInv: camera.viewProjInvMat as Mat4,
-			invView: camera.viewInvMat as Mat4,
+			sortVp: this.viewportCamera.viewProjMat as Mat4,
+			vpInv: this.viewportCamera.viewProjInvMat as Mat4,
+			invView: this.viewportCamera.viewInvMat as Mat4,
 		};
 	}
 
