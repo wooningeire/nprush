@@ -399,7 +399,7 @@ export class GpuRunner {
     loop() {
         let handle = 0;
         let canceled = false;
-        const loop = async () => {
+        const loop = () => {
             this.recreateOptimizationTextures(1);
 
             const displayResWidth = Math.max(1, this.viewerState.renderWidth);
@@ -438,7 +438,9 @@ export class GpuRunner {
             });
 
             const activeProfilerIndices = new Set<number>();
-            const recordGpu = this.gpuPerfBuffers !== null && this.viewerState.gpuProfilingEnabled;
+            const recordGpu = this.gpuPerfBuffers !== null
+                && this.viewerState.gpuProfilingEnabled
+                && this.gpuPerfBuffers.resultBuffer.mapState === "unmapped";
             const profWrites = (label: string) => {
                 if (!recordGpu) return undefined;
                 const idx = this.gpuPerfBuffers!.getIndex(label);
@@ -883,20 +885,28 @@ export class GpuRunner {
             this.device.queue.submit([commandEncoder.finish()]);
 
             if (recordGpu && this.gpuPerfBuffers) {
-                try {
-                    await this.device.queue.onSubmittedWorkDone();
-                    const deltasNs = await this.gpuPerfBuffers.mapDeltasNanoseconds(activeProfilerIndices);
-                    const labels = this.gpuPerfBuffers.getLabels();
-                    const entries = labels.map((label, idx) => ({
-                        label,
-                        ms: deltasNs[idx] === null ? null : Number(deltasNs[idx]) / 1e6
-                    }));
-                    this.viewerState.setGpuProfilingFrameMs(entries);
-                } catch (e) {
-                    console.warn("[gpu profiler]", e);
-                }
-            } else {
-                // If profiling is disabled, wipe with nulls to avoid stale charts
+                // Fire-and-forget: don't block the render loop waiting for GPU readback.
+                const perfBuffers = this.gpuPerfBuffers;
+                const vs = this.viewerState;
+                const indices = new Set(activeProfilerIndices);
+                this.device.queue.onSubmittedWorkDone().then(async () => {
+                    try {
+                        const deltasNs = await perfBuffers.mapDeltasNanoseconds(indices);
+                        // Skip update when nothing was actually read (buffer still
+                        // mapped from a previous frame's async readback).
+                        if (deltasNs.every(v => v === null)) return;
+                        const labels = perfBuffers.getLabels();
+                        const entries = labels.map((label, idx) => ({
+                            label,
+                            ms: deltasNs[idx] === null ? null : Number(deltasNs[idx]) / 1e6
+                        }));
+                        vs.setGpuProfilingFrameMs(entries);
+                    } catch (e) {
+                        console.warn("[gpu profiler]", e);
+                    }
+                });
+            } else if (!this.viewerState.gpuProfilingEnabled) {
+                // Profiling disabled — wipe stale charts
                 this.viewerState.setGpuProfilingFrameMs([]);
             }
 

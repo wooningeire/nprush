@@ -65,7 +65,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         class:disabled={!viewerState.gpuTimestampQuerySupported}
     >
         <input type="checkbox" bind:checked={viewerState.gpuProfilingEnabled} />
-        GPU pass timings (slower)
+        GPU pass timings
     </label>
     {#if viewerState.gpuProfilingEnabled && viewerState.gpuTimestampQuerySupported}
         <GpuProfilerCharts {viewerState} />
