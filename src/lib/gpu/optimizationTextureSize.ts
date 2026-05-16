@@ -2,7 +2,7 @@
  * Pixel dimensions for the optimization render targets: short side is fixed,
  * long side follows the panel aspect ratio so pixel proportions match the visible panel.
  */
-export function computeOptimTextureSize(
+export function computeOptimizationTextureSize(
 	shortSide: number,
 	panelAspect: number,
 ): { width: number; height: number } {

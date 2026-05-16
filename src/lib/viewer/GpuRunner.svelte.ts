@@ -17,10 +17,10 @@ import { GpuPerformanceMeasurementBufferManager } from "$/gpu/performanceMeasure
 import { GpuProfilingPair, GPU_PROFILER_PAIR_COUNT } from "$/gpu/performanceMeasurement/gpuProfilerPairs.ts";
 import { vec3, type Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants.ts";
-import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
 import { readTextureToImageData, imageDataToBlob } from "$/gpu/file-save/readback.ts";
+import { GpuTextureManager } from "./GpuTextureManager.ts";
 
-const OPTIM_SHORT = constants.OPTIM_SHORT;
+const OPTIMIZATION_SHORT = constants.OPTIMIZATION_SHORT;
 
 const NUM_EDGE_LAYER_BEZIERS = constants.NUM_EDGE_LAYER_BEZIERS;
 
@@ -52,66 +52,8 @@ export class GpuRunner {
     readonly pathTracePipelineManager: GpuPathTracePipelineManager;
     private gpuPerfBuffers: GpuPerformanceMeasurementBufferManager | null = null;
 
-    // Full-res textures (sized to the visible main panel area: half-width x height-minus-strip).
-    // These match the camera projection aspect so the rendered model has the same pixel
-    // proportions as a square-rendered version (no horizontal/vertical squash).
-    //
-    // Note: targetDepthTexture is an R16Float depth (linear view-space depth remapped via
-    // 1 - DEPTH_NEAR/d, used by Sobel for edge detection). It is NOT the hardware Z-buffer.
-    // The hardware Z-buffer is targetZTexture below; without it, triangles draw in submission
-    // order which causes back-face leakage on overlapping geometry.
-    private targetTexture: GPUTexture | null = null;
-    private targetTextureView: GPUTextureView | null = null;
-    private targetDepthTexture: GPUTexture | null = null;
-    private targetDepthTextureView: GPUTextureView | null = null;
-    private targetZTexture: GPUTexture | null = null;
-    private targetZTextureView: GPUTextureView | null = null;
-    private fullEdgeTexture: GPUTexture | null = null;
-    private fullEdgeTextureView: GPUTextureView | null = null;
-    private fullSplatTexture: GPUTexture | null = null;
-    private fullSplatTextureView: GPUTextureView | null = null;
-    private fullSplatDepthTexture: GPUTexture | null = null;
-    private fullSplatDepthTextureView: GPUTextureView | null = null;
-    private fullBezierTexture: GPUTexture | null = null;
-    private fullBezierTextureView: GPUTextureView | null = null;
-    private fullBaseColorBezierTexture: GPUTexture | null = null;
-    private fullBaseColorBezierTextureView: GPUTextureView | null = null;
-    private fullColorBezierTexture: GPUTexture | null = null;
-    private fullColorBezierTextureView: GPUTextureView | null = null;
-    private targetBlurredTexture: GPUTexture | null = null;
-    private targetTempTexture: GPUTexture | null = null;
-    private fullWidth = 0;
-    private fullHeight = 0;
+    private readonly textures: GpuTextureManager;
 
-    // Optim-res textures (aspect-matched to half-screen)
-    private splatTargetColorTexture: GPUTexture | null = null;
-    private optimTextureView: GPUTextureView | null = null;
-    private optimDepthTexture: GPUTexture | null = null;
-    private optimDepthTextureView: GPUTextureView | null = null;
-    private optimZTexture: GPUTexture | null = null;
-    private optimZTextureView: GPUTextureView | null = null;
-    private optimEdgeTexture: GPUTexture | null = null;
-    private optimEdgeTextureView: GPUTextureView | null = null;
-    private optimSplatTexture: GPUTexture | null = null;
-    private optimSplatTextureView: GPUTextureView | null = null;
-    private optimSplatDepthTexture: GPUTexture | null = null;
-    private optimSplatDepthTextureView: GPUTextureView | null = null;
-    private dummyTexture: GPUTexture | null = null;
-    private dummyTextureView: GPUTextureView | null = null;
-    private optimBlurredTexture: GPUTexture | null = null;
-    private optimBlurredTextureView: GPUTextureView | null = null;
-    private optimDepthAwareBlurredTexture: GPUTexture | null = null;
-    private optimDepthAwareBlurredTextureView: GPUTextureView | null = null;
-    private optimBlurredDepthTexture: GPUTexture | null = null;
-    private optimBlurredDepthTextureView: GPUTextureView | null = null;
-    private optimTempTexture: GPUTexture | null = null;
-    private optimTempTextureView: GPUTextureView | null = null;
-    private targetNormalTexture: GPUTexture | null = null;
-    private targetNormalTextureView: GPUTextureView | null = null;
-    private optimNormalTexture: GPUTexture | null = null;
-    private optimNormalTextureView: GPUTextureView | null = null;
-    private optimWidth = 0;
-    private optimHeight = 0;
 
     private capturePromise: { resolve: (blob: Blob) => void, reject: (err: Error) => void } | null = null;
     readonly turntable: TurntableController;
@@ -152,6 +94,7 @@ export class GpuRunner {
         this.format = format;
         this.camera = camera;
         this.viewerState = viewerState;
+        this.textures = new GpuTextureManager(device, format);
         this.matcapTextureView = matcapTexture.createView();
 
         this.gpuPerfBuffers = gpuTimestampSupported
@@ -371,34 +314,7 @@ export class GpuRunner {
                 this.depthAwareBlurManager.destroy();
                 this.pathTracePipelineManager.destroy();
                 this.gpuPerfBuffers?.destroy();
-
-                // Cleanup all textures owned by runner
-                this.targetTexture?.destroy();
-                this.targetDepthTexture?.destroy();
-                this.targetZTexture?.destroy();
-                this.targetNormalTexture?.destroy();
-                this.fullEdgeTexture?.destroy();
-                this.fullSplatTexture?.destroy();
-                this.fullSplatDepthTexture?.destroy();
-                this.fullBezierTexture?.destroy();
-                this.fullBaseColorBezierTexture?.destroy();
-                this.fullColorBezierTexture?.destroy();
-                this.targetBlurredTexture?.destroy();
-                this.targetTempTexture?.destroy();
-
-                this.splatTargetColorTexture?.destroy();
-                this.optimDepthTexture?.destroy();
-                this.optimZTexture?.destroy();
-                this.optimNormalTexture?.destroy();
-                this.optimEdgeTexture?.destroy();
-                this.optimSplatTexture?.destroy();
-                this.optimSplatDepthTexture?.destroy();
-                this.optimBlurredTexture?.destroy();
-                this.optimDepthAwareBlurredTexture?.destroy();
-                this.optimBlurredDepthTexture?.destroy();
-                this.optimTempTexture?.destroy();
-                this.dummyTexture?.destroy();
-
+                this.textures.destroy();
                 this.turntable.destroy();
             };
         });
@@ -429,307 +345,79 @@ export class GpuRunner {
     }
 
     async prerenderDataset(): Promise<void> {
-        // Wait until optim textures are ready (loop may not have run yet).
-        while (!this.optimTextureView || this.optimWidth === 0) {
+        // Wait until optimization textures are ready (loop may not have run yet).
+        while (!this.textures.optimizationColorTextureView || this.textures.optimizationWidth === 0) {
             await new Promise<void>(r => requestAnimationFrame(() => r()));
         }
-        return this.turntable.prerenderDataset(this.optimWidth, this.optimHeight);
+        return this.turntable.prerenderDataset(this.textures.optimizationWidth, this.textures.optimizationHeight);
     }
 
     private recreateOptimizationTextures(panelAspect: number) {
-        // Size optim textures to match the visible panel aspect ratio so the model
-        // rendered into them has matching pixel proportions for the gradient pass.
-        const { width: optimizationTargetWidth, height: optimizationTargetHeight } = computeOptimTextureSize(OPTIM_SHORT, panelAspect);
+        if (this.textures.recreateOptimizationTextures(panelAspect)) {
+            // Resize path tracer output to match optimization resolution
+            this.pathTracePipelineManager.setOutputSize(this.textures.optimizationWidth, this.textures.optimizationHeight);
 
-        if (optimizationTargetWidth === this.optimWidth && optimizationTargetHeight === this.optimHeight) return;
-        this.optimWidth = optimizationTargetWidth;
-        this.optimHeight = optimizationTargetHeight;
+            // Rebind
+            this.splatOptimizerManager.setEdgeTarget(this.textures.optimizationDepthTextureView!, this.textures.optimizationEdgeTextureView!, this.textures.optimizationNormalTextureView!);
+            this.splatOptimizerManager.setBackwardTarget(this.textures.optimizationColorTextureView!, this.textures.optimizationDepthTextureView!, this.textures.optimizationWidth, this.textures.optimizationHeight);
 
-        // Resize path tracer output to match optim resolution
-        this.pathTracePipelineManager.setOutputSize(optimizationTargetWidth, optimizationTargetHeight);
+            // Edge layer: color target = edge map, depth = real depth, background = black (dummy).
+            // Mode=1 color loss drives beziers white on edges, transparent off edges.
+            this.edgeLayerBezierManager.setBackwardTarget(
+                this.textures.optimizationEdgeTextureView!,
+                this.textures.optimizationDepthTextureView!,
+                this.textures.dummyTextureView!,
+                this.textures.optimizationNormalTextureView!,
+                this.textures.optimizationWidth,
+                this.textures.optimizationHeight,
+            );
 
-        if (this.splatTargetColorTexture) this.splatTargetColorTexture.destroy();
-        if (this.optimNormalTexture) this.optimNormalTexture.destroy();
-        if (this.optimDepthTexture) this.optimDepthTexture.destroy();
-        if (this.optimZTexture) this.optimZTexture.destroy();
-        if (this.optimEdgeTexture) this.optimEdgeTexture.destroy();
-        if (this.optimSplatTexture) this.optimSplatTexture.destroy();
-        if (this.optimSplatDepthTexture) this.optimSplatDepthTexture.destroy();
-        if (this.optimBlurredTexture) this.optimBlurredTexture.destroy();
-        if (this.optimDepthAwareBlurredTexture) this.optimDepthAwareBlurredTexture.destroy();
-        if (this.optimBlurredDepthTexture) this.optimBlurredDepthTexture.destroy();
-        if (this.optimTempTexture) this.optimTempTexture.destroy();
+            this.coarseColorLayerBezierManager.setBackwardTarget(
+                this.textures.optimizationDepthAwareBlurredTextureView!,
+                this.textures.optimizationDepthTextureView!,
+                this.textures.optimizationSplatColorTextureView!,
+                this.textures.optimizationNormalTextureView!,
+                this.textures.optimizationWidth, this.textures.optimizationHeight
+            );
 
-        this.splatTargetColorTexture = this.device.createTexture({
-            label: "optimization target texture",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: this.format,
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimTextureView = this.splatTargetColorTexture.createView();
-        
-        this.optimNormalTexture = this.device.createTexture({
-            label: "optimization normal texture",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: this.format,
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimNormalTextureView = this.optimNormalTexture.createView();
-
-        this.optimDepthTexture = this.device.createTexture({
-            label: "optimization depth visualization",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: "r16float",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimDepthTextureView = this.optimDepthTexture.createView();
-
-        this.optimZTexture = this.device.createTexture({
-            label: "optimization z-buffer",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: MESH_DEPTH_FORMAT,
-            usage: GPUTextureUsage.RENDER_ATTACHMENT,
-        });
-        this.optimZTextureView = this.optimZTexture.createView();
-
-        this.optimEdgeTexture = this.device.createTexture({
-            label: "optimization edge map",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: "rgba8unorm",
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimEdgeTextureView = this.optimEdgeTexture.createView();
-
-        this.optimSplatTexture = this.device.createTexture({
-            label: "optimization splat view",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: "rgba8unorm",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimSplatTextureView = this.optimSplatTexture.createView();
-
-        this.optimSplatDepthTexture = this.device.createTexture({
-            label: "optimization splat depth",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: "rgba8unorm",
-            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimSplatDepthTextureView = this.optimSplatDepthTexture.createView();
-
-        this.optimBlurredTexture = this.device.createTexture({
-            label: "optimization blurred target",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: "rgba8unorm",
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimBlurredTextureView = this.optimBlurredTexture.createView();
-
-        this.optimDepthAwareBlurredTexture = this.device.createTexture({
-            label: "optimization depth-aware blurred target",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: "rgba8unorm",
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimDepthAwareBlurredTextureView = this.optimDepthAwareBlurredTexture.createView();
-
-        this.optimBlurredDepthTexture = this.device.createTexture({
-            label: "optimization blurred depth",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: "rgba8unorm",
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimBlurredDepthTextureView = this.optimBlurredDepthTexture.createView();
-
-        this.optimTempTexture = this.device.createTexture({
-            label: "optimization blur temp",
-            size: [optimizationTargetWidth, optimizationTargetHeight],
-            format: "rgba8unorm",
-            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-        });
-        this.optimTempTextureView = this.optimTempTexture.createView();
-
-        if (!this.dummyTexture) {
-            this.dummyTexture = this.device.createTexture({
-                label: "dummy 1x1 texture",
-                size: [1, 1],
-                format: "rgba8unorm",
-                usage: GPUTextureUsage.TEXTURE_BINDING,
-            });
-            this.dummyTextureView = this.dummyTexture.createView();
+            this.fineColorLayerBezierManager.setBackwardTarget(
+                this.textures.optimizationColorTextureView!,
+                this.textures.optimizationDepthTextureView!,
+                this.textures.optimizationSplatColorTextureView!,
+                this.textures.optimizationNormalTextureView!,
+                this.textures.optimizationWidth, this.textures.optimizationHeight
+            );
         }
-
-        // Rebind
-        this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView, this.optimNormalTextureView);
-        this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimDepthTextureView, optimizationTargetWidth, optimizationTargetHeight);
-
-        // Edge layer: color target = edge map, depth = real depth, background = black (dummy).
-        // Mode=1 color loss drives beziers white on edges, transparent off edges.
-        this.edgeLayerBezierManager.setBackwardTarget(
-            this.optimEdgeTextureView,
-            this.optimDepthTextureView,
-            this.dummyTextureView!,
-            this.optimTextureView!,
-            optimizationTargetWidth,
-            optimizationTargetHeight,
-        );
-
-        this.coarseColorLayerBezierManager.setBackwardTarget(
-            this.optimDepthAwareBlurredTextureView!,
-            this.optimDepthTextureView!,
-            this.optimSplatTextureView!,
-            this.optimTextureView!,
-            optimizationTargetWidth, optimizationTargetHeight
-        );
-
-        this.fineColorLayerBezierManager.setBackwardTarget(
-            this.optimTextureView!,
-            this.optimDepthTextureView!,
-            this.optimSplatTextureView!,
-            this.optimTextureView!,
-            optimizationTargetWidth, optimizationTargetHeight
-        );
     }
 
     loop() {
         let handle = 0;
         let canceled = false;
-
         const loop = async () => {
             this.recreateOptimizationTextures(1);
 
-            // Full-res render textures use a fixed resolution from viewerState,
-            // independent of the browser window size.
-            const fullW = Math.max(1, this.viewerState.renderWidth);
-            const fullH = Math.max(1, this.viewerState.renderHeight);
-            if (!this.targetTexture || this.fullWidth !== fullW || this.fullHeight !== fullH) {
-                if (this.targetTexture) this.targetTexture.destroy();
-                if (this.targetNormalTexture) this.targetNormalTexture.destroy();
-                if (this.targetDepthTexture) this.targetDepthTexture.destroy();
-                if (this.targetZTexture) this.targetZTexture.destroy();
-                if (this.fullEdgeTexture) this.fullEdgeTexture.destroy();
-                if (this.fullSplatTexture) this.fullSplatTexture.destroy();
-                if (this.fullSplatDepthTexture) this.fullSplatDepthTexture.destroy();
-                if (this.fullBezierTexture) this.fullBezierTexture.destroy();
-                if (this.fullBaseColorBezierTexture) this.fullBaseColorBezierTexture.destroy();
-                if (this.fullColorBezierTexture) this.fullColorBezierTexture.destroy();
-                if (this.targetBlurredTexture) this.targetBlurredTexture.destroy();
-                if (this.targetTempTexture) this.targetTempTexture.destroy();
-
-                this.fullWidth = fullW;
-                this.fullHeight = fullH;
-
-                this.targetTexture = this.device.createTexture({
-                    label: "full-res target texture",
-                    size: [fullW, fullH],
-                    format: this.format,
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-                });
-                this.targetTextureView = this.targetTexture.createView();
-                
-                this.targetNormalTexture = this.device.createTexture({
-                    label: "full-res normal texture",
-                    size: [fullW, fullH],
-                    format: this.format,
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-                });
-                this.targetNormalTextureView = this.targetNormalTexture.createView();
-
-                this.targetDepthTexture = this.device.createTexture({
-                    label: "full-res depth visualization",
-                    size: [fullW, fullH],
-                    format: "r16float",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-                });
-                this.targetDepthTextureView = this.targetDepthTexture.createView();
-
-                this.targetZTexture = this.device.createTexture({
-                    label: "full-res z-buffer",
-                    size: [fullW, fullH],
-                    format: MESH_DEPTH_FORMAT,
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT,
-                });
-                this.targetZTextureView = this.targetZTexture.createView();
-
-                this.fullEdgeTexture = this.device.createTexture({
-                    label: "full-res edge map",
-                    size: [fullW, fullH],
-                    format: "rgba8unorm",
-                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-                });
-                this.fullEdgeTextureView = this.fullEdgeTexture.createView();
-
-                this.fullSplatTexture = this.device.createTexture({
-                    label: "full-res splat view",
-                    size: [fullW, fullH],
-                    format: "rgba8unorm",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
-                });
-                this.fullSplatTextureView = this.fullSplatTexture.createView();
-
-                this.fullSplatDepthTexture = this.device.createTexture({
-                    label: "full-res splat depth",
-                    size: [fullW, fullH],
-                    format: "rgba8unorm",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-                });
-                this.fullSplatDepthTextureView = this.fullSplatDepthTexture.createView();
-
-                this.fullBezierTexture = this.device.createTexture({
-                    label: "full-res bezier view",
-                    size: [fullW, fullH],
-                    format: "rgba8unorm",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
-                });
-                this.fullBezierTextureView = this.fullBezierTexture.createView();
-
-                this.fullBaseColorBezierTexture = this.device.createTexture({
-                    label: "full-res coarse bezier view",
-                    size: [fullW, fullH],
-                    format: "rgba8unorm",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
-                });
-                this.fullBaseColorBezierTextureView = this.fullBaseColorBezierTexture.createView();
-
-                this.fullColorBezierTexture = this.device.createTexture({
-                    label: "full-res fine bezier view",
-                    size: [fullW, fullH],
-                    format: "rgba8unorm",
-                    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
-                });
-                this.fullColorBezierTextureView = this.fullColorBezierTexture.createView();
-
-                this.targetBlurredTexture = this.device.createTexture({
-                    label: "full-res blurred target",
-                    size: [fullW, fullH],
-                    format: "rgba8unorm",
-                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-                });
-
-                this.targetTempTexture = this.device.createTexture({
-                    label: "full-res blur temp",
-                    size: [fullW, fullH],
-                    format: "rgba8unorm",
-                    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-                });
-
-                this.splatForwardManager.setTarget(this.fullSplatTextureView, this.fullSplatDepthTextureView!, fullW, fullH);
-                this.bezierForwardManager.setTarget(this.fullBezierTextureView!, fullW, fullH);
-                this.baseColorBezierForwardManager.setTarget(this.fullBaseColorBezierTextureView!, fullW, fullH);
-                this.colorBezierForwardManager.setTarget(this.fullColorBezierTextureView, fullW, fullH);
+            const fullResWidth = Math.max(1, this.viewerState.renderWidth);
+            const fullResHeight = Math.max(1, this.viewerState.renderHeight);
+            
+            if (this.textures.recreateFullResTextures(fullResWidth, fullResHeight)) {
+                this.splatForwardManager.setTarget(this.textures.fullResSplatColorTextureView!, this.textures.fullResSplatDepthTextureView!, fullResWidth, fullResHeight);
+                this.bezierForwardManager.setTarget(this.textures.fullResEdgeBezierTextureView!, fullResWidth, fullResHeight);
+                this.baseColorBezierForwardManager.setTarget(this.textures.fullResCoarseBezierTextureView!, fullResWidth, fullResHeight);
+                this.colorBezierForwardManager.setTarget(this.textures.fullResFineBezierTextureView!, fullResWidth, fullResHeight);
 
                 this.splatOptimizerManager.setRenderTarget(
-                    this.targetTextureView!,
-                    this.fullSplatTextureView,
-                    this.targetDepthTextureView!,
-                    this.fullEdgeTextureView!,
-                    this.fullBezierTextureView,
-                    this.fullBaseColorBezierTextureView!,
-                    this.fullColorBezierTextureView,
-                    this.dummyTextureView!, // PT not ready yet at setup time
+                    this.textures.fullResColorTextureView!,
+                    this.textures.fullResSplatColorTextureView!,
+                    this.textures.fullResDepthTextureView!,
+                    this.textures.fullResEdgeTextureView!,
+                    this.textures.fullResEdgeBezierTextureView!,
+                    this.textures.fullResCoarseBezierTextureView!,
+                    this.textures.fullResFineBezierTextureView!,
+                    this.textures.dummyTextureView!, // PT not ready yet at setup time
                 );
             }
 
-            if (!this.targetTextureView || !this.targetDepthTextureView || !this.optimTextureView) {
+            if (!this.textures.fullResColorTextureView || !this.textures.fullResDepthTextureView || !this.textures.optimizationColorTextureView) {
                 if (!canceled) requestAnimationFrame(() => void loop());
                 return;
             }
@@ -790,23 +478,23 @@ export class GpuRunner {
                             clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
                             loadOp: "clear",
                             storeOp: "store",
-                            view: this.targetTextureView,
+                            view: this.textures.fullResColorTextureView!,
                         },
                         {
                             clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
                             loadOp: "clear",
                             storeOp: "store",
-                            view: this.targetDepthTextureView!,
+                            view: this.textures.fullResDepthTextureView!,
                         },
                         {
                             clearValue: { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
                             loadOp: "clear",
                             storeOp: "store",
-                            view: this.targetNormalTextureView!,
+                            view: this.textures.fullResNormalTextureView!,
                         },
                     ],
                     depthStencilAttachment: {
-                        view: this.targetZTextureView!,
+                        view: this.textures.fullResZBufferTextureView!,
                         depthClearValue: 1.0,
                         depthLoadOp: "clear",
                         depthStoreOp: "store",
@@ -818,39 +506,39 @@ export class GpuRunner {
             }
 
             // 1b. Render the model into the optim-res (aspect-matched) textures for gradient computation.
-            const optimPassEncoder = commandEncoder.beginRenderPass({
-                label: "mesh render pass (optim res)",
+            const optimizationPassEncoder = commandEncoder.beginRenderPass({
+                label: "mesh render pass (optimization res)",
                 ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.MeshOptimRaster) } : {}),
                 colorAttachments: [
                     {
                         clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
                         loadOp: "clear",
                         storeOp: "store",
-                        view: this.optimTextureView!,
+                        view: this.textures.optimizationColorTextureView!,
                     },
                     {
                         clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
                         loadOp: "clear",
                         storeOp: "store",
-                        view: this.optimDepthTextureView!,
+                        view: this.textures.optimizationDepthTextureView!,
                     },
                     {
                         clearValue: { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
                         loadOp: "clear",
                         storeOp: "store",
-                        view: this.optimNormalTextureView!,
+                        view: this.textures.optimizationNormalTextureView!,
                     },
                 ],
                 depthStencilAttachment: {
-                    view: this.optimZTextureView!,
+                    view: this.textures.optimizationZBufferTextureView!,
                     depthClearValue: 1.0,
                     depthLoadOp: "clear",
                     depthStoreOp: "store",
                 },
             });
-            this.envmapPipelineManager.addDraw(optimPassEncoder);
-            this.meshRenderPipelineManager.addDraw(optimPassEncoder, this.matcapTextureView);
-            optimPassEncoder.end();
+            this.envmapPipelineManager.addDraw(optimizationPassEncoder);
+            this.meshRenderPipelineManager.addDraw(optimizationPassEncoder, this.matcapTextureView);
+            optimizationPassEncoder.end();
 
             // 1b.5 Path trace pass — accumulates one sample per pixel into the PT output texture.
             // The PT output is used as the target for the splat/bezier optimizers instead of
@@ -865,17 +553,17 @@ export class GpuRunner {
 
             // Use dataset view if available, else PT output, else raster fallback.
             const ptOutputView = this.pathTracePipelineManager.outputTextureView;
-            const optimTargetView = datasetView ?? ptOutputView ?? this.optimTextureView!;
+            const optimizationTargetView = datasetView ?? ptOutputView ?? this.textures.optimizationColorTextureView!;
 
             // 1c. Run separable blur on targets if enabled
             if (this.viewerState.compareBlurred) {
                 this.blurManager.addDispatches(
                     commandEncoder,
-                    optimTargetView,
-                    this.optimBlurredTextureView!,
-                    this.optimTempTextureView!,
-                    this.optimWidth,
-                    this.optimHeight,
+                    optimizationTargetView,
+                    this.textures.optimizationBlurredTextureView!,
+                    this.textures.optimizationBlurTempTextureView!,
+                    this.textures.optimizationWidth,
+                    this.textures.optimizationHeight,
                     this.viewerState.blurRadius,
                     this.viewerState.blurRadius / 2,
                     true, // isSrgb
@@ -883,11 +571,11 @@ export class GpuRunner {
                 );
                 this.blurManager.addDispatches(
                     commandEncoder,
-                    this.optimDepthTextureView!,
-                    this.optimBlurredDepthTextureView!,
-                    this.optimTempTextureView!,
-                    this.optimWidth,
-                    this.optimHeight,
+                    this.textures.optimizationDepthTextureView!,
+                    this.textures.optimizationBlurredDepthTextureView!,
+                    this.textures.optimizationBlurTempTextureView!,
+                    this.textures.optimizationWidth,
+                    this.textures.optimizationHeight,
                     this.viewerState.blurRadius,
                     this.viewerState.blurRadius / 2,
                     false, // isSrgb
@@ -898,12 +586,12 @@ export class GpuRunner {
             if (this.viewerState.coarseColorBeziersEnabled) {
                 this.depthAwareBlurManager.addDispatches(
                     commandEncoder,
-                    optimTargetView,
-                    this.optimDepthTextureView!,
-                    this.optimNormalTextureView!,
-                    this.optimDepthAwareBlurredTextureView!,
-                    this.optimWidth,
-                    this.optimHeight,
+                    optimizationTargetView,
+                    this.textures.optimizationDepthTextureView!,
+                    this.textures.optimizationNormalTextureView!,
+                    this.textures.optimizationDepthAwareBlurredTextureView!,
+                    this.textures.optimizationWidth,
+                    this.textures.optimizationHeight,
                     15,
                     profWrites(GpuProfilingPair.DepthAwareBlur),
                 );
@@ -911,40 +599,40 @@ export class GpuRunner {
             
             // Update backward targets for all optimizers to point to current frame's target view
             this.splatOptimizerManager.setBackwardTarget(
-                this.viewerState.compareBlurred ? this.optimBlurredTextureView! : optimTargetView,
-                this.viewerState.compareBlurred ? this.optimBlurredDepthTextureView! : this.optimDepthTextureView!,
-                this.optimWidth,
-                this.optimHeight
+                this.viewerState.compareBlurred ? this.textures.optimizationBlurredTextureView! : optimizationTargetView,
+                this.viewerState.compareBlurred ? this.textures.optimizationBlurredDepthTextureView! : this.textures.optimizationDepthTextureView!,
+                this.textures.optimizationWidth,
+                this.textures.optimizationHeight
             );
 
             if (this.viewerState.coarseColorBeziersEnabled) {
                 this.coarseColorLayerBezierManager.setBackwardTarget(
-                    this.optimDepthAwareBlurredTextureView!,
-                    this.optimDepthTextureView!,
-                    this.optimSplatTextureView!,
-                    this.optimNormalTextureView!,
-                    this.optimWidth,
-                    this.optimHeight,
+                    this.textures.optimizationDepthAwareBlurredTextureView!,
+                    this.textures.optimizationDepthTextureView!,
+                    this.textures.optimizationSplatColorTextureView!,
+                    this.textures.optimizationNormalTextureView!,
+                    this.textures.optimizationWidth,
+                    this.textures.optimizationHeight,
                 );
             }
             if (this.viewerState.fineColorBeziersEnabled) {
                 this.fineColorLayerBezierManager.setBackwardTarget(
-                    optimTargetView,
-                    this.optimDepthTextureView!,
-                    this.optimSplatTextureView!,
-                    this.optimNormalTextureView!,
-                    this.optimWidth,
-                    this.optimHeight,
+                    optimizationTargetView,
+                    this.textures.optimizationDepthTextureView!,
+                    this.textures.optimizationSplatColorTextureView!,
+                    this.textures.optimizationNormalTextureView!,
+                    this.textures.optimizationWidth,
+                    this.textures.optimizationHeight,
                 );
             }
             if (this.viewerState.edgeBeziersEnabled) {
                 this.edgeLayerBezierManager.setBackwardTarget(
-                    this.optimEdgeTextureView!,
-                    this.optimDepthTextureView!,
-                    this.dummyTextureView!,
-                    this.optimNormalTextureView!,
-                    this.optimWidth,
-                    this.optimHeight,
+                    this.textures.optimizationEdgeTextureView!,
+                    this.textures.optimizationDepthTextureView!,
+                    this.textures.dummyTextureView!,
+                    this.textures.optimizationNormalTextureView!,
+                    this.textures.optimizationWidth,
+                    this.textures.optimizationHeight,
                 );
             }
 
@@ -957,13 +645,13 @@ export class GpuRunner {
             if (this.viewerState.fineColorBeziersEnabled) this.fineColorLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
             if (this.viewerState.edgeBeziersEnabled) this.edgeLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
 
-            // Edge detection (optim res)
-            const edgeOptimPass = commandEncoder.beginComputePass({
-                label: "splat edge detection (optim res)",
+            // Edge detection (optimization res)
+            const edgeOptimizationPass = commandEncoder.beginComputePass({
+                label: "splat edge detection (optimization res)",
                 ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.SplatEdgeDetectOptim) } : {}),
             });
-            this.splatOptimizerManager.addEdgeDispatches(edgeOptimPass, this.optimWidth, this.optimHeight);
-            edgeOptimPass.end();
+            this.splatOptimizerManager.addEdgeDispatches(edgeOptimizationPass, this.textures.optimizationWidth, this.textures.optimizationHeight);
+            edgeOptimizationPass.end();
 
             // Splat optimization
             const splatPause = this.viewerState.splatTrainingPaused || defaultPause;
@@ -1031,35 +719,35 @@ export class GpuRunner {
             }
 
             if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
-                this.splatOptimizerManager.setEdgeTarget(this.targetDepthTextureView!, this.fullEdgeTextureView!, this.targetNormalTextureView!);
+                this.splatOptimizerManager.setEdgeTarget(this.textures.fullResDepthTextureView!, this.textures.fullResEdgeTextureView!, this.textures.fullResNormalTextureView!);
 
                 const edgeFullPass = commandEncoder.beginComputePass({
                     label: "splat edge detection (full res)",
                     ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.EdgeDetectFull) } : {}),
                 });
-                this.splatOptimizerManager.addEdgeDispatches(edgeFullPass, fullW, fullH);
+                this.splatOptimizerManager.addEdgeDispatches(edgeFullPass, fullResWidth, fullResHeight);
                 edgeFullPass.end();
                 // Reset target for next frame
-                this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView!, this.optimEdgeTextureView!, this.optimNormalTextureView!);
+                this.splatOptimizerManager.setEdgeTarget(this.textures.optimizationDepthTextureView!, this.textures.optimizationEdgeTextureView!, this.textures.optimizationNormalTextureView!);
             }
 
-            // 3. Render Pass (Optim-Res)
+            // 3. Render Pass (Optimization-Res)
             // Group Splat and Coarse Bezier which target the same texture
-            this.splatForwardManager.setTarget(this.optimSplatTextureView!, this.optimSplatDepthTextureView!, this.optimWidth, this.optimHeight);
-            this.baseColorBezierForwardManager.setTarget(this.optimSplatTextureView!, this.optimWidth, this.optimHeight);
+            this.splatForwardManager.setTarget(this.textures.optimizationSplatColorTextureView!, this.textures.optimizationSplatDepthTextureView!, this.textures.optimizationWidth, this.textures.optimizationHeight);
+            this.baseColorBezierForwardManager.setTarget(this.textures.optimizationSplatColorTextureView!, this.textures.optimizationWidth, this.textures.optimizationHeight);
 
-            const optimRenderPass = commandEncoder.beginRenderPass({
-                label: "optim-res render pass",
+            const optimizationRenderPass = commandEncoder.beginRenderPass({
+                label: "optimization-res render pass",
                 ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.SplatForwardOptim) } : {}),
                 colorAttachments: [
                     {
-                        view: this.optimSplatTextureView!,
+                        view: this.textures.optimizationSplatColorTextureView!,
                         clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
                         loadOp: "clear",
                         storeOp: "store",
                     },
                     {
-                        view: this.optimSplatDepthTextureView!,
+                        view: this.textures.optimizationSplatDepthTextureView!,
                         clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
                         loadOp: "clear",
                         storeOp: "store",
@@ -1067,16 +755,16 @@ export class GpuRunner {
                 ],
             });
 
-            this.splatForwardManager.render(optimRenderPass, this.viewerState.splatsEnabled);
+            this.splatForwardManager.render(optimizationRenderPass, this.viewerState.splatsEnabled);
             if (this.viewerState.coarseColorBeziersEnabled) {
-                this.baseColorBezierForwardManager.render(optimRenderPass, true);
+                this.baseColorBezierForwardManager.render(optimizationRenderPass, true);
             }
-            optimRenderPass.end();
+            optimizationRenderPass.end();
 
             // 4. Full-res Visualization Renders
             if (!this.viewerState.viewportRenderingFrozen || needsTurntableExportLayers) {
                 // Splat Full-res
-                this.splatForwardManager.setTarget(this.fullSplatTextureView!, this.fullSplatDepthTextureView!, fullW, fullH);
+                this.splatForwardManager.setTarget(this.textures.fullResSplatColorTextureView!, this.textures.fullResSplatDepthTextureView!, fullResWidth, fullResHeight);
                 this.splatForwardManager.addDispatches(
                     commandEncoder, 
                     true, 
@@ -1086,7 +774,7 @@ export class GpuRunner {
                 
                 // Edge Bezier Full-res
                 if (this.viewerState.edgeBeziersEnabled) {
-                    this.bezierForwardManager.setTarget(this.fullBezierTextureView!, fullW, fullH);
+                    this.bezierForwardManager.setTarget(this.textures.fullResEdgeBezierTextureView!, fullResWidth, fullResHeight);
                     this.bezierForwardManager.addDispatches(
                         commandEncoder, 
                         true,
@@ -1096,7 +784,7 @@ export class GpuRunner {
                 
                 // Coarse Bezier Full-res
                 if (this.viewerState.coarseColorBeziersEnabled) {
-                    this.baseColorBezierForwardManager.setTarget(this.fullBaseColorBezierTextureView!, fullW, fullH);
+                    this.baseColorBezierForwardManager.setTarget(this.textures.fullResCoarseBezierTextureView!, fullResWidth, fullResHeight);
                     this.baseColorBezierForwardManager.addDispatches(
                         commandEncoder, 
                         true,
@@ -1106,7 +794,7 @@ export class GpuRunner {
                 
                 // Fine Bezier Full-res
                 if (this.viewerState.fineColorBeziersEnabled) {
-                    this.colorBezierForwardManager.setTarget(this.fullColorBezierTextureView!, fullW, fullH);
+                    this.colorBezierForwardManager.setTarget(this.textures.fullResFineBezierTextureView!, fullResWidth, fullResHeight);
                     this.colorBezierForwardManager.addDispatches(
                         commandEncoder, 
                         true,
@@ -1116,15 +804,15 @@ export class GpuRunner {
             }
 
             // 5. Render Splat Visualization to Screen Views (uses full-res textures)
-            const ptView = this.pathTracePipelineManager.outputTextureView ?? this.dummyTextureView!;
+            const ptView = this.pathTracePipelineManager.outputTextureView ?? this.textures.dummyTextureView!;
             this.splatOptimizerManager.setRenderTarget(
-                this.targetTextureView!,
-                this.fullSplatTextureView!,
-                this.targetDepthTextureView!,
-                this.fullEdgeTextureView!,
-                this.fullBezierTextureView!,
-                this.fullBaseColorBezierTextureView!,
-                this.fullColorBezierTextureView!,
+                this.textures.fullResColorTextureView!,
+                this.textures.fullResSplatColorTextureView!,
+                this.textures.fullResDepthTextureView!,
+                this.textures.fullResEdgeTextureView!,
+                this.textures.fullResEdgeBezierTextureView!,
+                this.textures.fullResCoarseBezierTextureView!,
+                this.textures.fullResFineBezierTextureView!,
                 ptView,
             );
 
@@ -1214,12 +902,12 @@ export class GpuRunner {
             }
 
             this.turntable.resolvePendingCapture(
-                this.fullWidth,
-                this.fullHeight,
-                this.fullSplatTexture,
-                this.fullBaseColorBezierTexture,
-                this.fullColorBezierTexture,
-                this.fullBezierTexture,
+                fullResWidth,
+                fullResHeight,
+                this.textures.fullResSplatColorTexture,
+                this.textures.fullResCoarseBezierTexture,
+                this.textures.fullResFineBezierTexture,
+                this.textures.fullResEdgeBezierTexture,
             );
 
             handle = requestAnimationFrame(loop);

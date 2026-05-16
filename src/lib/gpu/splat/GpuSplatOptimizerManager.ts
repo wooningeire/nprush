@@ -364,9 +364,9 @@ export class GpuSplatOptimizerManager {
     }
 
     addBinningDispatches(pass: GPUComputePassEncoder, vpMat: Mat4, commandEncoder: GPUCommandEncoder) {
-        const { width: widthes, height } = this.dims;
-        if (widthes === 0 || height === 0) return;
-        const gridWidth = Math.ceil(widthes / 16);
+        const { width, height } = this.dims;
+        if (width === 0 || height === 0) return;
+        const gridWidth = Math.ceil(width / 16);
         const gridHeight = Math.ceil(height / 16);
         const numTiles = gridWidth * gridHeight;
 
@@ -375,7 +375,7 @@ export class GpuSplatOptimizerManager {
             commandEncoder.clearBuffer(this.binningManager.tileStartsBuffer, 0, numTiles * 4);
             commandEncoder.clearBuffer(this.binningManager.tileEndsBuffer, 0, numTiles * 4);
         } else {
-            this.binningManager.addDispatches(pass, vpMat, widthes, height);
+            this.binningManager.addDispatches(pass, vpMat, width, height);
         }
     }
 

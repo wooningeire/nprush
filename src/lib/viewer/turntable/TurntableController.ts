@@ -139,20 +139,20 @@ export class TurntableController {
 	 * Prerender path-traced views into a GPU-resident dataset.
 	 * Blocks (via rAF) until all views have converged.
 	 */
-	async prerenderDataset(optimWidth: number, optimHeight: number): Promise<void> {
+	async prerenderDataset(optimizationWidth: number, optimizationHeight: number): Promise<void> {
 		const viewerState = this.viewerState;
 		const numViews = viewerState.multiviewNumViews as number;
 		const samplesPerView = viewerState.turntableMinSamplesPerView as number;
 
-		// Wait until optim textures are ready (loop may not have run yet).
-		while (optimWidth === 0) {
+		// Wait until optimization textures are ready (loop may not have run yet).
+		while (optimizationWidth === 0) {
 			await new Promise<void>(r => requestAnimationFrame(() => r()));
 		}
 
 		// Destroy any previous dataset and allocate fresh slots.
 		this.multiviewDataset?.destroy();
 		this.multiviewDataset = null;
-		const dataset = new MultiviewDataset(this.device, numViews, optimWidth, optimHeight);
+		const dataset = new MultiviewDataset(this.device, numViews, optimizationWidth, optimizationHeight);
 
 		viewerState.multiviewPrerendering = true;
 		viewerState.multiviewPrerenderProgress = 0;
@@ -193,7 +193,7 @@ export class TurntableController {
 					enc.copyTextureToTexture(
 						{ texture: ptTex },
 						{ texture: dataset.textures[i] },
-						[optimWidth, optimHeight, 1],
+						[optimizationWidth, optimizationHeight, 1],
 					);
 					this.device.queue.submit([enc.finish()]);
 				}

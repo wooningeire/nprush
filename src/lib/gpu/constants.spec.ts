@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { constants, injectWgslConstants } from './constants';
 
 describe('constants', () => {
-	it('PIXEL_LOSS_MAX covers at least the default square optim resolution', () => {
+	it('PIXEL_LOSS_MAX covers at least the default square optimization resolution', () => {
 		expect(constants.PIXEL_LOSS_MAX).toBeGreaterThanOrEqual(
-			constants.OPTIM_SHORT * constants.OPTIM_SHORT,
+			constants.OPTIMIZATION_SHORT * constants.OPTIMIZATION_SHORT,
 		);
 	});
 });
