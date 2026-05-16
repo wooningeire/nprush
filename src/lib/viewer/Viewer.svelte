@@ -1,8 +1,9 @@
 <script lang="ts">
 import Toasts from "./Toasts.svelte";
 import BrushstrokeOptimizer from "./BrushstrokeOptimizer.svelte";
+import MaterialCreator from "./material-creator/MaterialCreator.svelte";
 
-type ViewMode = "brushstroke-optimizer" | "materials";
+type ViewMode = "brushstroke-optimizer" | "material-creator";
 let mode = $state<ViewMode>("brushstroke-optimizer");
 </script>
 
@@ -17,8 +18,8 @@ let mode = $state<ViewMode>("brushstroke-optimizer");
             </button>
 
             <button
-                class:active={mode === "materials"}
-                onclick={() => mode = "materials"}
+                class:active={mode === "material-creator"}
+                onclick={() => mode = "material-creator"}
             >
                 Materials
             </button>
@@ -33,9 +34,11 @@ let mode = $state<ViewMode>("brushstroke-optimizer");
         </view-mode-container>
 
         <view-mode-container
-            class:visible={mode === "materials"}
+            class:visible={mode === "material-creator"}
         >
-            <materials-content></materials-content>
+            <MaterialCreator
+                active={mode === "material-creator"}
+            />
         </view-mode-container>
     </main-content>
 
