@@ -14,7 +14,6 @@ import type { ViewerState } from "./ViewerState.svelte.ts";
 import { RENDER_MODE_MULTIVIEW } from "./renderMode.ts";
 import { TurntableController } from "./turntable/TurntableController.ts";
 import { GpuPerformanceMeasurementBufferManager } from "$/gpu/performanceMeasurement/GpuPerformanceMeasurementBufferManager.ts";
-import { GpuProfilingPair, GPU_PROFILER_PAIR_COUNT } from "$/gpu/performanceMeasurement/gpuProfilerPairs.ts";
 import { vec3 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants.ts";
 import { readTextureToImageData, imageDataToBlob } from "$/gpu/file-save/readback.ts";
@@ -439,10 +438,12 @@ export class GpuRunner {
             });
 
             const activeProfilerIndices = new Set<number>();
-            const recordGpu = !!(this.gpuPerfBuffers && this.viewerState.gpuProfilingEnabled);
-            const profWrites = (idx: number) => {
-                if (recordGpu) activeProfilerIndices.add(idx);
-                return recordGpu ? this.gpuPerfBuffers!.writes(idx) : undefined;
+            const recordGpu = this.gpuPerfBuffers !== null && this.viewerState.gpuProfilingEnabled;
+            const profWrites = (label: string) => {
+                if (!recordGpu) return undefined;
+                const idx = this.gpuPerfBuffers!.getIndex(label);
+                activeProfilerIndices.add(idx);
+                return this.gpuPerfBuffers!.writes(idx);
             };
 
             // Frozen viewport skips full-resolution splat/bezier passes unless we must
@@ -479,7 +480,7 @@ export class GpuRunner {
             if (!this.viewerState.viewportRenderingFrozen) {
                 const spherePassEncoder = commandEncoder.beginRenderPass({
                     label: "mesh render pass (full res)",
-                    ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.MeshFullRaster) } : {}),
+                    ...(recordGpu ? { timestampWrites: profWrites("Mesh: full viewport") } : {}),
                     colorAttachments: [
                         {
                             clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
@@ -515,7 +516,7 @@ export class GpuRunner {
             // 1b. Render the model into the optim-res (aspect-matched) textures for gradient computation.
             const optimizationPassEncoder = commandEncoder.beginRenderPass({
                 label: "mesh render pass (optimization res)",
-                ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.MeshOptimRaster) } : {}),
+                ...(recordGpu ? { timestampWrites: profWrites("Mesh: optim target") } : {}),
                 colorAttachments: [
                     {
                         clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
@@ -554,7 +555,7 @@ export class GpuRunner {
             if (!datasetView) {
                 this.pathTracePipelineManager.addDispatches(
                     commandEncoder,
-                    profWrites(GpuProfilingPair.PathTrace),
+                    profWrites("Path trace (compute)"),
                 );
             }
 
@@ -574,7 +575,7 @@ export class GpuRunner {
                     this.viewerState.blurRadius,
                     this.viewerState.blurRadius / 2,
                     true, // isSrgb
-                    profWrites(GpuProfilingPair.BlurOptimTarget),
+                    profWrites("Blur: optim color"),
                 );
                 this.blurManager.addDispatches(
                     commandEncoder,
@@ -586,7 +587,7 @@ export class GpuRunner {
                     this.viewerState.blurRadius,
                     this.viewerState.blurRadius / 2,
                     false, // isSrgb
-                    profWrites(GpuProfilingPair.BlurOptimDepth),
+                    profWrites("Blur: optim depth"),
                 );
             }
             
@@ -600,7 +601,7 @@ export class GpuRunner {
                     this.textures.optimizationWidth,
                     this.textures.optimizationHeight,
                     15,
-                    profWrites(GpuProfilingPair.DepthAwareBlur),
+                    profWrites("Blur: depth-aware"),
                 );
             }
             
@@ -663,7 +664,7 @@ export class GpuRunner {
             // Edge detection (optimization res)
             const edgeOptimizationPass = commandEncoder.beginComputePass({
                 label: "splat edge detection (optimization res)",
-                ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.SplatEdgeDetectOptim) } : {}),
+                ...(recordGpu ? { timestampWrites: profWrites("Splat: edge detect (optim)") } : {}),
             });
             this.splatOptimizerManager.addEdgeDispatches(edgeOptimizationPass, this.textures.optimizationWidth, this.textures.optimizationHeight);
             edgeOptimizationPass.end();
@@ -673,7 +674,7 @@ export class GpuRunner {
             if (this.viewerState.splatsEnabled && !splatPause) {
                 const splatOptPass = commandEncoder.beginComputePass({
                     label: "splat optimization compute",
-                    ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.SplatOptimization) } : {}),
+                    ...(recordGpu ? { timestampWrites: profWrites("Splat: optimization") } : {}),
                 });
                 this.splatOptimizerManager.addBinningDispatches(splatOptPass, sortVp);
                 this.splatOptimizerManager.addOptimizationDispatches(splatOptPass);
@@ -690,7 +691,7 @@ export class GpuRunner {
                 if (!(this.viewerState.coarseColorBezierTrainingPaused || defaultPause)) {
                     const coarseOptPass = commandEncoder.beginComputePass({
                         label: "coarse bezier optimization compute",
-                        ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierCoarseOptimization) } : {}),
+                        ...(recordGpu ? { timestampWrites: profWrites("Bézier (coarse): optimization") } : {}),
                     });
                     this.coarseColorLayerBezierManager.addBinningDispatches(coarseOptPass, sortVp);
                     this.coarseColorLayerBezierManager.addOptimizationDispatches(coarseOptPass);
@@ -706,7 +707,7 @@ export class GpuRunner {
                 if (!(this.viewerState.fineColorBezierTrainingPaused || defaultPause)) {
                     const fineOptPass = commandEncoder.beginComputePass({
                         label: "fine bezier optimization compute",
-                        ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierFineOptimization) } : {}),
+                        ...(recordGpu ? { timestampWrites: profWrites("Bézier (fine): optimization") } : {}),
                     });
                     this.fineColorLayerBezierManager.addBinningDispatches(fineOptPass, sortVp);
                     this.fineColorLayerBezierManager.addOptimizationDispatches(fineOptPass);
@@ -722,7 +723,7 @@ export class GpuRunner {
                 if (!(this.viewerState.edgeBezierTrainingPaused || defaultPause)) {
                     const edgeOptPass = commandEncoder.beginComputePass({
                         label: "edge bezier optimization compute",
-                        ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierEdgeOptimization) } : {}),
+                        ...(recordGpu ? { timestampWrites: profWrites("Bézier (edge): optimization") } : {}),
                     });
                     this.edgeLayerBezierManager.addBinningDispatches(edgeOptPass, sortVp);
                     this.edgeLayerBezierManager.addOptimizationDispatches(edgeOptPass);
@@ -738,7 +739,7 @@ export class GpuRunner {
 
                 const edgeFullPass = commandEncoder.beginComputePass({
                     label: "splat edge detection (full res)",
-                    ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.EdgeDetectFull) } : {}),
+                    ...(recordGpu ? { timestampWrites: profWrites("Edge detect (display res)") } : {}),
                 });
                 this.splatOptimizerManager.addEdgeDispatches(edgeFullPass, displayResWidth, displayResHeight);
                 edgeFullPass.end();
@@ -753,7 +754,7 @@ export class GpuRunner {
 
             const optimizationRenderPass = commandEncoder.beginRenderPass({
                 label: "optimization-res render pass",
-                ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.SplatForwardOptim) } : {}),
+                ...(recordGpu ? { timestampWrites: profWrites("Splat: forward (optim res)") } : {}),
                 colorAttachments: [
                     {
                         view: this.textures.optimizationSplatColorTextureView!,
@@ -784,7 +785,7 @@ export class GpuRunner {
                     commandEncoder, 
                     true, 
                     this.viewerState.splatsEnabled,
-                    recordGpu ? profWrites(GpuProfilingPair.SplatForwardFull) : undefined
+                    recordGpu ? profWrites("Splat: forward (display res)") : undefined
                 );
                 
                 // Edge Bezier Full-res
@@ -793,7 +794,7 @@ export class GpuRunner {
                     this.edgeBezierForwardManager.addDispatches(
                         commandEncoder, 
                         true,
-                        recordGpu ? profWrites(GpuProfilingPair.BezierEdgeForwardFull) : undefined
+                        recordGpu ? profWrites("Bézier (edge): forward (display res)") : undefined
                     );
                 }
                 
@@ -803,7 +804,7 @@ export class GpuRunner {
                     this.coarseColorBezierForwardManager.addDispatches(
                         commandEncoder, 
                         true,
-                        recordGpu ? profWrites(GpuProfilingPair.BezierCoarseForwardFull) : undefined
+                        recordGpu ? profWrites("Bézier (coarse): forward (display res)") : undefined
                     );
                 }
                 
@@ -813,7 +814,7 @@ export class GpuRunner {
                     this.fineColorBezierForwardManager.addDispatches(
                         commandEncoder, 
                         true,
-                        recordGpu ? profWrites(GpuProfilingPair.BezierFineForwardFull) : undefined
+                        recordGpu ? profWrites("Bézier (fine): forward (display res)") : undefined
                     );
                 }
             }
@@ -861,7 +862,7 @@ export class GpuRunner {
                 
                 const finalPassEncoder = commandEncoder.beginRenderPass({
                     label: `final render pass for ${id}`,
-                    ...(recordGpu && id === "target" ? { timestampWrites: profWrites(GpuProfilingPair.FinalCompositor) } : {}),
+                    ...(recordGpu && id === "target" ? { timestampWrites: profWrites("Final compositor (screen)") } : {}),
                     colorAttachments: [
                         {
                             clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
@@ -885,14 +886,18 @@ export class GpuRunner {
                 try {
                     await this.device.queue.onSubmittedWorkDone();
                     const deltasNs = await this.gpuPerfBuffers.mapDeltasNanoseconds(activeProfilerIndices);
-                    const msArr = deltasNs.map(ns => ns === null ? null : Number(ns) / 1e6);
-                    this.viewerState.setGpuProfilingFrameMs(msArr);
+                    const labels = this.gpuPerfBuffers.getLabels();
+                    const entries = labels.map((label, idx) => ({
+                        label,
+                        ms: deltasNs[idx] === null ? null : Number(deltasNs[idx]) / 1e6
+                    }));
+                    this.viewerState.setGpuProfilingFrameMs(entries);
                 } catch (e) {
                     console.warn("[gpu profiler]", e);
                 }
             } else {
                 // If profiling is disabled, wipe with nulls to avoid stale charts
-                this.viewerState.setGpuProfilingFrameMs(Array(GPU_PROFILER_PAIR_COUNT).fill(null));
+                this.viewerState.setGpuProfilingFrameMs([]);
             }
 
             if (canceled) return;

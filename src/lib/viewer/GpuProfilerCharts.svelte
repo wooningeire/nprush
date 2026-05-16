@@ -1,13 +1,5 @@
 <script lang="ts">
-import {
-    GPU_PROFILER_LABELS,
-    GPU_PROFILER_PAIR_COUNT,
-} from "$/gpu/performanceMeasurement/gpuProfilerPairs";
 import type { ViewerState } from "./ViewerState.svelte.ts";
-
-function rowSum(row: readonly (number | null)[]): number {
-    return row.reduce((a, b) => a + (b ?? 0), 0);
-}
 
 const {
     viewerState,
@@ -19,11 +11,9 @@ const W = 220;
 const H = 72;
 const PAD = 6;
 
-const frameTotals = $derived(
-    viewerState.gpuProfilingHistoryFrames.map((row) => rowSum(row)),
-);
+const frameTotals = $derived(viewerState.gpuProfilingHistoryFrames);
 
-const latestTotal = $derived(rowSum(viewerState.gpuProfilingMs));
+const latestTotal = $derived(viewerState.gpuProfilingEntries.reduce((sum, e) => sum + (e.ms ?? 0), 0));
 
 const sparkYmax = $derived(Math.max(...frameTotals, 1e-6));
 
@@ -44,7 +34,7 @@ const sparkPoints = $derived.by(() => {
 });
 
 const barMaxMs = $derived.by(() => {
-    const msValues = viewerState.gpuProfilingMs.filter((v): v is number => v !== null);
+    const msValues = viewerState.gpuProfilingEntries.map(e => e.ms).filter((v): v is number => v !== null);
     return msValues.length > 0 ? Math.max(...msValues, 1e-6) : 1e-6;
 });
 </script>
@@ -91,12 +81,12 @@ const barMaxMs = $derived.by(() => {
             {/if}
         </div>
 
-        {#if viewerState.gpuProfilingMs.length === GPU_PROFILER_PAIR_COUNT}
+        {#if viewerState.gpuProfilingEntries.length > 0}
             <div class="gpu-pass-bars-heading">Latest frame — passes (total {latestTotal.toFixed(2)} ms)</div>
             <div class="gpu-pass-bars" role="list">
-                {#each viewerState.gpuProfilingMs as ms, idx (idx)}
+                {#each viewerState.gpuProfilingEntries as { label, ms }, idx (label)}
                     <div class="gpu-pass-row" role="listitem">
-                        <div class="gpu-pass-label">{GPU_PROFILER_LABELS[idx] ?? idx}</div>
+                        <div class="gpu-pass-label">{label}</div>
                         <div class="gpu-pass-bar-track" aria-valuemin={0} aria-valuemax={barMaxMs} aria-valuenow={ms ?? 0}>
                             <div
                                 class="gpu-pass-bar-fill"

@@ -1,5 +1,3 @@
-import { GPU_PROFILER_PAIR_COUNT } from "./gpuProfilerPairs";
-
 /**
  * WebGPU timestamp queries (needs `timestamp-query` device feature).
  *
@@ -15,9 +13,11 @@ export class GpuPerformanceMeasurementBufferManager {
     readonly resultBuffer: GPUBuffer;
     readonly pairCount: number;
 
+    private labelToIndex = new Map<string, number>();
+
     constructor({
         device,
-        pairCount = GPU_PROFILER_PAIR_COUNT,
+        pairCount = 64,
     }: {
         device: GPUDevice;
         pairCount?: number;
@@ -49,6 +49,25 @@ export class GpuPerformanceMeasurementBufferManager {
         this.querySet = querySet;
         this.resolveBuffer = resolveBuffer;
         this.resultBuffer = resultBuffer;
+    }
+
+    getIndex(label: string): number {
+        if (!this.labelToIndex.has(label)) {
+            if (this.labelToIndex.size >= this.pairCount) {
+                console.warn(`Exceeded max GPU profiling pairs (${this.pairCount})`);
+                return 0; // fallback
+            }
+            this.labelToIndex.set(label, this.labelToIndex.size);
+        }
+        return this.labelToIndex.get(label)!;
+    }
+
+    getLabels(): string[] {
+        const labels = new Array(this.labelToIndex.size);
+        for (const [label, index] of this.labelToIndex.entries()) {
+            labels[index] = label;
+        }
+        return labels;
     }
 
     writes(pairIndex: number): NonNullable<GPUComputePassDescriptor["timestampWrites"]> {

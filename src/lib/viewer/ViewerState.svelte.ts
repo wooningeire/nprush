@@ -12,7 +12,6 @@ import {
 } from "./renderMode.ts";
 import { evaluateTurntablePath, type TurntablePathParams } from "./turntable/turntablePath.ts";
 import { runTurntableExport } from "./turntable/turntableExport.ts";
-import { GPU_PROFILER_PAIR_COUNT, GPU_PROFILER_HISTORY_FRAMES } from "$/gpu/performanceMeasurement/gpuProfilerPairs";
 import { showToast, dismissToast } from "./toast.svelte.ts";
 import { loadInitialAssetsAndGpu } from "../gpu/setup/loadInitialAssetsAndGpu.ts";
 
@@ -46,13 +45,14 @@ export class ViewerState {
 
     gpuTimestampQuerySupported = $state(false);
     gpuProfilingEnabled = $state(false);
-    gpuProfilingMs = $state<(number | null)[]>(Array(GPU_PROFILER_PAIR_COUNT).fill(null));
-    gpuProfilingHistoryFrames = $state<(number | null)[][]>([]);
+    gpuProfilingEntries = $state<{label: string, ms: number | null}[]>([]);
+    gpuProfilingHistoryFrames = $state<number[]>([]);
 
-    setGpuProfilingFrameMs(msPerPair: readonly (number | null)[]) {
-        this.gpuProfilingMs = [...msPerPair];
-        const next = [...this.gpuProfilingHistoryFrames, [...msPerPair]];
-        const cap = GPU_PROFILER_HISTORY_FRAMES;
+    setGpuProfilingFrameMs(entries: {label: string, ms: number | null}[]) {
+        this.gpuProfilingEntries = entries;
+        const total = entries.reduce((sum, e) => sum + (e.ms ?? 0), 0);
+        const next = [...this.gpuProfilingHistoryFrames, total];
+        const cap = 180;
         this.gpuProfilingHistoryFrames = next.length > cap ? next.slice(-cap) : next;
     }
 
