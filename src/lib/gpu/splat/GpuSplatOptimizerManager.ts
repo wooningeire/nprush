@@ -32,6 +32,8 @@ export class GpuSplatOptimizerManager {
     get tileEndsBuffer() { return this.binningManager.tileEndsBuffer; }
     get binningAtomicBuffer() { return this.binningManager.binningAtomicBuffer; }
 
+    
+
     private readonly backwardPipeline: GPUComputePipeline;
     private readonly stepPipeline: GPUComputePipeline;
     private readonly adcPipeline: GPUComputePipeline;

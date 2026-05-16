@@ -12,16 +12,13 @@ import { GpuPathTracePipelineManager } from "../gpu/pathtrace/GpuPathTracePipeli
 import type { MeshData } from "../gpu/file-load/loadGlb.ts";
 import type { ViewerState } from "./ViewerState.svelte.ts";
 import { RENDER_MODE_MULTIVIEW } from "./renderMode.ts";
-import { evaluateTurntablePath } from "./turntable/turntablePath.ts";
-import { compositeTurntableLayers } from "./turntable/turntableComposite.ts";
-import { TurntableFrameCaptureQueue } from "./turntable/turntableFrameCapture.ts";
+import { TurntableController } from "./turntable/TurntableController.ts";
 import { GpuPerformanceMeasurementBufferManager } from "$/gpu/performanceMeasurement/GpuPerformanceMeasurementBufferManager.ts";
 import { GpuProfilingPair, GPU_PROFILER_PAIR_COUNT } from "$/gpu/performanceMeasurement/gpuProfilerPairs.ts";
 import { vec3, type Mat4 } from "wgpu-matrix";
 import { constants } from "$/gpu/constants.ts";
 import { computeOptimTextureSize } from "$/gpu/optimTextureSize.ts";
 import { readTextureToImageData, imageDataToBlob } from "$/gpu/file-save/readback.ts";
-import { MultiviewDataset } from "./MultiviewDataset.ts";
 
 const OPTIM_SHORT = constants.OPTIM_SHORT;
 
@@ -42,8 +39,8 @@ export class GpuRunner {
     // against the depth-edge texture. Curves natively represent 1D contours,
     // which is a much better fit for the silhouette target than gaussians.
     readonly edgeLayerBezierManager: GpuBezierOptimizerManager;
-    readonly baseColorLayerBezierManager: GpuBezierOptimizerManager;
-    readonly colorLayerBezierManager: GpuBezierOptimizerManager;
+    readonly coarseColorLayerBezierManager: GpuBezierOptimizerManager;
+    readonly fineColorLayerBezierManager: GpuBezierOptimizerManager;
     readonly splatForwardManager: GpuSplatForwardPipelineManager;
     readonly bezierForwardManager: GpuBezierForwardPipelineManager;
     readonly baseColorBezierForwardManager: GpuBezierForwardPipelineManager;
@@ -87,7 +84,7 @@ export class GpuRunner {
     private fullHeight = 0;
 
     // Optim-res textures (aspect-matched to half-screen)
-    private optimTexture: GPUTexture | null = null;
+    private splatTargetColorTexture: GPUTexture | null = null;
     private optimTextureView: GPUTextureView | null = null;
     private optimDepthTexture: GPUTexture | null = null;
     private optimDepthTextureView: GPUTextureView | null = null;
@@ -117,12 +114,7 @@ export class GpuRunner {
     private optimHeight = 0;
 
     private capturePromise: { resolve: (blob: Blob) => void, reject: (err: Error) => void } | null = null;
-    private readonly turntableCaptureQueue = new TurntableFrameCaptureQueue();
-
-    private multiviewDataset: MultiviewDataset | null = null;
-    /** Dataset slot reused for consecutive frames before resampling; -1 means unset. */
-    private multiviewTrainingHeldDatasetIndex = -1;
-    private multiviewTrainingFramesHeldOnDataset = 0;
+    readonly turntable: TurntableController;
 
     readonly destroy: () => void;
 
@@ -213,12 +205,12 @@ export class GpuRunner {
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
         });
 
-        this.baseColorLayerBezierManager = new GpuBezierOptimizerManager({
+        this.coarseColorLayerBezierManager = new GpuBezierOptimizerManager({
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
         });
 
-        this.colorLayerBezierManager = new GpuBezierOptimizerManager({
+        this.fineColorLayerBezierManager = new GpuBezierOptimizerManager({
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
         });
@@ -241,21 +233,38 @@ export class GpuRunner {
         this.baseColorBezierForwardManager = new GpuBezierForwardPipelineManager({
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
-            bezierBuffer: this.baseColorLayerBezierManager.bezierBuffer,
-            sortOrderBuffer: this.baseColorLayerBezierManager.sortIndicesBuffer,
+            bezierBuffer: this.coarseColorLayerBezierManager.bezierBuffer,
+            sortOrderBuffer: this.coarseColorLayerBezierManager.sortIndicesBuffer,
             brushTexture,
         });
 
         this.colorBezierForwardManager = new GpuBezierForwardPipelineManager({
             device,
             numBeziers: NUM_EDGE_LAYER_BEZIERS,
-            bezierBuffer: this.colorLayerBezierManager.bezierBuffer,
-            sortOrderBuffer: this.colorLayerBezierManager.sortIndicesBuffer,
+            bezierBuffer: this.fineColorLayerBezierManager.bezierBuffer,
+            sortOrderBuffer: this.fineColorLayerBezierManager.sortIndicesBuffer,
             brushTexture,
         });
         
         this.blurManager = new GpuBlurPipelineManager(device);
         this.depthAwareBlurManager = new GpuDepthAwareBlurPipelineManager(device);
+
+        this.turntable = new TurntableController({
+            device,
+            camera,
+            viewerState,
+            managers: {
+                uniformsManager: this.uniformsManager,
+                pathTracePipelineManager: this.pathTracePipelineManager,
+                splatOptimizerManager: this.splatOptimizerManager,
+                edgeLayerBezierManager: this.edgeLayerBezierManager,
+                coarseColorLayerBezierManager: this.coarseColorLayerBezierManager,
+                fineColorLayerBezierManager: this.fineColorLayerBezierManager,
+                bezierForwardManager: this.bezierForwardManager,
+                baseColorBezierForwardManager: this.baseColorBezierForwardManager,
+                colorBezierForwardManager: this.colorBezierForwardManager,
+            },
+        });
 
         this.destroy = $effect.root(() => {
             $effect(() => this.uniformsManager.writeViewProjMat(this.camera.viewProjMat));
@@ -296,18 +305,18 @@ export class GpuRunner {
                 if (this.viewerState.isTurntableRendering) return;
                 this.splatOptimizerManager.resetAdam();
                 this.edgeLayerBezierManager.resetAdam();
-                this.baseColorLayerBezierManager.resetAdam();
-                this.colorLayerBezierManager.resetAdam();
+                this.coarseColorLayerBezierManager.resetAdam();
+                this.fineColorLayerBezierManager.resetAdam();
             });
             /** Bezier optimizers skip multiview; turntable+dataset assigns their VP inside loop(). */
             $effect(() => {
                 if (this.viewerState.renderMode !== RENDER_MODE_MULTIVIEW) {
                     this.edgeLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
-                    this.baseColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
-                    this.colorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
+                    this.coarseColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
+                    this.fineColorLayerBezierManager.writeVPMatrix(this.camera.viewProjMat);
                     this.edgeLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
-                    this.baseColorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
-                    this.colorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+                    this.coarseColorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
+                    this.fineColorLayerBezierManager.writeVPInvMatrix(this.camera.viewProjInvMat);
                 }
             });
             $effect(() => this.bezierForwardManager.writeVPMatrix(this.camera.viewProjMat));
@@ -319,20 +328,20 @@ export class GpuRunner {
                 this.edgeLayerBezierManager.writeMaxWidth(0.005);
                 this.edgeLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.edgeLayerBezierManager.writeBgPenalty(0.0);
-                this.baseColorLayerBezierManager.writeMode(1); // Color+Depth mode
-                this.colorLayerBezierManager.writeMode(1); // Color+Depth mode
-                this.colorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on fine bezier layer
+                this.coarseColorLayerBezierManager.writeMode(1); // Color+Depth mode
+                this.fineColorLayerBezierManager.writeMode(1); // Color+Depth mode
+                this.fineColorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on fine bezier layer
                 // Fine bezier layer: less aggressive killing so thin strokes survive,
                 // but background penalty enabled to kill off-model curves.
-                this.colorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
-                this.colorLayerBezierManager.writeBgPenalty(0.0);
+                this.fineColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
+                this.fineColorLayerBezierManager.writeBgPenalty(0.0);
                 // Coarse bezier layer: no background penalty (blurred target bleeds into bg).
                 // Multiview/turntable sets adam no_kill separately (below) so off-frustum kills
                 // don't remove curves visible from other views. Longer ADC period here dampens
                 // clone/kill churn in ordinary single-view orbit where no_kill stays off.
-                this.baseColorLayerBezierManager.writeMaxWidth(0.1);
-                this.baseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
-                this.baseColorLayerBezierManager.setAdcPeriod(150);
+                this.coarseColorLayerBezierManager.writeMaxWidth(0.1);
+                this.coarseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
+                this.coarseColorLayerBezierManager.setAdcPeriod(150);
             });
             $effect(() => {
                 // Multiview rotates the effective view each frame; single-view turntable
@@ -342,8 +351,8 @@ export class GpuRunner {
                     this.viewerState.renderMode === RENDER_MODE_MULTIVIEW || this.viewerState.isTurntableRendering;
                 this.splatOptimizerManager.writeNoKill(noKillMv);
                 this.edgeLayerBezierManager.writeNoKill(noKillMv);
-                this.baseColorLayerBezierManager.writeNoKill(noKillMv);
-                this.colorLayerBezierManager.writeNoKill(noKillMv);
+                this.coarseColorLayerBezierManager.writeNoKill(noKillMv);
+                this.fineColorLayerBezierManager.writeNoKill(noKillMv);
             });
 
             return () => {
@@ -352,8 +361,8 @@ export class GpuRunner {
                 this.meshRenderPipelineManager.destroy();
                 this.splatOptimizerManager.destroy();
                 this.edgeLayerBezierManager.destroy();
-                this.baseColorLayerBezierManager.destroy();
-                this.colorLayerBezierManager.destroy();
+                this.coarseColorLayerBezierManager.destroy();
+                this.fineColorLayerBezierManager.destroy();
                 this.splatForwardManager.destroy();
                 this.bezierForwardManager.destroy();
                 this.baseColorBezierForwardManager.destroy();
@@ -377,7 +386,7 @@ export class GpuRunner {
                 this.targetBlurredTexture?.destroy();
                 this.targetTempTexture?.destroy();
 
-                this.optimTexture?.destroy();
+                this.splatTargetColorTexture?.destroy();
                 this.optimDepthTexture?.destroy();
                 this.optimZTexture?.destroy();
                 this.optimNormalTexture?.destroy();
@@ -390,7 +399,7 @@ export class GpuRunner {
                 this.optimTempTexture?.destroy();
                 this.dummyTexture?.destroy();
 
-                this.multiviewDataset?.destroy();
+                this.turntable.destroy();
             };
         });
     }
@@ -409,29 +418,9 @@ export class GpuRunner {
      * The promise resolves on the next rAF tick after the GPU readback completes.
      */
     captureTurntableFrame(): Promise<ImageData> {
-        return this.turntableCaptureQueue.enqueue();
+        return this.turntable.captureTurntableFrame();
     }
 
-    private async readTextureToImageData(
-        texture: GPUTexture,
-        width: number,
-        height: number,
-    ): Promise<ImageData> {
-        return readTextureToImageData(this.device, texture, width, height, texture.format);
-    }
-
-    /**
-     * Build a prerendered multiview dataset.
-     *
-     * For each of `numViews` camera positions sampled from the turntable path:
-     *   1. Set the camera to that position.
-     *   2. Accumulate `minSamplesPerView` PT frames (one per rAF tick).
-     *   3. Copy the resolved PT output into a dedicated GPUTexture slot.
-     *
-     * Memory: numViews × (ow × oh × 4 bytes) ≈ 32 × 128×128×4 = 2 MB.
-     * After this returns, `multiviewDataset` is populated and training can
-     * use it as a fixed dataset — no live PT dispatch needed per frame.
-     */
     replaceMesh(mesh: MeshData) {
         this.meshRenderPipelineManager.replaceMesh(mesh);
         const ptMeshes: MeshData[] = [mesh];
@@ -440,109 +429,26 @@ export class GpuRunner {
     }
 
     async prerenderDataset(): Promise<void> {
-        const viewerState = this.viewerState;
-        const numViews = viewerState.multiviewNumViews as number;
-        const samplesPerView = viewerState.turntableMinSamplesPerView as number;
-
         // Wait until optim textures are ready (loop may not have run yet).
         while (!this.optimTextureView || this.optimWidth === 0) {
             await new Promise<void>(r => requestAnimationFrame(() => r()));
         }
-
-        const ow = this.optimWidth;
-        const oh = this.optimHeight;
-
-        // Destroy any previous dataset and allocate fresh slots.
-        this.multiviewDataset?.destroy();
-        this.multiviewDataset = null;
-        const dataset = new MultiviewDataset(this.device, numViews, ow, oh);
-
-        viewerState.multiviewPrerendering = true;
-        viewerState.multiviewPrerenderProgress = 0;
-        viewerState.multiviewDatasetReady = false;
-
-        try {
-            for (let i = 0; i < numViews; i++) {
-                if (!viewerState.turntableTraining) break; // canceled
-
-                // Sample a deterministic view position spread evenly around the path.
-                const t = i / numViews;
-                const p = evaluateTurntablePath(t, viewerState.turntableBaseLong, viewerState.getTurntablePathParams());
-                viewerState.orbit.long = p.long;
-                viewerState.orbit.lat = p.lat;
-                viewerState.orbit.radius = p.radius;
-
-                // Reset PT accumulation for this new view.
-                this.pathTracePipelineManager.reset();
-
-                // Accumulate PT samples — one per rAF tick.
-                for (let s = 0; s < samplesPerView; s++) {
-                    if (!viewerState.turntableTraining) break;
-                    await new Promise<void>(r => requestAnimationFrame(() => r()));
-                }
-
-                if (!viewerState.turntableTraining) break;
-
-                // The main loop submits path-trace+resolve on rAF without waiting. If we copy
-                // the output texture immediately when our rAF promise resolves, we can race
-                // the GPU and snapshot a stale or partially-updated resolve.
-                await this.device.queue.onSubmittedWorkDone();
-
-                // Copy the resolved PT output into the dataset slot.
-                // The PT output texture is already at optim-res (ow × oh).
-                const ptTex = this.pathTracePipelineManager.outputTexture;
-                if (ptTex) {
-                    const enc = this.device.createCommandEncoder({ label: `prerender copy view ${i}` });
-                    enc.copyTextureToTexture(
-                        { texture: ptTex },
-                        { texture: dataset.textures[i] },
-                        [ow, oh, 1],
-                    );
-                    this.device.queue.submit([enc.finish()]);
-                }
-
-                // Store the camera matrices for this view.
-                dataset.viewProjMats[i].set(this.camera.viewProjMat as Float32Array);
-                dataset.viewMats[i].set(this.camera.viewMat as Float32Array);
-                dataset.invViewProjMats[i].set(this.camera.viewProjInvMat as Float32Array);
-                dataset.invViewMats[i].set(this.camera.viewInvMat as Float32Array);
-
-                viewerState.multiviewPrerenderProgress = (i + 1) / numViews;
-            }
-        } finally {
-            viewerState.multiviewPrerendering = false;
-            if (viewerState.turntableTraining) {
-                this.multiviewDataset = dataset;
-                viewerState.multiviewDatasetReady = true;
-                // Reset Adam so training starts fresh from the new dataset.
-                this.splatOptimizerManager.resetAdam();
-                this.edgeLayerBezierManager.resetAdam();
-                this.baseColorLayerBezierManager.resetAdam();
-                this.colorLayerBezierManager.resetAdam();
-                this.edgeLayerBezierManager.resetAdcState();
-                this.baseColorLayerBezierManager.resetAdcState();
-                this.colorLayerBezierManager.resetAdcState();
-                this.multiviewTrainingHeldDatasetIndex = -1;
-                this.multiviewTrainingFramesHeldOnDataset = 0;
-            } else {
-                dataset.destroy();
-            }
-        }
+        return this.turntable.prerenderDataset(this.optimWidth, this.optimHeight);
     }
 
-    private rebuildOptimTextures(panelAspect: number) {
+    private recreateOptimizationTextures(panelAspect: number) {
         // Size optim textures to match the visible panel aspect ratio so the model
         // rendered into them has matching pixel proportions for the gradient pass.
-        const { width: ow, height: oh } = computeOptimTextureSize(OPTIM_SHORT, panelAspect);
+        const { width: optimizationTargetWidth, height: optimizationTargetHeight } = computeOptimTextureSize(OPTIM_SHORT, panelAspect);
 
-        if (ow === this.optimWidth && oh === this.optimHeight) return;
-        this.optimWidth = ow;
-        this.optimHeight = oh;
+        if (optimizationTargetWidth === this.optimWidth && optimizationTargetHeight === this.optimHeight) return;
+        this.optimWidth = optimizationTargetWidth;
+        this.optimHeight = optimizationTargetHeight;
 
         // Resize path tracer output to match optim resolution
-        this.pathTracePipelineManager.setOutputSize(ow, oh);
+        this.pathTracePipelineManager.setOutputSize(optimizationTargetWidth, optimizationTargetHeight);
 
-        if (this.optimTexture) this.optimTexture.destroy();
+        if (this.splatTargetColorTexture) this.splatTargetColorTexture.destroy();
         if (this.optimNormalTexture) this.optimNormalTexture.destroy();
         if (this.optimDepthTexture) this.optimDepthTexture.destroy();
         if (this.optimZTexture) this.optimZTexture.destroy();
@@ -554,17 +460,17 @@ export class GpuRunner {
         if (this.optimBlurredDepthTexture) this.optimBlurredDepthTexture.destroy();
         if (this.optimTempTexture) this.optimTempTexture.destroy();
 
-        this.optimTexture = this.device.createTexture({
+        this.splatTargetColorTexture = this.device.createTexture({
             label: "optimization target texture",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: this.format,
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
-        this.optimTextureView = this.optimTexture.createView();
+        this.optimTextureView = this.splatTargetColorTexture.createView();
         
         this.optimNormalTexture = this.device.createTexture({
             label: "optimization normal texture",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: this.format,
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -572,7 +478,7 @@ export class GpuRunner {
 
         this.optimDepthTexture = this.device.createTexture({
             label: "optimization depth visualization",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: "r16float",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -580,7 +486,7 @@ export class GpuRunner {
 
         this.optimZTexture = this.device.createTexture({
             label: "optimization z-buffer",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: MESH_DEPTH_FORMAT,
             usage: GPUTextureUsage.RENDER_ATTACHMENT,
         });
@@ -588,7 +494,7 @@ export class GpuRunner {
 
         this.optimEdgeTexture = this.device.createTexture({
             label: "optimization edge map",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -596,7 +502,7 @@ export class GpuRunner {
 
         this.optimSplatTexture = this.device.createTexture({
             label: "optimization splat view",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: "rgba8unorm",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -604,7 +510,7 @@ export class GpuRunner {
 
         this.optimSplatDepthTexture = this.device.createTexture({
             label: "optimization splat depth",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: "rgba8unorm",
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -612,7 +518,7 @@ export class GpuRunner {
 
         this.optimBlurredTexture = this.device.createTexture({
             label: "optimization blurred target",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -620,7 +526,7 @@ export class GpuRunner {
 
         this.optimDepthAwareBlurredTexture = this.device.createTexture({
             label: "optimization depth-aware blurred target",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -628,7 +534,7 @@ export class GpuRunner {
 
         this.optimBlurredDepthTexture = this.device.createTexture({
             label: "optimization blurred depth",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -636,7 +542,7 @@ export class GpuRunner {
 
         this.optimTempTexture = this.device.createTexture({
             label: "optimization blur temp",
-            size: [ow, oh],
+            size: [optimizationTargetWidth, optimizationTargetHeight],
             format: "rgba8unorm",
             usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
         });
@@ -654,7 +560,7 @@ export class GpuRunner {
 
         // Rebind
         this.splatOptimizerManager.setEdgeTarget(this.optimDepthTextureView, this.optimEdgeTextureView, this.optimNormalTextureView);
-        this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimDepthTextureView, ow, oh);
+        this.splatOptimizerManager.setBackwardTarget(this.optimTextureView, this.optimDepthTextureView, optimizationTargetWidth, optimizationTargetHeight);
 
         // Edge layer: color target = edge map, depth = real depth, background = black (dummy).
         // Mode=1 color loss drives beziers white on edges, transparent off edges.
@@ -663,25 +569,24 @@ export class GpuRunner {
             this.optimDepthTextureView,
             this.dummyTextureView!,
             this.optimTextureView!,
-            ow, oh
+            optimizationTargetWidth,
+            optimizationTargetHeight,
         );
 
-        // Coarse bezier layer: target is depth-aware blurred color + sharp depth, background is splat output
-        this.baseColorLayerBezierManager.setBackwardTarget(
+        this.coarseColorLayerBezierManager.setBackwardTarget(
             this.optimDepthAwareBlurredTextureView!,
             this.optimDepthTextureView!,
             this.optimSplatTextureView!,
             this.optimTextureView!,
-            ow, oh
+            optimizationTargetWidth, optimizationTargetHeight
         );
 
-        // Fine bezier layer: target is sharp color + depth, background is splat output
-        this.colorLayerBezierManager.setBackwardTarget(
+        this.fineColorLayerBezierManager.setBackwardTarget(
             this.optimTextureView!,
             this.optimDepthTextureView!,
             this.optimSplatTextureView!,
             this.optimTextureView!,
-            ow, oh
+            optimizationTargetWidth, optimizationTargetHeight
         );
     }
 
@@ -690,7 +595,7 @@ export class GpuRunner {
         let canceled = false;
 
         const loop = async () => {
-            this.rebuildOptimTextures(1);
+            this.recreateOptimizationTextures(1);
 
             // Full-res render textures use a fixed resolution from viewerState,
             // independent of the browser window size.
@@ -847,52 +752,11 @@ export class GpuRunner {
 
             // Frozen viewport skips full-resolution splat/bezier passes unless we must
             // refresh those textures for turntable PNG export (readback next enqueue).
-            const needsTurntableExportLayers = this.turntableCaptureQueue.hasPending();
+            const needsTurntableExportLayers = this.turntable.hasPendingCapture();
 
-            // When the prerendered dataset is ready, select a slot (see multiviewDisplayFramesPerView)
-            // and write its stored matrices so the mesh render and optimizers match the target image.
-            // This replaces the live PT dispatch for the optimizer target.
-            let datasetView: GPUTextureView | null = null;
-            let sortVp: Mat4 = this.camera.viewProjMat as Mat4;
-            let vpInvForSplat = this.camera.viewProjInvMat as Mat4;
-            let invViewForCam = this.camera.viewInvMat as Mat4;
-            if (this.viewerState.turntableTraining && this.viewerState.multiviewDatasetReady && this.multiviewDataset) {
-                const ds = this.multiviewDataset;
-                const lingerFrames = Math.max(
-                    1,
-                    Math.floor(Number(this.viewerState.multiviewDisplayFramesPerView)) || 1,
-                );
-                if (
-                    this.multiviewTrainingHeldDatasetIndex < 0
-                    || this.multiviewTrainingFramesHeldOnDataset >= lingerFrames
-                    || this.multiviewTrainingHeldDatasetIndex >= ds.numViews
-                ) {
-                    this.multiviewTrainingHeldDatasetIndex = Math.floor(Math.random() * ds.numViews);
-                    this.multiviewTrainingFramesHeldOnDataset = 0;
-                }
-                const idx = this.multiviewTrainingHeldDatasetIndex;
-                this.multiviewTrainingFramesHeldOnDataset += 1;
-                datasetView = ds.textureViews[idx];
-                sortVp = ds.viewProjMats[idx] as Mat4;
-                vpInvForSplat = ds.invViewProjMats[idx] as Mat4;
-                invViewForCam = ds.invViewMats[idx] as Mat4;
-                this.uniformsManager.writeViewProjMat(ds.viewProjMats[idx]);
-                this.uniformsManager.writeViewMat(ds.viewMats[idx]);
-                this.uniformsManager.writeInvViewProjMat(ds.invViewProjMats[idx]);
-                this.edgeLayerBezierManager.writeVPMatrix(ds.viewProjMats[idx]);
-                this.baseColorLayerBezierManager.writeVPMatrix(ds.viewProjMats[idx]);
-                this.colorLayerBezierManager.writeVPMatrix(ds.viewProjMats[idx]);
-                this.edgeLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
-                this.baseColorLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
-                this.colorLayerBezierManager.writeVPInvMatrix(ds.invViewProjMats[idx]);
-                const sortVpFa = sortVp as Float32Array;
-                this.bezierForwardManager.writeVPMatrix(sortVpFa);
-                this.baseColorBezierForwardManager.writeVPMatrix(sortVpFa);
-                this.colorBezierForwardManager.writeVPMatrix(sortVpFa);
-            } else {
-                this.multiviewTrainingHeldDatasetIndex = -1;
-                this.multiviewTrainingFramesHeldOnDataset = 0;
-            }
+            // Resolve the current frame's view (dataset slot or live camera).
+            const frameView = this.turntable.resolveFrameView();
+            const { datasetView, sortVp, vpInv: vpInvForSplat, invView: invViewForCam } = frameView;
 
             const camWorld = vec3.transformMat4(vec3.fromValues(0, 0, 0), invViewForCam);
             this.splatOptimizerManager.writeSplatVPMatrix(sortVp, vpInvForSplat, this.viewerState.compareBlurred, [
@@ -907,8 +771,8 @@ export class GpuRunner {
             this.colorBezierForwardManager.writeVPMatrix(sortVp);
 
             this.edgeLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
-            this.baseColorLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
-            this.colorLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
+            this.coarseColorLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
+            this.fineColorLayerBezierManager.writeCamWorld(camWorld[0], camWorld[1], camWorld[2]);
             const cx = camWorld[0];
             const cy = camWorld[1];
             const cz = camWorld[2];
@@ -1054,7 +918,7 @@ export class GpuRunner {
             );
 
             if (this.viewerState.coarseColorBeziersEnabled) {
-                this.baseColorLayerBezierManager.setBackwardTarget(
+                this.coarseColorLayerBezierManager.setBackwardTarget(
                     this.optimDepthAwareBlurredTextureView!,
                     this.optimDepthTextureView!,
                     this.optimSplatTextureView!,
@@ -1064,7 +928,7 @@ export class GpuRunner {
                 );
             }
             if (this.viewerState.fineColorBeziersEnabled) {
-                this.colorLayerBezierManager.setBackwardTarget(
+                this.fineColorLayerBezierManager.setBackwardTarget(
                     optimTargetView,
                     this.optimDepthTextureView!,
                     this.optimSplatTextureView!,
@@ -1089,8 +953,8 @@ export class GpuRunner {
             
             // Clear all binning and sorting buffers
             this.splatOptimizerManager.addBinningDispatches(null as any, sortVp, commandEncoder);
-            if (this.viewerState.coarseColorBeziersEnabled) this.baseColorLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
-            if (this.viewerState.fineColorBeziersEnabled) this.colorLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
+            if (this.viewerState.coarseColorBeziersEnabled) this.coarseColorLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
+            if (this.viewerState.fineColorBeziersEnabled) this.fineColorLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
             if (this.viewerState.edgeBeziersEnabled) this.edgeLayerBezierManager.addBinningDispatches(null as any, sortVp, commandEncoder);
 
             // Edge detection (optim res)
@@ -1125,12 +989,12 @@ export class GpuRunner {
                         label: "coarse bezier optimization compute",
                         ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierCoarseOptimization) } : {}),
                     });
-                    this.baseColorLayerBezierManager.addBinningDispatches(coarseOptPass, sortVp, commandEncoder);
-                    this.baseColorLayerBezierManager.addOptimizationDispatches(coarseOptPass);
+                    this.coarseColorLayerBezierManager.addBinningDispatches(coarseOptPass, sortVp, commandEncoder);
+                    this.coarseColorLayerBezierManager.addOptimizationDispatches(coarseOptPass);
                     coarseOptPass.end();
                 }
                 const coarseSortPass = commandEncoder.beginComputePass({ label: "coarse bezier sort" });
-                this.baseColorLayerBezierManager.addSortDispatches(coarseSortPass, sortVp);
+                this.coarseColorLayerBezierManager.addSortDispatches(coarseSortPass, sortVp);
                 coarseSortPass.end();
             }
 
@@ -1141,12 +1005,12 @@ export class GpuRunner {
                         label: "fine bezier optimization compute",
                         ...(recordGpu ? { timestampWrites: profWrites(GpuProfilingPair.BezierFineOptimization) } : {}),
                     });
-                    this.colorLayerBezierManager.addBinningDispatches(fineOptPass, sortVp, commandEncoder);
-                    this.colorLayerBezierManager.addOptimizationDispatches(fineOptPass);
+                    this.fineColorLayerBezierManager.addBinningDispatches(fineOptPass, sortVp, commandEncoder);
+                    this.fineColorLayerBezierManager.addOptimizationDispatches(fineOptPass);
                     fineOptPass.end();
                 }
                 const fineSortPass = commandEncoder.beginComputePass({ label: "fine bezier sort" });
-                this.colorLayerBezierManager.addSortDispatches(fineSortPass, sortVp);
+                this.fineColorLayerBezierManager.addSortDispatches(fineSortPass, sortVp);
                 fineSortPass.end();
             }
 
@@ -1349,41 +1213,14 @@ export class GpuRunner {
                 }
             }
 
-            const pendingTurntable = this.turntableCaptureQueue.dequeue();
-            if (pendingTurntable) {
-                const { resolve, reject } = pendingTurntable;
-
-                (async () => {
-                    try {
-                        const w = this.fullWidth;
-                        const h = this.fullHeight;
-                        if (!w || !h || !this.fullSplatTexture) {
-                            reject(new Error("Textures not ready"));
-                            return;
-                        }
-
-                        const splat = await this.readTextureToImageData(this.fullSplatTexture!, w, h);
-                        const baseColorBezier = this.viewerState.coarseColorBeziersEnabled && this.fullBaseColorBezierTexture
-                            ? await this.readTextureToImageData(this.fullBaseColorBezierTexture, w, h)
-                            : null;
-                        const colorBezier = this.viewerState.fineColorBeziersEnabled && this.fullColorBezierTexture
-                            ? await this.readTextureToImageData(this.fullColorBezierTexture, w, h)
-                            : null;
-                        const edgeBezier = this.viewerState.edgeBeziersEnabled && this.fullBezierTexture
-                            ? await this.readTextureToImageData(this.fullBezierTexture, w, h)
-                            : null;
-
-                        resolve(compositeTurntableLayers(w, h, {
-                            splat,
-                            baseColorBezier,
-                            colorBezier,
-                            edgeBezier,
-                        }));
-                    } catch (e) {
-                        reject(e as Error);
-                    }
-                })();
-            }
+            this.turntable.resolvePendingCapture(
+                this.fullWidth,
+                this.fullHeight,
+                this.fullSplatTexture,
+                this.fullBaseColorBezierTexture,
+                this.fullColorBezierTexture,
+                this.fullBezierTexture,
+            );
 
             handle = requestAnimationFrame(loop);
         };
