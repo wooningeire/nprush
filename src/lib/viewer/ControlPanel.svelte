@@ -59,11 +59,6 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
         {/if}
     </div>
     
-    <label>
-        <input type="checkbox" bind:checked={viewerState.viewportRenderingFrozen} />
-        Freeze viewport preview (faster)
-    </label>
-    
 
     <label
         class="gpu-profiler-toggle"

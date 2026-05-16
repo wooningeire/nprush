@@ -111,23 +111,34 @@ $effect(() => {
                     bind:canvas={canvases.splats}
                     label="render"
                 >
-                    <ViewPanelControlBox>
-                        <label>
-                            Render res:
-                            
-                            <input type="range" min="128" max="2048" step="128"
-                                value={viewerState.renderWidth}
-                                oninput={(e) => {
-                                    const v = parseInt((e.target as HTMLInputElement).value);
-                                    viewerState.renderWidth = v;
-                                    viewerState.renderHeight = v;
-                                }}
-                                disabled={viewerState.isCapturing || viewerState.isTurntableRendering}
-                            />
+                    <view-panel-overlays>
+                        {#if viewerState.viewportRenderingFrozen}
+                            <viewport-frozen-overlay>Frozen</viewport-frozen-overlay>
+                        {/if}
 
-                            {viewerState.renderWidth}×{viewerState.renderHeight}
-                        </label>
-                    </ViewPanelControlBox>
+                        <ViewPanelControlBox>
+                            <label>
+                                Render res:
+                                
+                                <input type="range" min="128" max="2048" step="128"
+                                    value={viewerState.renderWidth}
+                                    oninput={(e) => {
+                                        const v = parseInt((e.target as HTMLInputElement).value);
+                                        viewerState.renderWidth = v;
+                                        viewerState.renderHeight = v;
+                                    }}
+                                    disabled={viewerState.isCapturing || viewerState.isTurntableRendering}
+                                />
+
+                                {viewerState.renderWidth}×{viewerState.renderHeight}
+                            </label>
+        
+                            <label>
+                                <input type="checkbox" bind:checked={viewerState.viewportRenderingFrozen} />
+                                Freeze preview (faster)
+                            </label>
+                        </ViewPanelControlBox>
+                    </view-panel-overlays>
                 </ViewPanel>
             </view-panels-primary>
 
@@ -240,5 +251,23 @@ view-panels-strip {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+view-panel-overlays {
+    display: grid;
+    place-items: stretch;
+
+    > :global(*) {
+        grid-area: 1/1;
+    }
+}
+
+viewport-frozen-overlay {
+    display: grid;
+    place-items: center;
+
+    font-size: 1.5rem;
+
+    background: oklch(0.1 0.05 300 / 0.5);
 }
 </style>
