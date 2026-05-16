@@ -902,7 +902,8 @@ export class GpuRunner {
                             const deltasNs = await perfBuffers.mapDeltasNanoseconds(indices);
                             // Skip update when nothing was actually read (buffer still
                             // mapped from a previous frame's async readback).
-                            if (deltasNs.every(v => v === null)) return;
+                            if (deltasNs === null) return;
+
                             const labels = perfBuffers.getLabels();
                             const entries = labels.map((label, idx) => ({
                                 label,

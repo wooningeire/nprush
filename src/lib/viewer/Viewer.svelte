@@ -1,32 +1,43 @@
 <script lang="ts">
-import { onMount } from "svelte";
-
-import ViewPanelGrid from "./ViewPanelGrid.svelte";
-import ControlPanel from "./ControlPanel.svelte";
 import Toasts from "./Toasts.svelte";
-import { ViewerState } from "./ViewerState.svelte.ts";
+import BrushstrokeOptimizer from "./BrushstrokeOptimizer.svelte";
 
-let canvases = $state<Record<string, HTMLCanvasElement>>({});
-let canvasesPromise = Promise.withResolvers<Record<string, HTMLCanvasElement>>();
-
-const viewerState = ViewerState.mount({
-    canvasesPromise: canvasesPromise.promise,
-});
-
-onMount(() => {
-    canvasesPromise.resolve(canvases);
-});
+type ViewMode = "brushstroke-optimizer" | "materials";
+let mode = $state<ViewMode>("brushstroke-optimizer");
 </script>
 
 <main>
-    <viewer-content>
-        <ControlPanel {viewerState} />
+    <main-content>
+        <mode-bar>
+            <button
+                class:active={mode === "brushstroke-optimizer"}
+                onclick={() => mode = "brushstroke-optimizer"}
+            >
+                Brushstroke optimizer
+            </button>
 
-        <ViewPanelGrid
-            {viewerState}
-            bind:canvases
-        />
-    </viewer-content>
+            <button
+                class:active={mode === "materials"}
+                onclick={() => mode = "materials"}
+            >
+                Materials
+            </button>
+        </mode-bar>
+
+        <view-mode-container
+            class:visible={mode === "brushstroke-optimizer"}
+        >
+            <BrushstrokeOptimizer
+                active={mode === "brushstroke-optimizer"}
+            />
+        </view-mode-container>
+
+        <view-mode-container
+            class:visible={mode === "materials"}
+        >
+            <materials-content></materials-content>
+        </view-mode-container>
+    </main-content>
 
     <Toasts />
 </main>
@@ -47,11 +58,19 @@ main {
     }
 }
 
-viewer-content {
+main-content {
     display: flex;
+    flex-direction: column;
     align-items: stretch;
-    
+}
 
-    overflow: hidden;
+view-mode-container {
+    &:not(.visible) {
+        display: none;
+    }
+
+    &.visible {
+        display: contents;
+    }
 }
 </style>
