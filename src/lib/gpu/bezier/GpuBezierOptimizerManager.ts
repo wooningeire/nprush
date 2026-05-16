@@ -228,20 +228,18 @@ export class GpuBezierOptimizerManager {
         });
     }
 
-    addBinningDispatches(pass: GPUComputePassEncoder, vpMat: Mat4, commandEncoder: GPUCommandEncoder) {
-        const { width, height } = this.dims;
-        if (width === 0 || height === 0) return;
-        const gridWidth = Math.ceil(width / 16);
-        const gridHeight = Math.ceil(height / 16);
+    addBinningDispatches(pass: GPUComputePassEncoder, vpMat: Mat4) {
+        this.binningManager.addDispatches(pass, vpMat, this.dims.width, this.dims.height);
+    }
+
+    clearBinningBuffers(commandEncoder: GPUCommandEncoder) {
+        const gridWidth = Math.ceil(this.dims.width / 16);
+        const gridHeight = Math.ceil(this.dims.height / 16);
         const numTiles = gridWidth * gridHeight;
 
-        if (!pass) {
-            commandEncoder.clearBuffer(this.binningManager.binningAtomicBuffer, 0, 4);
-            commandEncoder.clearBuffer(this.binningManager.tileStartsBuffer, 0, numTiles * 4);
-            commandEncoder.clearBuffer(this.binningManager.tileEndsBuffer, 0, numTiles * 4);
-        } else {
-            this.binningManager.addDispatches(pass, vpMat, width, height);
-        }
+        commandEncoder.clearBuffer(this.binningManager.binningAtomicBuffer, 0, 4);
+        commandEncoder.clearBuffer(this.binningManager.tileStartsBuffer, 0, numTiles * 4);
+        commandEncoder.clearBuffer(this.binningManager.tileEndsBuffer, 0, numTiles * 4);
     }
 
     addOptimizationDispatches(pass: GPUComputePassEncoder) {

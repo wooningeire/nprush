@@ -49,8 +49,10 @@ export const constants = {
     OPTIMIZATION_SHORT: 128,
     /** Floats stored per Gaussian (pos, color DC, quat, shape, RGB + opacity degree-1 SH, vec4-packed). */
     SPLAT_PARAMS_PER_SPLAT: 32,
-    NUM_GAUSSIAN_SPLATS: 4096,
-    NUM_EDGE_LAYER_BEZIERS: 16384,
+    N_GAUSSIAN_SPLATS: 512,
+    N_EDGE_BEZIERS: 1024,
+    N_COARSE_COLOR_BEZIERS: 2048,
+    N_FINE_COLOR_BEZIERS: 16384,
     
     MESH_SPLAT_MAX_COUNT: 4096,
     
