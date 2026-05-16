@@ -690,34 +690,38 @@ export class GpuRunner {
 
             // Coarse Bezier optimization
             if (this.viewerState.coarseColorBeziersEnabled) {
+                const coarseOptPass = commandEncoder.beginComputePass({
+                    label: "coarse bezier optimization compute",
+                    timestampWrites: recordGpu
+                        ? profWrites("Bézier (coarse): optimization")
+                        : undefined,
+                });
+
                 if (!(this.viewerState.coarseColorBezierTrainingPaused || defaultPause)) {
-                    const coarseOptPass = commandEncoder.beginComputePass({
-                        label: "coarse bezier optimization compute",
-                        ...(recordGpu ? { timestampWrites: profWrites("Bézier (coarse): optimization") } : {}),
-                    });
                     this.coarseColorLayerBezierManager.addBinningDispatches(coarseOptPass, sortVp);
                     this.coarseColorLayerBezierManager.addOptimizationDispatches(coarseOptPass);
-                    coarseOptPass.end();
                 }
-                const coarseSortPass = commandEncoder.beginComputePass({ label: "coarse bezier sort" });
-                this.coarseColorLayerBezierManager.addSortDispatches(coarseSortPass, sortVp);
-                coarseSortPass.end();
+                this.coarseColorLayerBezierManager.addSortDispatches(coarseOptPass, sortVp);
+                
+                coarseOptPass.end();
             }
 
             // Fine Bezier optimization
             if (this.viewerState.fineColorBeziersEnabled) {
+                const fineOptPass = commandEncoder.beginComputePass({
+                    label: "fine bezier optimization compute",
+                    timestampWrites: recordGpu
+                        ? profWrites("Bézier (fine): optimization")
+                        : undefined,
+                });
+
                 if (!(this.viewerState.fineColorBezierTrainingPaused || defaultPause)) {
-                    const fineOptPass = commandEncoder.beginComputePass({
-                        label: "fine bezier optimization compute",
-                        ...(recordGpu ? { timestampWrites: profWrites("Bézier (fine): optimization") } : {}),
-                    });
                     this.fineColorLayerBezierManager.addBinningDispatches(fineOptPass, sortVp);
                     this.fineColorLayerBezierManager.addOptimizationDispatches(fineOptPass);
-                    fineOptPass.end();
                 }
-                const fineSortPass = commandEncoder.beginComputePass({ label: "fine bezier sort" });
-                this.fineColorLayerBezierManager.addSortDispatches(fineSortPass, sortVp);
-                fineSortPass.end();
+                this.fineColorLayerBezierManager.addSortDispatches(fineOptPass, sortVp);
+
+                fineOptPass.end();
             }
 
             // Edge Bezier optimization
@@ -756,17 +760,19 @@ export class GpuRunner {
 
             const optimizationRenderPass = commandEncoder.beginRenderPass({
                 label: "optimization-res render pass",
-                ...(recordGpu ? { timestampWrites: profWrites("Splat: forward (optim res)") } : {}),
+                timestampWrites: recordGpu
+                    ? profWrites("Splat: forward (optim res)")
+                    : undefined,
                 colorAttachments: [
                     {
                         view: this.textures.optimizationSplatColorTextureView!,
-                        clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
+                        clearValue: { r: 0, g: 0, b: 0, a: 0 },
                         loadOp: "clear",
                         storeOp: "store",
                     },
                     {
                         view: this.textures.optimizationSplatDepthTextureView!,
-                        clearValue: { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+                        clearValue: { r: 0, g: 0, b: 0, a: 0 },
                         loadOp: "clear",
                         storeOp: "store",
                     },
@@ -864,10 +870,12 @@ export class GpuRunner {
                 
                 const finalPassEncoder = commandEncoder.beginRenderPass({
                     label: `final render pass for ${id}`,
-                    ...(recordGpu && id === "target" ? { timestampWrites: profWrites("Final compositor (screen)") } : {}),
+                    timestampWrites: recordGpu && id === "target"
+                        ? profWrites("Final compositor (screen)")
+                        : undefined,
                     colorAttachments: [
                         {
-                            clearValue: { r: 0.05, g: 0.05, b: 0.05, a: 1.0 },
+                            clearValue: { r: 0, g: 0, b: 0, a: 0 },
                             loadOp: "clear",
                             storeOp: "store",
                             view: screenView,
@@ -887,23 +895,23 @@ export class GpuRunner {
             if (recordGpu && this.gpuPerfBuffers) {
                 // Fire-and-forget: don't block the render loop waiting for GPU readback.
                 const perfBuffers = this.gpuPerfBuffers;
-                const vs = this.viewerState;
                 const indices = new Set(activeProfilerIndices);
-                this.device.queue.onSubmittedWorkDone().then(async () => {
-                    try {
-                        const deltasNs = await perfBuffers.mapDeltasNanoseconds(indices);
-                        // Skip update when nothing was actually read (buffer still
-                        // mapped from a previous frame's async readback).
-                        if (deltasNs.every(v => v === null)) return;
-                        const labels = perfBuffers.getLabels();
-                        const entries = labels.map((label, idx) => ({
-                            label,
-                            ms: deltasNs[idx] === null ? null : Number(deltasNs[idx]) / 1e6
-                        }));
-                        vs.setGpuProfilingFrameMs(entries);
-                    } catch (e) {
-                        console.warn("[gpu profiler]", e);
-                    }
+                this.device.queue.onSubmittedWorkDone()
+                    .then(async () => {
+                        try {
+                            const deltasNs = await perfBuffers.mapDeltasNanoseconds(indices);
+                            // Skip update when nothing was actually read (buffer still
+                            // mapped from a previous frame's async readback).
+                            if (deltasNs.every(v => v === null)) return;
+                            const labels = perfBuffers.getLabels();
+                            const entries = labels.map((label, idx) => ({
+                                label,
+                                ms: deltasNs[idx] === null ? null : Number(deltasNs[idx]) / 1e6
+                            }));
+                            this.viewerState.setGpuProfilingFrameMs(entries);
+                        } catch (e) {
+                            console.warn("[gpu profiler]", e);
+                        }
                 });
             } else if (!this.viewerState.gpuProfilingEnabled) {
                 // Profiling disabled — wipe stale charts
