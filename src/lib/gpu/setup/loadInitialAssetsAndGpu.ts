@@ -5,7 +5,8 @@ import { loadGlb } from "../file-load/loadGlb.ts";
 import artelorianUrl from "$/assets/artelorian.glb?url";
 import groundUrl from "$/assets/ground.glb?url";
 import hdrUrl from "$/assets/lakeside_sunrise_2k.hdr?url";
-import brushUrl from "$/assets/brush.png?url";
+import coarseBrushUrl from "$/assets/brush.png?url";
+import fineBrushUrl from "$/assets/chalk.png?url";
 import groundAlbedoUrl from "$/assets/brown_mud_03_diff_2k.jpg?url";
 import groundNormalUrl from "$/assets/brown_mud_03_nor_gl_2k.png?url";
 import { loadHdrTexture } from "../file-load/loadHdrTexture.ts";
@@ -43,13 +44,14 @@ export const loadInitialAssetsAndGpu = async (state: ViewerState) => {
     showToast("BVH ready", "info", 2000);
 
     const texturesToast = showToast("loading textures…", "info", 0);
-    const [envTexture, brushTexture, groundAlbedoTexture, groundNormalTexture] = await Promise.all([
+    const [envTexture, coarseBrushTexture, fineBrushTexture, groundAlbedoTexture, groundNormalTexture] = await Promise.all([
         loadHdrTexture(gpu.device, hdrUrl)
             .then(texture => {
                 showToast("environment loaded", "info", 2000);
                 return texture;
             }),
-        loadTexture(gpu.device, brushUrl),
+        loadTexture(gpu.device, coarseBrushUrl),
+        loadTexture(gpu.device, fineBrushUrl),
         loadTexture(gpu.device, groundAlbedoUrl),
         loadTexture(gpu.device, groundNormalUrl)
             .then(texture => {
@@ -65,7 +67,8 @@ export const loadInitialAssetsAndGpu = async (state: ViewerState) => {
         groundMesh,
         groundPbrMesh,
         envTexture,
-        brushTexture,
+        coarseBrushTexture,
+        fineBrushTexture,
         groundAlbedoTexture,
         groundNormalTexture,
     };

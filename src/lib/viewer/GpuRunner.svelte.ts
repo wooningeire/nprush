@@ -67,7 +67,8 @@ export class GpuRunner {
         groundMesh,
         groundPbrMesh,
         matcapTexture,
-        brushTexture,
+        coarseBrushTexture,
+        fineBrushTexture,
         groundAlbedoTexture,
         groundNormalTexture,
         gpuTimestampSupported,
@@ -82,7 +83,8 @@ export class GpuRunner {
         groundMesh: MeshData | null,
         groundPbrMesh: MeshData | null,
         matcapTexture: GPUTexture,
-        brushTexture: GPUTexture,
+        coarseBrushTexture: GPUTexture,
+        fineBrushTexture: GPUTexture,
         groundAlbedoTexture?: GPUTexture,
         groundNormalTexture?: GPUTexture,
         gpuTimestampSupported: boolean,
@@ -169,7 +171,7 @@ export class GpuRunner {
             numBeziers: constants.N_EDGE_BEZIERS,
             bezierBuffer: this.edgeLayerBezierManager.bezierBuffer,
             sortOrderBuffer: this.edgeLayerBezierManager.sortIndicesBuffer,
-            brushTexture,
+            brushTexture: fineBrushTexture,
         });
 
         this.coarseColorBezierForwardManager = new GpuBezierForwardPipelineManager({
@@ -177,7 +179,7 @@ export class GpuRunner {
             numBeziers: constants.N_COARSE_COLOR_BEZIERS,
             bezierBuffer: this.coarseColorLayerBezierManager.bezierBuffer,
             sortOrderBuffer: this.coarseColorLayerBezierManager.sortIndicesBuffer,
-            brushTexture,
+            brushTexture: coarseBrushTexture,
         });
 
         this.fineColorBezierForwardManager = new GpuBezierForwardPipelineManager({
@@ -185,7 +187,7 @@ export class GpuRunner {
             numBeziers: constants.N_FINE_COLOR_BEZIERS,
             bezierBuffer: this.fineColorLayerBezierManager.bezierBuffer,
             sortOrderBuffer: this.fineColorLayerBezierManager.sortIndicesBuffer,
-            brushTexture,
+            brushTexture: fineBrushTexture,
         });
         
         this.blurManager = new GpuBlurPipelineManager(device);
