@@ -1,6 +1,6 @@
-import forwardModuleSrc from "./splat_forward.wgsl?raw";
+import forwardModuleSrc from "./splat_forward.wgsl.ts";
 import type { Mat4 } from "wgpu-matrix";
-import { constants, injectWgslConstants } from "../constants";
+import { constants, injectWgslConstants } from "../constants.ts";
 
 export class GpuSplatForwardPipelineManager {
     private readonly device: GPUDevice;

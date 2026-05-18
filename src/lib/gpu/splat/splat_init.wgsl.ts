@@ -1,16 +1,9 @@
-struct Splat {
-    pos_sx: vec4f,
-    color: vec4f,
-    quat: vec4f,
-    sy_shape: vec4f,
-    sh1_r: vec4f,
-    sh1_g: vec4f,
-    sh1_b: vec4f,
-    sh1_a: vec4f,
-}
+import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
+import { Splat } from "./Splat.wgsl.ts";
 
+export default interpolateWgslTemplate`
 struct SplatArray {
-    splats: array<Splat, {@NUM_SPLATS}u>,
+    splats: array<${Splat}, {@NUM_SPLATS}u>,
 }
 
 @group(0) @binding(0) var<storage, read_write> splats: SplatArray;
@@ -54,7 +47,7 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     let sz = 0.1 + hash(seed) * 0.15;
     seed = seed + 1.0;
 
-    var s: Splat;
+    var s: ${Splat};
     s.pos_sx = vec4f(cx, cy, cz, sx);
     s.color = vec4f(cr, cg, cb, a);
     s.quat = vec4f(1.0, 0.0, 0.0, 0.0);
@@ -67,3 +60,4 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     splats.splats[i] = s;
 }
+`;

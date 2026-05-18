@@ -65,9 +65,13 @@ main-content {
     display: flex;
     flex-direction: column;
     align-items: stretch;
+
+    overflow: hidden;
 }
 
 view-mode-container {
+    overflow: hidden;
+    
     &:not(.visible) {
         display: none;
     }

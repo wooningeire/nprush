@@ -1,16 +1,9 @@
-struct Splat {
-    pos_sx: vec4f,
-    color: vec4f,
-    quat: vec4f,
-    sy_shape: vec4f,
-    sh1_r: vec4f,
-    sh1_g: vec4f,
-    sh1_b: vec4f,
-    sh1_a: vec4f,
-}
+import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
+import { Splat } from "./Splat.wgsl.ts";
 
+export default interpolateWgslTemplate`
 struct SplatArray {
-    splats: array<Splat, {@NUM_SPLATS}u>,
+    splats: array<${Splat}, {@NUM_SPLATS}u>,
 }
 
 struct BinningUniforms {
@@ -246,3 +239,4 @@ fn calc_ranges(@builtin(global_invocation_id) gid: vec3u) {
     if (is_first) { tile_starts[tile_id] = idx; }
     if (is_last) { tile_ends[tile_id] = idx + 1u; }
 }
+`;

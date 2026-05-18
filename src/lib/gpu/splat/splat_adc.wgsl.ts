@@ -1,16 +1,9 @@
-struct Splat {
-    pos_sx: vec4f,
-    color: vec4f,
-    quat: vec4f,
-    sy_shape: vec4f,
-    sh1_r: vec4f,
-    sh1_g: vec4f,
-    sh1_b: vec4f,
-    sh1_a: vec4f,
-}
+import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
+import { Splat } from "./Splat.wgsl.ts";
 
+export default interpolateWgslTemplate`
 struct SplatArray {
-    splats: array<Splat, {@NUM_SPLATS}u>,
+    splats: array<${Splat}, {@NUM_SPLATS}u>,
 }
 
 struct AdamState {
@@ -91,3 +84,4 @@ fn main() {
         }
     }
 }
+`;

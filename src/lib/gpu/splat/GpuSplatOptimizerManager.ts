@@ -1,11 +1,11 @@
-import backwardModuleSrc from "./splat_backward.wgsl?raw";
-import stepModuleSrc from "./splat_step.wgsl?raw";
+import backwardModuleSrc from "./splat_backward.wgsl.ts";
+import stepModuleSrc from "./splat_step.wgsl.ts";
 import renderBlitModuleSrc from "./render_blit.wgsl?raw";
 import renderCompositeModuleSrc from "./render_composite.wgsl?raw";
-import adcModuleSrc from "./splat_adc.wgsl?raw";
-import initModuleSrc from "./splat_init.wgsl?raw";
+import adcModuleSrc from "./splat_adc.wgsl.ts";
+import initModuleSrc from "./splat_init.wgsl.ts";
 import type { Mat4 } from "wgpu-matrix";
-import { constants, injectWgslConstants } from "../constants";
+import { constants, injectWgslConstants } from "../constants.ts";
 import { GpuSplatDepthSortManager } from "./GpuSplatDepthSortManager.ts";
 import { GpuSplatBinningManager } from "./GpuSplatBinningManager.ts";
 import { GpuSplatEdgeManager } from "./GpuSplatEdgeManager.ts";

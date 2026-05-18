@@ -1,14 +1,7 @@
-struct Splat {
-    pos_sx: vec4f,    // x, y, z, sx
-    color: vec4f,     // linear RGB base + opacity DC; SH1 adds directional residual on RGB and opacity
-    quat: vec4f,
-    sy_shape: vec4f,
-    sh1_r: vec4f,     // xyz: red directional SH coefficients (scaled by SH_C1 in shading)
-    sh1_g: vec4f,
-    sh1_b: vec4f,
-    sh1_a: vec4f,     // xyz: degree-1 opacity SH in local frame (same layout as RGB SH)
-}
+import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
+import { Splat } from "./Splat.wgsl.ts";
 
+export default interpolateWgslTemplate`
 const SH_C1: f32 = 0.4886025119029199;
 
 fn quat_conj(q: vec4f) -> vec4f {
@@ -22,7 +15,7 @@ fn splat_view_dir_local(cam_world: vec3f, pos: vec3f, q: vec4f) -> vec3f {
     return quat_rotate(quat_conj(q), dir_w);
 }
 
-fn splat_rgb_sh1(s: Splat, dir_l: vec3f) -> vec3f {
+fn splat_rgb_sh1(s: ${Splat}, dir_l: vec3f) -> vec3f {
     let x = dir_l.x;
     let y = dir_l.y;
     let z = dir_l.z;
@@ -172,7 +165,6 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
 
 struct FragOut {
     @location(0) color: vec4f,
-    @location(1) depth: vec4f,
 }
 
 @fragment
@@ -194,13 +186,8 @@ fn frag(v: VsOut) -> FragOut {
         discard;
     }
     
-    // Reciprocal depth encoding matching mesh.wgsl: 1 - DEPTH_NEAR / w
-    const DEPTH_NEAR = 0.1;
-    let linear_depth = max(v.depth, DEPTH_NEAR);
-    let enc_depth = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
-
     var out: FragOut;
     out.color = vec4f(v.rgb, a);
-    out.depth = vec4f(enc_depth, enc_depth, enc_depth, a);
     return out;
 }
+`;

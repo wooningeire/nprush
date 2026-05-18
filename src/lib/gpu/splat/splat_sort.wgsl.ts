@@ -1,3 +1,7 @@
+import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
+import { Splat } from "./Splat.wgsl.ts";
+
+export default interpolateWgslTemplate`
 // 4-pass 8-bit radix sort of splat indices by camera depth (far-to-near).
 //
 // Each pass processes one 8-bit digit of the 32-bit key. Keys are bit-inverted
@@ -6,19 +10,9 @@
 // Per pass: count → scan → scatter. The sort alternates between buffer A and B;
 // init_keys writes to A, so after 4 passes the result is in A.
 
-struct Splat {
-    pos_sx: vec4f,
-    color: vec4f,
-    quat: vec4f,
-    sy_shape: vec4f,
-    sh1_r: vec4f,
-    sh1_g: vec4f,
-    sh1_b: vec4f,
-    sh1_a: vec4f,
-}
 
 struct SplatArray {
-    splats: array<Splat, {@NUM_SPLATS}u>,
+    splats: array<${Splat}, {@NUM_SPLATS}u>,
 }
 
 struct SortUniforms {
@@ -146,3 +140,4 @@ fn scatter(
         out_indices[dst] = val;
     }
 }
+`;

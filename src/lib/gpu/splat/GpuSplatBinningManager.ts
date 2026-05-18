@@ -1,4 +1,4 @@
-import binningModuleSrc from "./splat_binning.wgsl?raw";
+import binningModuleSrc from "./splat_binning.wgsl.ts";
 import { injectWgslConstants, constants } from "../constants.ts";
 import type { Mat4 } from "wgpu-matrix";
 
