@@ -1,3 +1,6 @@
+import { WgslConstant } from "./wgsl-templates/WgslConstant.ts";
+
+
 export const constants = {
     // Shared / Global
     ADAM_BETA1: 0.9,
@@ -35,7 +38,7 @@ export const constants = {
 
     // Splat ADC & Optimization
     SPLAT_ADC_PERIOD: 25,
-    SPLAT_GRAD_THRESH: 0.00005,
+    splatGradThreshold: new WgslConstant({ value: 0.00005, wgsl: "0.00005f" }),
     SPLAT_OPACITY_KILL_THRESH: 0.05,
     SPLAT_MAX_SPAWNS: 1024,
     SPLAT_VOLUME_KILL_THRESH: 1e-4,

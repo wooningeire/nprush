@@ -1,3 +1,4 @@
+import { constants } from "../constants.ts";
 import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
 import { Splat } from "./Splat.wgsl.ts";
 
@@ -27,7 +28,7 @@ struct ADCArray {
 fn main() {
     var next_dead_search = 0u;
     let ADC_PERIOD = f32({@SPLAT_ADC_PERIOD});
-    let TAU_POS = f32({@SPLAT_GRAD_THRESH});
+    let TAU_POS = ${constants.splatGradThreshold};
     let SPLIT_SCALE_THRESHOLD = 0.01;
 
     for (var i = 0u; i < {@NUM_SPLATS}; i++) {
