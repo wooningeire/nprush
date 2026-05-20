@@ -72,7 +72,7 @@ export class GpuSplatOptimizerManager {
     }) {
         this.device = device;
         this.numSplats = numSplats;
-        const floatsPer = constants.SPLAT_PARAMS_PER_SPLAT;
+        const floatsPer = constants.nSplatFloatParams.value;
         this.numParams = numSplats * floatsPer;
 
         this.splatBuffer = device.createBuffer({
@@ -398,7 +398,7 @@ export class GpuSplatOptimizerManager {
         pass.dispatchWorkgroups(Math.ceil(this.numSplats / 64));
         
         this.stepCount++;
-        if (this.stepCount % constants.SPLAT_ADC_PERIOD === 0) {
+        if (this.stepCount % constants.splatAdcPeriod === 0) {
             pass.setPipeline(this.adcPipeline);
             pass.setBindGroup(0, this.adcBindGroup);
             pass.dispatchWorkgroups(1);

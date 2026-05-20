@@ -1,3 +1,4 @@
+import { constants } from "../constants.ts";
 import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
 import { Splat } from "./Splat.wgsl.ts";
 
@@ -360,7 +361,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u, @builtin(workgroup_id) 
         let d_relu_g = select(0.0, dColor.g, gg_lin > 0.0);
         let d_relu_b = select(0.0, dColor.b, bb_lin > 0.0);
 
-        let base_idx = i * {@SPLAT_PARAMS_PER_SPLAT}u;
+        let base_idx = i * ${constants.nSplatFloatParams};
         atomicAdd(&grads.data[base_idx + 0u], i32(d_pos.x * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 1u], i32(d_pos.y * FP_SCALE_POS));
         atomicAdd(&grads.data[base_idx + 2u], i32(d_pos.z * FP_SCALE_POS));

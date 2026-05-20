@@ -1,3 +1,4 @@
+import { constants } from "../constants.ts";
 import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
 import { Splat } from "./Splat.wgsl.ts";
 
@@ -40,7 +41,7 @@ struct SplatUniforms {
 }
 @group(0) @binding(4) var<uniform> splat_uniforms: SplatUniforms;
 
-const lr_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+const lr_table = array<f32, ${constants.nSplatFloatParams}>(
     0.0003, 0.0003, 0.0003, 0.005,  // pos + scale_x
     0.0025, 0.0025, 0.0025, 0.05,   // color + opacity
     0.001, 0.001, 0.001, 0.001,     // quat
@@ -50,7 +51,7 @@ const lr_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
     0.0001, 0.0001, 0.0001, 0.0,    // sh1_b
     0.0001, 0.0001, 0.0001, 0.0     // sh1_a
 );
-const mu_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+const mu_table = array<f32, ${constants.nSplatFloatParams}>(
     0.05, 0.05, 0.05, 0.05,
     0.1, 0.1, 0.1, 0.1,
     0.05, 0.05, 0.05, 0.05,
@@ -60,7 +61,7 @@ const mu_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
     0.1, 0.1, 0.1, 0.0,
     0.1, 0.1, 0.1, 0.0
 );
-const fps_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+const fps_table = array<f32, ${constants.nSplatFloatParams}>(
     10000.0, 10000.0, 10000.0, 10000.0,
     100000.0, 100000.0, 100000.0, 100000.0,
     10000.0, 10000.0, 10000.0, 10000.0,
@@ -70,7 +71,7 @@ const fps_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
     100000.0, 100000.0, 100000.0, 100000.0,
     100000.0, 100000.0, 100000.0, 100000.0
 );
-const lo_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+const lo_table = array<f32, ${constants.nSplatFloatParams}>(
     -1e9, -1e9, -1e9, 0.001,
     -5.0, -5.0, -5.0, 0.01,
     -1e9, -1e9, -1e9, -1e9,
@@ -80,7 +81,7 @@ const lo_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
     -2.5, -2.5, -2.5, -1e9,
     -2.5, -2.5, -2.5, -1e9
 );
-const hi_table = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+const hi_table = array<f32, ${constants.nSplatFloatParams}>(
     1e9,  1e9,  1e9, 2.0,
     5.0,  5.0,  5.0, 0.99,
     1e9,  1e9,  1e9,  1e9,
@@ -100,7 +101,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     if (splat_id >= {@NUM_SPLATS}u) { return; }
 
     var s = splats.splats[splat_id];
-    let base_idx = splat_id * {@SPLAT_PARAMS_PER_SPLAT}u;
+    let base_idx = splat_id * ${constants.nSplatFloatParams}u;
     let t = current_t + 1;
     var pos_grad_norm2 = 0.0;
 
@@ -114,7 +115,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     // by the total pixel count to get a per-pixel average gradient.
     let pixel_norm = 1.0 / max(f32(adam.pixel_count), 1.0);
 
-    var params_arr = array<f32, {@SPLAT_PARAMS_PER_SPLAT}>(
+    var params_arr = array<f32, ${constants.nSplatFloatParams}>(
         s.pos_sx.x, s.pos_sx.y, s.pos_sx.z, s.pos_sx.w,
         s.color.r,  s.color.g,  s.color.b,  s.color.a,
         s.quat.x,   s.quat.y,   s.quat.z,   s.quat.w,
@@ -126,7 +127,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     );
 
 
-    for (var lp = 0u; lp < {@SPLAT_PARAMS_PER_SPLAT}u; lp++) {
+    for (var lp = 0u; lp < ${constants.nSplatFloatParams}; lp++) {
         let param_idx = base_idx + lp;
         let raw_grad = atomicExchange(&grads.data[param_idx], 0);
         let fp_scale = fps_table[lp];
@@ -169,7 +170,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let volume = s.pos_sx.w * s.sy_shape.x * s.sy_shape.w;
     
     // Standard 3DGS kill: opacity and volume thresholds
-    let base_kill = s.color.a < f32({@SPLAT_OPACITY_KILL_THRESH}) || volume < f32({@SPLAT_VOLUME_KILL_THRESH});
+    let base_kill = s.color.a < ${constants.splatOpacityKillThreshold} || volume < f32({@SPLAT_VOLUME_KILL_THRESH});
     s.color.a = select(s.color.a, 0.0, base_kill);
 
     // Single-view offscreen culling (guarded by no_kill for multiview/turntable)
