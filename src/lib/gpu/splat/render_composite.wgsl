@@ -14,7 +14,7 @@ struct RenderUniforms {
     mesh_splats_enabled: u32,
     splats_enabled: u32,
     canvas_aspect: f32,
-    _pad1: f32,
+    fvc_mode: u32,
     _pad2: f32,
 }
 @group(0) @binding(7) var<uniform> uniforms: RenderUniforms;
@@ -84,7 +84,6 @@ fn frag_composite(v: VsOut) -> @location(0) vec4f {
 
     let splat_px = vec2i(uv * splat_dims);
     let splat_color = textureLoad(splatViewTex, splat_px, 0).rgb;
-    let base = select(vec3f(0.05), splat_color, uniforms.splats_enabled > 0u);
     
     let bezier_px = vec2i(uv * vec2f(textureDimensions(bezierViewTex)));
     let edge_a = clamp(textureLoad(bezierViewTex, bezier_px, 0).a, 0.0, 1.0);
@@ -94,12 +93,38 @@ fn frag_composite(v: VsOut) -> @location(0) vec4f {
     
     let color_bezier_px = vec2i(uv * vec2f(textureDimensions(colorBezierViewTex)));
     let color_bezier = textureLoad(colorBezierViewTex, color_bezier_px, 0);
-    
-    var composite = base;
-    composite = select(composite, composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb, uniforms.base_color_beziers_enabled > 0u);
-    composite = select(composite, composite * (1.0 - color_bezier.a) + color_bezier.rgb, uniforms.color_beziers_enabled > 0u);
-    const EDGE_DARKEN: f32 = 0.5;
-    composite = select(composite, composite - edge_a * EDGE_DARKEN, uniforms.edge_beziers_enabled > 0u);
+
+    var composite: vec3f;
+
+    if (uniforms.fvc_mode > 0u) {
+        // --- Form / Value / Color composite ---
+        let luma_w = vec3f(0.2126, 0.7152, 0.0722);
+
+        // Value base: splats forced to grayscale
+        let splat_luma = dot(splat_color, luma_w);
+        var value = select(vec3f(0.05), vec3f(splat_luma), uniforms.splats_enabled > 0u);
+
+        // Coarse bezier: value strokes (forced grayscale)
+        let coarse_luma = dot(base_color_bezier.rgb / max(base_color_bezier.a, 0.001), luma_w) * base_color_bezier.a;
+        let coarse_gray = vec4f(vec3f(coarse_luma), base_color_bezier.a);
+        value = select(value, value * (1.0 - coarse_gray.a) + coarse_gray.rgb, uniforms.base_color_beziers_enabled > 0u);
+
+        // Color washes over the grayscale value base
+        composite = select(value, value * (1.0 - color_bezier.a) + color_bezier.rgb, uniforms.color_beziers_enabled > 0u);
+
+        // Edge darkening
+        const EDGE_DARKEN: f32 = 0.5;
+        composite = select(composite, composite - edge_a * EDGE_DARKEN, uniforms.edge_beziers_enabled > 0u);
+    } else {
+        // --- Original scale-based composite ---
+        let base = select(vec3f(0.05), splat_color, uniforms.splats_enabled > 0u);
+        composite = base;
+        composite = select(composite, composite * (1.0 - base_color_bezier.a) + base_color_bezier.rgb, uniforms.base_color_beziers_enabled > 0u);
+        composite = select(composite, composite * (1.0 - color_bezier.a) + color_bezier.rgb, uniforms.color_beziers_enabled > 0u);
+        const EDGE_DARKEN: f32 = 0.5;
+        composite = select(composite, composite - edge_a * EDGE_DARKEN, uniforms.edge_beziers_enabled > 0u);
+    }
 
     return vec4f(composite, 1.0);
 }
+

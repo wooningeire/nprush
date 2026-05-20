@@ -74,8 +74,15 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     <div class="separator"></div>
 
     <label>
+        <input type="checkbox" bind:checked={viewerState.formValueColorMode} />
+        Form / Value / Color mode
+    </label>
+
+    <div class="separator"></div>
+
+    <label>
         <input type="checkbox" bind:checked={viewerState.edgeBeziersEnabled} />
-        Edge Beziers
+        {viewerState.formValueColorMode ? "Form (edges)" : "Edge Beziers"}
     </label>
     {#if viewerState.edgeBeziersEnabled}
         <label class="sub">
@@ -85,7 +92,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     {/if}
     <label>
         <input type="checkbox" bind:checked={viewerState.coarseColorBeziersEnabled} />
-        Coarse bezier
+        {viewerState.formValueColorMode ? "Value (strokes)" : "Coarse bezier"}
     </label>
     {#if viewerState.coarseColorBeziersEnabled}
         <label class="sub">
@@ -95,7 +102,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     {/if}
     <label>
         <input type="checkbox" bind:checked={viewerState.fineColorBeziersEnabled} />
-        Fine bezier
+        {viewerState.formValueColorMode ? "Color (washes)" : "Fine bezier"}
     </label>
     {#if viewerState.fineColorBeziersEnabled}
         <label class="sub">
@@ -105,7 +112,7 @@ const radPct = $derived(Math.round(viewerState.turntableRadiusAmplitude * 100));
     {/if}
     <label>
         <input type="checkbox" bind:checked={viewerState.splatsEnabled} />
-        Gaussian Splats
+        {viewerState.formValueColorMode ? "Value (splat fill)" : "Gaussian Splats"}
     </label>
     {#if viewerState.splatsEnabled}
         <label class="sub">

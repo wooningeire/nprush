@@ -35,6 +35,7 @@ export class ViewerState {
     compareBlurred = $state(true);
     blurRadius = $state(16);
     meshSplatsEnabled = $state(false);
+    formValueColorMode = $state(false);
     
     meshVerts: Float32Array | null = null;
     meshBvh: BvhResult | null = null;

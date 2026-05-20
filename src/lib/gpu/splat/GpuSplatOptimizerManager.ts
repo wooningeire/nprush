@@ -341,11 +341,12 @@ export class GpuSplatOptimizerManager {
         }
     }
 
-    writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, meshSplatsEnabled: boolean, splatsEnabled: boolean, aspects: Record<number, number>) {
+    writeRenderUniforms(edgeEnabled: boolean, baseColorEnabled: boolean, colorEnabled: boolean, meshSplatsEnabled: boolean, splatsEnabled: boolean, aspects: Record<number, number>, fvcMode: boolean = false) {
         const buffer = new ArrayBuffer(32);
         const u32 = new Uint32Array(buffer);
         const f32 = new Float32Array(buffer);
         u32[0] = edgeEnabled ? 1 : 0; u32[1] = baseColorEnabled ? 1 : 0; u32[2] = colorEnabled ? 1 : 0; u32[3] = meshSplatsEnabled ? 1 : 0; u32[4] = splatsEnabled ? 1 : 0;
+        u32[6] = fvcMode ? 1 : 0;
         for (let mode = 0; mode < 10; mode++) {
             f32[5] = aspects[mode] ?? 1.0;
             this.device.queue.writeBuffer(this.renderUniformsBuffer, mode * 256, buffer);

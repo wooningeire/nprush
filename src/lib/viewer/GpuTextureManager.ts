@@ -55,6 +55,8 @@ export class GpuTextureManager {
     optimizationBlurredDepthTextureView: GPUTextureView | null = null;
     optimizationBlurTempTexture: GPUTexture | null = null;
     optimizationBlurTempTextureView: GPUTextureView | null = null;
+    optimizationLuminanceTexture: GPUTexture | null = null;
+    optimizationLuminanceTextureView: GPUTextureView | null = null;
 
     optimizationWidth = 0;
     optimizationHeight = 0;
@@ -279,6 +281,14 @@ export class GpuTextureManager {
         });
         this.optimizationBlurTempTextureView = this.optimizationBlurTempTexture.createView();
 
+        this.optimizationLuminanceTexture = this.device.createTexture({
+            label: "optimization luminance target",
+            size: [width, height],
+            format: "rgba8unorm",
+            usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.optimizationLuminanceTextureView = this.optimizationLuminanceTexture.createView();
+
         return true;
     }
 
@@ -332,6 +342,7 @@ export class GpuTextureManager {
         this.optimizationDepthAwareBlurredTexture?.destroy();
         this.optimizationBlurredDepthTexture?.destroy();
         this.optimizationBlurTempTexture?.destroy();
+        this.optimizationLuminanceTexture?.destroy();
 
         this.optimizationColorTexture = null;
         this.optimizationColorTextureView = null;
@@ -355,6 +366,8 @@ export class GpuTextureManager {
         this.optimizationBlurredDepthTextureView = null;
         this.optimizationBlurTempTexture = null;
         this.optimizationBlurTempTextureView = null;
+        this.optimizationLuminanceTexture = null;
+        this.optimizationLuminanceTextureView = null;
     }
 
     destroy() {

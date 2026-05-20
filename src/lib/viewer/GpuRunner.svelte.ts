@@ -7,6 +7,7 @@ import { GpuSplatForwardPipelineManager } from "../gpu/splat/GpuSplatForwardPipe
 import { GpuBezierForwardPipelineManager } from "../gpu/bezier/GpuBezierForwardPipelineManager.ts";
 import { GpuBlurPipelineManager } from "../gpu/blur/GpuBlurPipelineManager.ts";
 import { GpuDepthAwareBlurPipelineManager } from "../gpu/blur/GpuDepthAwareBlurPipelineManager.ts";
+import { GpuLuminanceExtractManager } from "../gpu/splat/GpuLuminanceExtractManager.ts";
 import { GpuEnvmapPipelineManager } from "../gpu/envmap/GpuEnvmapPipelineManager.ts";
 import { GpuPathTracePipelineManager } from "../gpu/pathtrace/GpuPathTracePipelineManager.ts";
 import type { MeshData } from "../gpu/file-load/loadGlb.ts";
@@ -43,6 +44,7 @@ export class GpuRunner {
     readonly fineColorBezierForwardManager: GpuBezierForwardPipelineManager;
     private readonly blurManager: GpuBlurPipelineManager;
     private readonly depthAwareBlurManager: GpuDepthAwareBlurPipelineManager;
+    private readonly luminanceExtractManager: GpuLuminanceExtractManager;
     private readonly matcapTextureView: GPUTextureView;
     private readonly envmapPipelineManager: GpuEnvmapPipelineManager;
     readonly pathTracePipelineManager: GpuPathTracePipelineManager;
@@ -192,6 +194,7 @@ export class GpuRunner {
         
         this.blurManager = new GpuBlurPipelineManager(device);
         this.depthAwareBlurManager = new GpuDepthAwareBlurPipelineManager(device);
+        this.luminanceExtractManager = new GpuLuminanceExtractManager(device);
 
         this.turntable = new TurntableController({
             device,
@@ -245,7 +248,8 @@ export class GpuRunner {
                 this.viewerState.fineColorBeziersEnabled,
                 this.viewerState.meshSplatsEnabled,
                 this.viewerState.splatsEnabled,
-                this.getCanvasAspects()
+                this.getCanvasAspects(),
+                this.viewerState.formValueColorMode
             ));
             /** Splat view-projection + eye position (for SH) are written each frame inside loop(). */
             $effect(() => {
@@ -285,6 +289,7 @@ export class GpuRunner {
                 // Fine bezier layer: less aggressive killing so thin strokes survive,
                 // but background penalty enabled to kill off-model curves.
                 this.fineColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
+                this.fineColorLayerBezierManager.writeMaxWidth(0.005);
                 this.fineColorLayerBezierManager.writeBgPenalty(0.0);
                 // Coarse bezier layer: no background penalty (blurred target bleeds into bg).
                 // Multiview/turntable sets adam no_kill separately (below) so off-frustum kills
@@ -320,6 +325,7 @@ export class GpuRunner {
                 this.fineColorBezierForwardManager.destroy();
                 this.blurManager.destroy();
                 this.depthAwareBlurManager.destroy();
+                this.luminanceExtractManager.destroy();
                 this.pathTracePipelineManager.destroy();
                 this.gpuPerfBuffers?.destroy();
                 this.textures.destroy();
@@ -567,6 +573,18 @@ export class GpuRunner {
             const ptOutputView = this.pathTracePipelineManager.outputTextureView;
             const optimizationTargetView = datasetView ?? ptOutputView ?? this.textures.optimizationColorTextureView!;
 
+            // F/V/C mode: extract luminance from the target for value-layer training.
+            const fvcMode = this.viewerState.formValueColorMode;
+            if (fvcMode && this.textures.optimizationLuminanceTextureView) {
+                this.luminanceExtractManager.setTextures(optimizationTargetView, this.textures.optimizationLuminanceTextureView);
+                this.luminanceExtractManager.addDispatches(
+                    commandEncoder,
+                    this.textures.optimizationWidth,
+                    this.textures.optimizationHeight,
+                    profWrites("Luminance extract"),
+                );
+            }
+
             // 1c. Run separable blur on targets if enabled
             if (this.viewerState.compareBlurred) {
                 this.blurManager.addDispatches(
@@ -609,17 +627,28 @@ export class GpuRunner {
                 );
             }
             
-            // Update backward targets for all optimizers to point to current frame's target view
+            // Update backward targets for all optimizers to point to current frame's target view.
+            // In F/V/C mode, value layers (splats + coarse beziers) train against luminance.
+            const valueModeTarget = fvcMode && this.textures.optimizationLuminanceTextureView
+                ? this.textures.optimizationLuminanceTextureView
+                : (this.viewerState.compareBlurred ? this.textures.optimizationBlurredTextureView! : optimizationTargetView);
+            const valueModeDepth = this.viewerState.compareBlurred && !fvcMode
+                ? this.textures.optimizationBlurredDepthTextureView!
+                : this.textures.optimizationDepthTextureView!;
             this.splatOptimizerManager.setBackwardTarget(
-                this.viewerState.compareBlurred ? this.textures.optimizationBlurredTextureView! : optimizationTargetView,
-                this.viewerState.compareBlurred ? this.textures.optimizationBlurredDepthTextureView! : this.textures.optimizationDepthTextureView!,
+                valueModeTarget,
+                valueModeDepth,
                 this.textures.optimizationWidth,
                 this.textures.optimizationHeight
             );
 
             if (this.viewerState.coarseColorBeziersEnabled) {
+                // In F/V/C mode, coarse beziers are value strokes: train against luminance.
+                const coarseTarget = fvcMode && this.textures.optimizationLuminanceTextureView
+                    ? this.textures.optimizationLuminanceTextureView
+                    : this.textures.optimizationDepthAwareBlurredTextureView!;
                 this.coarseColorLayerBezierManager.setBackwardTarget(
-                    this.textures.optimizationDepthAwareBlurredTextureView!,
+                    coarseTarget,
                     this.textures.optimizationDepthTextureView!,
                     this.textures.optimizationSplatColorTextureView!,
                     this.textures.optimizationNormalTextureView!,
@@ -849,7 +878,8 @@ export class GpuRunner {
                 this.viewerState.fineColorBeziersEnabled,
                 this.viewerState.meshSplatsEnabled,
                 this.viewerState.splatsEnabled,
-                aspects
+                aspects,
+                this.viewerState.formValueColorMode
             );
 
             const PANEL_MODES: Record<string, number> = {
