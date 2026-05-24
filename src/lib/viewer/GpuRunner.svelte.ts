@@ -330,6 +330,7 @@ export class GpuRunner {
                 this.gpuPerfBuffers?.destroy();
                 this.textures.destroy();
                 this.turntable.destroy();
+                this.device.destroy();
             };
         });
     }

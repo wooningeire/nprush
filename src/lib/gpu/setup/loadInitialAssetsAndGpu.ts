@@ -13,7 +13,14 @@ import { loadHdrTexture } from "../file-load/loadHdrTexture.ts";
 import { loadTexture } from "../file-load/loadTexture.ts";
 import { buildBvh } from "../bvh.ts";
 
-export const loadInitialAssetsAndGpu = async (state: ViewerState) => {
+export const loadInitialAssetsAndGpu = async (
+    state: ViewerState,
+    {
+        signal,
+    }: {
+        signal?: AbortSignal,
+    } = {},
+) => {
     const loadingToast = showToast("loading gpu & meshes…", "info", 0);
     const [gpu, primaryMesh, groundMesh, groundPbrMesh] = await Promise.all([
         requestGpu({
@@ -32,6 +39,10 @@ export const loadInitialAssetsAndGpu = async (state: ViewerState) => {
     dismissToast(loadingToast);
 
     if (gpu === null) return null;
+    if (signal?.aborted) {
+        gpu.device.destroy();
+        return null;
+    }
 
 
 
@@ -42,6 +53,10 @@ export const loadInitialAssetsAndGpu = async (state: ViewerState) => {
     state.meshBvh = buildBvh(state.meshVerts, new Uint32Array(primaryMesh.indices));
     dismissToast(bvhToast);
     showToast("BVH ready", "info", 2000);
+    if (signal?.aborted) {
+        gpu.device.destroy();
+        return null;
+    }
 
     const texturesToast = showToast("loading textures…", "info", 0);
     const [envTexture, coarseBrushTexture, fineBrushTexture, groundAlbedoTexture, groundNormalTexture] = await Promise.all([
@@ -60,6 +75,15 @@ export const loadInitialAssetsAndGpu = async (state: ViewerState) => {
             }),
     ]);
     dismissToast(texturesToast);
+    if (signal?.aborted) {
+        envTexture.destroy();
+        coarseBrushTexture.destroy();
+        fineBrushTexture.destroy();
+        groundAlbedoTexture.destroy();
+        groundNormalTexture.destroy();
+        gpu.device.destroy();
+        return null;
+    }
 
     return {
         gpu,

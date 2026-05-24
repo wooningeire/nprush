@@ -2,8 +2,9 @@
 import Toasts from "./Toasts.svelte";
 import BrushstrokeOptimizer from "./BrushstrokeOptimizer.svelte";
 import MaterialCreator from "./material-creator/MaterialCreator.svelte";
+import ContourModeler from "$/contour-modeler/ContourModeler.svelte";
 
-type ViewMode = "brushstroke-optimizer" | "material-creator";
+type ViewMode = "brushstroke-optimizer" | "material-creator" | "contour-modeler";
 let mode = $state<ViewMode>("brushstroke-optimizer");
 </script>
 
@@ -23,23 +24,28 @@ let mode = $state<ViewMode>("brushstroke-optimizer");
             >
                 Materials
             </button>
+
+            <button
+                class:active={mode === "contour-modeler"}
+                onclick={() => mode = "contour-modeler"}
+            >
+                Contour Modeler
+            </button>
         </mode-bar>
 
-        <view-mode-container
-            class:visible={mode === "brushstroke-optimizer"}
-        >
-            <BrushstrokeOptimizer
-                active={mode === "brushstroke-optimizer"}
-            />
-        </view-mode-container>
-
-        <view-mode-container
-            class:visible={mode === "material-creator"}
-        >
-            <MaterialCreator
-                active={mode === "material-creator"}
-            />
-        </view-mode-container>
+        {#if mode === "brushstroke-optimizer"}
+            <view-mode-container>
+                <BrushstrokeOptimizer active />
+            </view-mode-container>
+        {:else if mode === "material-creator"}
+            <view-mode-container>
+                <MaterialCreator active />
+            </view-mode-container>
+        {:else}
+            <view-mode-container>
+                <ContourModeler active />
+            </view-mode-container>
+        {/if}
     </main-content>
 
     <Toasts />
@@ -71,13 +77,6 @@ main-content {
 
 view-mode-container {
     overflow: hidden;
-    
-    &:not(.visible) {
-        display: none;
-    }
-
-    &.visible {
-        display: contents;
-    }
+    display: contents;
 }
 </style>

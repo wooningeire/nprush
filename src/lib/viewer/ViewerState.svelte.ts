@@ -329,10 +329,18 @@ export class ViewerState {
         const state = new ViewerState();
         
         let stopLoop: (() => void) | null = null;
+        let destroyed = false;
+        const mountAbortController = new AbortController();
 
         onMount(async () => {
-            const initialLoadResult = await loadInitialAssetsAndGpu(state);
+            const initialLoadResult = await loadInitialAssetsAndGpu(state, {
+                signal: mountAbortController.signal,
+            });
             if (initialLoadResult === null) return;
+            if (destroyed) {
+                initialLoadResult.gpu.device.destroy();
+                return;
+            }
 
             const {
                 gpu,
@@ -350,6 +358,10 @@ export class ViewerState {
 
 
             const canvases = await canvasesPromise;
+            if (destroyed) {
+                gpu.device.destroy();
+                return;
+            }
             const contexts: Record<string, GPUCanvasContext> = {};
 
             for (const [id, canvas] of Object.entries(canvases)) {
@@ -389,11 +401,20 @@ export class ViewerState {
             state.runner = gpuRunner;
 
             stopLoop = gpuRunner.loop();
+            if (destroyed) {
+                stopLoop?.();
+                stopLoop = null;
+                gpuRunner.destroy();
+            }
         });
 
         onDestroy(() => {
+            destroyed = true;
+            mountAbortController.abort();
             stopLoop?.();
+            stopLoop = null;
             state.runner?.destroy();
+            state.runner = null;
         });
 
         return state;

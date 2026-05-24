@@ -36,7 +36,8 @@ export const requestGpu = async ({
         return null;
     }
 
-    device.lost.then(() => {
+    device.lost.then(info => {
+        if (info.reason === "destroyed") return;
         onErr?.("gpu device was lost/hung or a shader took too long");
     });
 
