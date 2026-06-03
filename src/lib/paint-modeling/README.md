@@ -103,11 +103,136 @@ same object + no reliable hit:
 same object + explicit new-surface mode:
   bypass snapping
   create new geometry or a distinct seam side
+
+same object + explicit occluder mode:
+  bypass snapping to the first existing hit
+  create a foreground surface claim from the current view
+  record that it occludes the previous hit over the painted mask
 ```
 
 This keeps the model artist-friendly: painting from another view recolors or
 annotates the existing object unless the user intentionally says they are
 building additional form.
+
+## Occlusion From A View
+
+Occlusion should not be represented as only a global toggle. A toggle can be a
+convenient UI affordance, but the model needs a per-stroke or per-layer
+placement intent that records a view-specific visibility relationship.
+
+Artist-facing placement modes:
+
+```text
+Snap / observe:
+  default mode
+  raycast to the selected object
+  attach paint to the first reliable surface hit
+
+New surface:
+  ignore snapping
+  create or extend a chart from the current view
+  no automatic front/back relationship is asserted
+
+Occluding surface:
+  ignore snapping to the existing hit
+  create or extend a chart from the current view
+  assert that the new chart is in front of the existing hit in this view
+
+Paint behind:
+  continue past the first hit or target a hidden seam side
+  attach paint to a back surface or create a new back chart
+  assert that it is occluded by the front surface in this view
+```
+
+The recommended UI is a small placement control rather than a single permanent
+toggle:
+
+```text
+Placement: [Snap] [New] [Occlude] [Behind]
+```
+
+`Snap` should remain the default because it preserves same-object consistency.
+`Occlude` is the deliberate "do not snap to what is already there; I am drawing
+a foreground piece" command. For quick workflows, holding a modifier while
+painting can temporarily switch from `Snap` to `Occlude` or `New`.
+
+An occlusion claim is view-local:
+
+```text
+OcclusionClaim q:
+  view: V_j
+  mask: M_j subset image/view coordinates
+  frontSurface: surface refs or chart created by the occluding stroke
+  backSurface: existing surface hit, hidden chart, or unknown
+  boundary: occlusion seam along partial M_j
+```
+
+For each pixel/sample `u` inside the occlusion mask, the visibility ordering is:
+
+```text
+depth_j(frontSurface, u) < depth_j(backSurface, u)
+```
+
+where `depth_j` means distance along the ray from camera `V_j`. This is not the
+same as a universal object layer order; another view may see the surfaces side
+by side, reversed by topology, or not overlapping at all.
+
+Occlusion boundaries are seams. The front and back surfaces should not be
+smoothed together across that boundary:
+
+```text
+front and back are distinct surface refs
+no vertex sharing across the occlusion boundary
+no depth smoothing across the occlusion boundary
+raycast may choose front, back, or continue-through based on placement mode
+```
+
+When the artist paints an occluder, the system should create a new chart from
+the current view and initialize its depth in front of the previous hit:
+
+```ts
+function paintOccludingStroke(view Vj, object O, stroke2d) {
+  const samples = resample(stroke2d);
+  const chart = getOrCreateChart(O, Vj, { role: "occluder" });
+  const claim = createOcclusionClaim({ viewId: Vj.id, frontChartId: chart.id });
+
+  for (const y of samples) {
+    const ray = makeRay(Vj, y);
+    const backHit = raycastObjectSurface(O, ray);
+    const u = chartCoordinatesFromViewPoint(chart, y);
+
+    chart.depth[u] = backHit
+      ? max(MIN_DEPTH, backHit.viewDepth - OCCLUSION_GAP)
+      : initialForegroundDepth(O, Vj, y);
+
+    claim.mask.add(y);
+    if (backHit) claim.backRefs.add(backHit.surfaceRef);
+
+    addPaintSample({
+      objectId: O.id,
+      sourceViewId: Vj.id,
+      viewPoint: y,
+      surfaceRef: { chartId: chart.id, uv: u },
+      placement: "occluding-surface",
+      color: brush.color,
+      opacity: brush.opacity,
+    });
+  }
+
+  sealOcclusionBoundaryAsSeam(O, claim);
+}
+```
+
+The important distinction:
+
+```text
+Turning snapping off chooses placement behavior.
+Occlusion records a visibility/order claim.
+```
+
+So an "ignore snapping" toggle alone is not enough unless it creates an explicit
+new surface and records whether that surface is merely new, intentionally in
+front, or intentionally behind.
 
 ## Paint Stroke Algorithm
 
@@ -118,7 +243,12 @@ function paintStroke(view Vj, object O, stroke2d, mode = "auto") {
   for (const y of samples) {
     const ray = makeRay(Vj, y);
 
-    if (mode !== "new-surface") {
+    if (mode === "occluding-surface") {
+      paintOccludingSample(Vj, O, y);
+      continue;
+    }
+
+    if (mode !== "new-surface" && mode !== "paint-behind") {
       const hit = raycastObjectSurface(O, ray);
 
       if (isReliableHit(hit, Vj, y)) {
@@ -127,6 +257,22 @@ function paintStroke(view Vj, object O, stroke2d, mode = "auto") {
           sourceViewId: Vj.id,
           viewPoint: y,
           surfaceRef: hit.surfaceRef,
+          color: brush.color,
+          opacity: brush.opacity,
+        });
+        continue;
+      }
+    }
+
+    if (mode === "paint-behind") {
+      const backHit = raycastObjectSurfaceBehindFirstHit(O, ray);
+      if (isReliableHit(backHit, Vj, y)) {
+        addPaintSample({
+          objectId: O.id,
+          sourceViewId: Vj.id,
+          viewPoint: y,
+          surfaceRef: backHit.surfaceRef,
+          placement: "behind",
           color: brush.color,
           opacity: brush.opacity,
         });
@@ -253,6 +399,9 @@ Smoothness constraint, except across seams:
 
 Seam constraint:
   no equality or smoothing term between samples across S_c
+
+Occlusion ordering constraint:
+  depth_j(X_front) < depth_j(X_back) for samples inside M_j
 ```
 
 The default objective for refinement is:
@@ -261,6 +410,7 @@ The default objective for refinement is:
 minimize:
   source_view_projection_error
   + later_view_observation_error
+  + occlusion_ordering_error
   + smoothness_error_inside_seam_regions
   + edit_regularization
 
@@ -276,15 +426,24 @@ subject to:
 flowchart TD
     A["User paints stroke in view j"] --> B["Selected object exists?"]
     B -->|No| C["Create object and source chart for view j"]
-    B -->|Yes| D["Cast brush sample rays into selected object"]
+    B -->|Yes| P["Placement mode?"]
+    P -->|Snap| D["Cast brush sample rays into selected object"]
+    P -->|New| H["Create or extend chart from view j"]
+    P -->|Occlude| O["Create foreground chart and occlusion claim"]
+    P -->|Behind| R["Continue ray past first hit or target hidden side"]
     D --> E["Reliable hit on existing depth surface?"]
     E -->|Yes| F["Attach paint to existing surface refs"]
     F --> G["No new depth DOF added"]
     E -->|No| H["Create or extend chart from view j"]
     H --> I["Initialize depth along view j rays"]
     I --> J["New geometry DOF created"]
+    O --> Q["Initialize depth in front of previous hit"]
+    Q --> S["Boundary becomes occlusion seam"]
+    R --> T["Attach to back surface or create hidden chart"]
     G --> K["Render from all views"]
     J --> K
+    S --> K
+    T --> K
     K --> L["Seams block interpolation and smoothing"]
 ```
 
@@ -302,7 +461,10 @@ implementation step should replace plane-first stroke placement with this order:
 2. If the hit is reliable, attach the paint sample to that surface reference.
 3. If no reliable hit exists, create or extend a source-view chart.
 4. Store depth as distance along the chart source view ray.
-5. Use seam masks to split continuity and block smoothing.
+5. Add explicit placement modes for snap, new surface, occluding surface, and
+   behind surface.
+6. Record occlusion claims as view-local depth ordering constraints.
+7. Use seam masks to split continuity and block smoothing.
 
 The sentence to preserve:
 

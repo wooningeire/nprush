@@ -3,8 +3,9 @@ import Toasts from "./Toasts.svelte";
 import BrushstrokeOptimizer from "./BrushstrokeOptimizer.svelte";
 import MaterialCreator from "./material-creator/MaterialCreator.svelte";
 import ContourModeler from "$/contour-modeler/ContourModeler.svelte";
+import PaintModeler from "$/paint-modeling/PaintModeler.svelte";
 
-type ViewMode = "brushstroke-optimizer" | "material-creator" | "contour-modeler";
+type ViewMode = "brushstroke-optimizer" | "material-creator" | "contour-modeler" | "paint-modeler";
 let mode = $state<ViewMode>("brushstroke-optimizer");
 </script>
 
@@ -31,6 +32,13 @@ let mode = $state<ViewMode>("brushstroke-optimizer");
             >
                 Contour Modeler
             </button>
+
+            <button
+                class:active={mode === "paint-modeler"}
+                onclick={() => mode = "paint-modeler"}
+            >
+                Paint Modeler
+            </button>
         </mode-bar>
 
         {#if mode === "brushstroke-optimizer"}
@@ -41,9 +49,13 @@ let mode = $state<ViewMode>("brushstroke-optimizer");
             <view-mode-container>
                 <MaterialCreator active />
             </view-mode-container>
-        {:else}
+        {:else if mode === "contour-modeler"}
             <view-mode-container>
                 <ContourModeler active />
+            </view-mode-container>
+        {:else}
+            <view-mode-container>
+                <PaintModeler active />
             </view-mode-container>
         {/if}
     </main-content>

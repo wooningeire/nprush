@@ -10,5 +10,6 @@ describe('/+page.svelte', () => {
 		await expect.element(page.getByRole('button', { name: 'Brushstroke optimizer' })).toBeInTheDocument();
 		await expect.element(page.getByRole('button', { name: 'Materials' })).toBeInTheDocument();
 		await expect.element(page.getByRole('button', { name: 'Contour Modeler' })).toBeInTheDocument();
+		await expect.element(page.getByRole('button', { name: 'Paint Modeler' })).toBeInTheDocument();
 	});
 });
