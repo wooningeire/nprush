@@ -3,6 +3,7 @@ import { Splat } from "./Splat.wgsl.ts";
 
 export default interpolateWgslTemplate`
 const SH_C1: f32 = 0.4886025119029199;
+const DEPTH_NEAR: f32 = 0.1;
 
 fn quat_conj(q: vec4f) -> vec4f {
     return vec4f(q.x, -q.y, -q.z, -q.w);
@@ -165,6 +166,7 @@ fn vert(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VsO
 
 struct FragOut {
     @location(0) color: vec4f,
+    @location(1) depth: vec4f,
 }
 
 @fragment
@@ -187,7 +189,10 @@ fn frag(v: VsOut) -> FragOut {
     }
     
     var out: FragOut;
+    let linear_depth = max(v.depth, DEPTH_NEAR);
+    let depth_enc = clamp(1.0 - DEPTH_NEAR / linear_depth, 0.0, 1.0);
     out.color = vec4f(v.rgb, a);
+    out.depth = vec4f(depth_enc, depth_enc, depth_enc, a);
     return out;
 }
 `;

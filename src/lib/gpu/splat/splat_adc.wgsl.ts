@@ -10,10 +10,10 @@ struct SplatArray {
 struct AdamState {
     m: array<f32, {@NUM_PARAMS}u>,
     v: array<f32, {@NUM_PARAMS}u>,
-    t: f32,
-    pixel_count: f32,
-    no_kill: f32,
-    pad: f32,
+    t: u32,
+    pixel_count: u32,
+    no_kill: u32,
+    pad: u32,
 }
 
 struct ADCArray {
@@ -67,7 +67,7 @@ fn main() {
                     s.pos_sx.x -= s.pos_sx.w * 0.05;
                     new_s.pos_sx.x += s.pos_sx.w * 0.05;
                 } else {
-                    let seed = f32(i) * 3.14159 + adam.t;
+                    let seed = f32(i) * 3.14159 + f32(adam.t);
                     new_s.pos_sx.x += (fract(sin(seed * 12.9898) * 43758.5453) - 0.5) * 0.002;
                     new_s.pos_sx.y += (fract(sin(seed * 78.233) * 43758.5453) - 0.5) * 0.002;
                 }

@@ -77,7 +77,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     seed = seed + 1.0;
     let cb = hash(seed);
     seed = seed + 1.0;
-    b.color = vec4f(cr, cg, cb, 0.5);
+    let initial_live_count = max(1u, {@NUM_BEZIERS}u / 8u);
+    let alpha = select(0.0, 0.5, i < initial_live_count);
+    b.color = vec4f(cr, cg, cb, alpha);
     
     // SH coefficients
     b.sh1_r = vec4f(0.0);

@@ -55,6 +55,7 @@ fn instantiate(@builtin(global_invocation_id) gid: vec3u) {
     let dims_y = f32(binning_uniforms.grid_height * 16u);
     let aspect = f32(binning_uniforms.grid_width * 16u) / dims_y;
 
+    let clip_xy = vec2f(clip.x, clip.y);
     let proj_xy = vec2f(clip.x / w * aspect, clip.y / w);
 
     let sx = max(s.pos_sx.w, 0.0001);
@@ -66,9 +67,9 @@ fn instantiate(@builtin(global_invocation_id) gid: vec3u) {
     let ay_w = quat_rotate(q, vec3f(0.0, 1.0, 0.0));
     let az_w = quat_rotate(q, vec3f(0.0, 0.0, 1.0));
 
-    let ax_s = project_axis(binning_uniforms.vp, ax_w, proj_xy, w, aspect);
-    let ay_s = project_axis(binning_uniforms.vp, ay_w, proj_xy, w, aspect);
-    let az_s = project_axis(binning_uniforms.vp, az_w, proj_xy, w, aspect);
+    let ax_s = project_axis(binning_uniforms.vp, ax_w, clip_xy, w, aspect);
+    let ay_s = project_axis(binning_uniforms.vp, ay_w, clip_xy, w, aspect);
+    let az_s = project_axis(binning_uniforms.vp, az_w, clip_xy, w, aspect);
 
     let m0x = ax_s.x * sx; let m0y = ax_s.y * sx;
     let m1x = ay_s.x * sy; let m1y = ay_s.y * sy;

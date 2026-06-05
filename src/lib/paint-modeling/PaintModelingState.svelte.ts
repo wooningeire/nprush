@@ -4,6 +4,7 @@ import { CameraOrbit } from "../viewer/CameraOrbit.svelte.ts";
 import type {
     BrushStyle,
     ChartRole,
+    ChartProjectionMode,
     DepthBrushPreview,
     DepthTool,
     OcclusionClaim,
@@ -13,9 +14,11 @@ import type {
     PaintStroke,
     PaintTool,
     PaintView,
+    PaintRenderOptions,
     PlacementMode,
     RenderPrimitive,
     RenderSegment,
+    PaintStrokeRenderMode,
     SurfaceHit,
     SurfaceRef,
     Vec2,
@@ -58,6 +61,7 @@ interface PaintSceneSnapshot {
     occlusionClaims: OcclusionClaim[];
     activeObjectId: string | null;
     activeViewId: string | null;
+    chartProjectionMode: ChartProjectionMode;
 }
 
 interface ChartPaintSample {
@@ -88,6 +92,7 @@ export class PaintModelingState {
     activeObjectId = $state<string | null>(null);
     activeViewId = $state<string | null>(null);
     placementMode = $state<PlacementMode>("snap");
+    chartProjectionMode = $state<ChartProjectionMode>("view-plane");
     tool = $state<PaintTool>("paint");
     brush = $state<BrushStyle>({ ...DEFAULT_BRUSH });
     depthBrushRadius = $state(0.16);
@@ -167,6 +172,10 @@ export class PaintModelingState {
 
     setPlacementMode(mode: PlacementMode) {
         this.placementMode = mode;
+    }
+
+    setChartProjectionMode(mode: ChartProjectionMode) {
+        this.chartProjectionMode = mode;
     }
 
     setTool(tool: PaintTool) {
@@ -509,7 +518,8 @@ export class PaintModelingState {
         return projectVisiblePoint(view.viewProjMat, world);
     }
 
-    buildRenderSegments(showCharts = true, depthPreview?: DepthBrushPreview): RenderPrimitive[] {
+    buildRenderSegments(options: boolean | PaintRenderOptions = true, depthPreview?: DepthBrushPreview): RenderPrimitive[] {
+        const renderOptions = normalizeRenderOptions(options, depthPreview);
         const segments: RenderPrimitive[] = [];
         const objectById = new Map(this.objects.map(object => [object.id, object]));
         const viewById = new Map(this.views.map(view => [view.id, view]));
@@ -522,7 +532,19 @@ export class PaintModelingState {
 
         appendOrientationSegments(segments);
 
-        if (showCharts) {
+        if (renderOptions.showPaintSurface) {
+            for (const object of this.objects) {
+                if (!object.visible) continue;
+                for (const chart of object.charts) {
+                    const sourceView = viewById.get(chart.sourceViewId);
+                    if (!sourceView) continue;
+                    const worldAt = (point: Vec2) => chartPointToWorldFromView(chart, sourceView, point);
+                    appendPaintTriangles(segments, chart, worldAt);
+                }
+            }
+        }
+
+        if (renderOptions.showChartWireframe) {
             for (const object of this.objects) {
                 if (!object.visible) continue;
                 for (const chart of object.charts) {
@@ -542,27 +564,133 @@ export class PaintModelingState {
             return chartPointToWorldFromView(chart, view, ref.uv);
         };
 
-        for (const stroke of this.strokes) {
-            const object = objectById.get(stroke.objectId);
-            if (!object?.visible) continue;
-            const color = parseColor(stroke.style.color, stroke.style.opacity);
-            let previous = stroke.samples.length > 0
-                ? worldPointForRef(stroke.samples[0].surfaceRef)
-                : null;
-            for (let i = 1; i < stroke.samples.length; i++) {
-                const current = worldPointForRef(stroke.samples[i].surfaceRef);
-                if (previous && current) {
-                    segments.push({ a: previous, b: current, color, width: stroke.style.width });
-                }
-                previous = current;
+        if (renderOptions.strokeRenderMode !== "surface") {
+            for (const stroke of this.sortedStrokesForRender(renderOptions.strokeRenderMode, objectById, worldPointForRef)) {
+                appendStrokeRenderSegments(segments, stroke, worldPointForRef);
             }
         }
 
-        if (depthPreview) {
-            this.appendDepthBrushPreviewSegments(segments, depthPreview);
+        this.appendDraftStrokePreviewSegments(segments);
+
+        if (renderOptions.depthPreview && renderOptions.showBrushLattice) {
+            this.appendDepthBrushPreviewSegments(segments, renderOptions.depthPreview);
         }
 
         return segments;
+    }
+
+    private sortedStrokesForRender(
+        mode: PaintStrokeRenderMode,
+        objectById: Map<string, PaintObject>,
+        worldPointForRef: (ref: SurfaceRef) => Vec3 | null,
+    ): PaintStroke[] {
+        const strokes = this.strokes.filter(stroke => {
+            const object = objectById.get(stroke.objectId);
+            return !!object?.visible;
+        });
+
+        if (mode === "view-depth") {
+            return strokes
+                .map(stroke => ({
+                    stroke,
+                    objectLayer: objectById.get(stroke.objectId)?.layerIndex ?? 0,
+                    depth: this.strokeCameraDepth(stroke, worldPointForRef),
+                }))
+                .sort((a, b) =>
+                    b.depth - a.depth
+                    || a.objectLayer - b.objectLayer
+                    || a.stroke.paintOrder - b.stroke.paintOrder
+                )
+                .map(entry => entry.stroke);
+        }
+
+        return strokes.slice().sort((a, b) =>
+            (objectById.get(a.objectId)?.layerIndex ?? 0) - (objectById.get(b.objectId)?.layerIndex ?? 0)
+            || a.paintOrder - b.paintOrder
+        );
+    }
+
+    private strokeCameraDepth(stroke: PaintStroke, worldPointForRef: (ref: SurfaceRef) => Vec3 | null): number {
+        let total = 0;
+        let count = 0;
+        const stride = Math.max(1, Math.floor(stroke.samples.length / 32));
+        for (let i = 0; i < stroke.samples.length; i += stride) {
+            const world = worldPointForRef(stroke.samples[i].surfaceRef);
+            const depth = world ? projectedDepth(this.camera.viewProjMat, world) : null;
+            if (depth === null) continue;
+            total += depth;
+            count += 1;
+        }
+        return count === 0 ? Number.NEGATIVE_INFINITY : total / count;
+    }
+
+    private appendDraftStrokePreviewSegments(segments: RenderPrimitive[]) {
+        const object = this.activeObject;
+        const view = this.activeView;
+        if (!this.draftStroke || this.draftStroke.length < 2 || !object?.visible || object.locked || !view) return;
+
+        const color = parseColor(this.brush.color, this.brush.opacity);
+        const points = resamplePaintPolyline(this.draftStroke, Math.min(this.maxStrokeSamplesForBrush(), 144));
+        let previous = points.length > 0
+            ? this.draftStrokeWorldPoint(object, view, points[0])
+            : null;
+        for (let i = 1; i < points.length; i++) {
+            const current = this.draftStrokeWorldPoint(object, view, points[i]);
+            appendWorldSegment(segments, previous, current, color, this.brush.width);
+            previous = current;
+        }
+    }
+
+    private draftStrokeWorldPoint(object: PaintObject, view: PaintView, point: Vec2): Vec3 | null {
+        if (this.placementMode === "snap") {
+            const hit = this.raycastObjectSurface(object, view, point);
+            if (hit) return hit.world;
+        }
+
+        if (this.placementMode === "paint-behind") {
+            const hit = this.raycastObjectSurface(object, view, point);
+            if (hit) {
+                const depth = depthForProjectionAtPoint(
+                    view,
+                    point,
+                    hit.viewDepth + OCCLUSION_GAP,
+                    this.chartProjectionMode,
+                );
+                return viewPointToWorldAtProjectionDepth(view, point, depth, this.chartProjectionMode);
+            }
+            return viewPointToWorldAtProjectionDepth(
+                view,
+                point,
+                this.defaultDepthForView(view) * 1.12,
+                this.chartProjectionMode,
+            );
+        }
+
+        if (this.placementMode === "occluding-surface") {
+            const hit = this.raycastObjectSurface(object, view, point);
+            if (hit) {
+                const depth = depthForProjectionAtPoint(
+                    view,
+                    point,
+                    Math.max(MIN_DEPTH, hit.viewDepth - OCCLUSION_GAP),
+                    this.chartProjectionMode,
+                );
+                return viewPointToWorldAtProjectionDepth(view, point, depth, this.chartProjectionMode);
+            }
+            return viewPointToWorldAtProjectionDepth(
+                view,
+                point,
+                this.defaultDepthForView(view) * 0.82,
+                this.chartProjectionMode,
+            );
+        }
+
+        return viewPointToWorldAtProjectionDepth(
+            view,
+            point,
+            this.defaultDepthForView(view),
+            this.chartProjectionMode,
+        );
     }
 
     private currentEffectView(): PaintView {
@@ -632,6 +760,7 @@ export class PaintModelingState {
             }
 
             let depth = fallbackDepth;
+            let depthIsViewRayDistance = false;
             if (placement === "paint-behind") {
                 const hits = this.raycastObjectSurfaces(object, view, point);
                 const firstHit = hits[0] ?? null;
@@ -653,12 +782,20 @@ export class PaintModelingState {
                     });
                     continue;
                 }
-                if (firstHit) depth = firstHit.viewDepth + OCCLUSION_GAP;
+                if (firstHit) {
+                    depth = firstHit.viewDepth + OCCLUSION_GAP;
+                    depthIsViewRayDistance = true;
+                }
             }
 
             const role: ChartRole = placement === "paint-behind" ? "behind" : "surface";
             fallbackChart ??= this.getOrCreateChart(object, view, role);
-            appendPaintRun(paintRuns, fallbackChart, { point, depth }, true, false);
+            appendPaintRun(paintRuns, fallbackChart, {
+                point,
+                depth: depthIsViewRayDistance
+                    ? depthForProjectionAtPoint(view, point, depth, fallbackChart.projectionMode)
+                    : depth,
+            }, true, false);
             samples.push({
                 sourcePoint: point,
                 surfaceRef: { chartId: fallbackChart.id, uv: { ...point } },
@@ -701,7 +838,7 @@ export class PaintModelingState {
         for (const point of points) {
             const backHit = this.raycastObjectSurface(object, view, point, chart.id);
             const depth = backHit
-                ? Math.max(MIN_DEPTH, backHit.viewDepth - OCCLUSION_GAP)
+                ? depthForProjectionAtPoint(view, point, Math.max(MIN_DEPTH, backHit.viewDepth - OCCLUSION_GAP), chart.projectionMode)
                 : this.defaultDepthForView(view) * 0.82;
             paintSamples.push({ point, depth });
             claim.mask.push({ ...point });
@@ -835,12 +972,18 @@ export class PaintModelingState {
     }
 
     private getOrCreateChart(object: PaintObject, view: PaintView, role: ChartRole): PaintChart {
-        const existing = object.charts.find(chart => chart.sourceViewId === view.id && chart.role === role);
+        const projectionMode = this.chartProjectionMode;
+        const existing = object.charts.find(chart =>
+            chart.sourceViewId === view.id
+            && chart.role === role
+            && chart.projectionMode === projectionMode
+        );
         if (existing) return existing;
         const chart = createChart({
             objectId: object.id,
             sourceViewId: view.id,
             role,
+            projectionMode,
             depth: role === "occluder" ? this.defaultDepthForView(view) * 0.82 : this.defaultDepthForView(view),
         });
         object.charts.push(chart);
@@ -928,6 +1071,7 @@ export class PaintModelingState {
             occlusionClaims: this.occlusionClaims.map(cloneOcclusionClaim),
             activeObjectId: this.activeObjectId,
             activeViewId: this.activeViewId,
+            chartProjectionMode: this.chartProjectionMode,
         };
     }
 
@@ -940,6 +1084,7 @@ export class PaintModelingState {
         this.occlusionClaims = snapshot.occlusionClaims.map(cloneOcclusionClaim);
         this.activeObjectId = snapshot.activeObjectId;
         this.activeViewId = snapshot.activeViewId;
+        this.chartProjectionMode = snapshot.chartProjectionMode;
         this.draftStroke = null;
         this.pendingStrokeUndoSnapshot = null;
         this.undoGroup = null;
@@ -972,15 +1117,39 @@ export class PaintModelingState {
     }
 }
 
+function normalizeRenderOptions(
+    options: boolean | PaintRenderOptions,
+    depthPreview?: DepthBrushPreview,
+): Required<PaintRenderOptions> {
+    if (typeof options === "boolean") {
+        return {
+            showPaintSurface: false,
+            showChartWireframe: options,
+            showBrushLattice: !!depthPreview,
+            depthPreview: depthPreview ?? null,
+            strokeRenderMode: "paint-order",
+        };
+    }
+    return {
+        showPaintSurface: options.showPaintSurface ?? true,
+        showChartWireframe: options.showChartWireframe ?? true,
+        showBrushLattice: options.showBrushLattice ?? false,
+        depthPreview: options.depthPreview ?? null,
+        strokeRenderMode: options.strokeRenderMode ?? "surface",
+    };
+}
+
 function createChart({
     objectId,
     sourceViewId,
     role,
+    projectionMode,
     depth,
 }: {
     objectId: string;
     sourceViewId: string;
     role: ChartRole;
+    projectionMode: ChartProjectionMode;
     depth: number;
 }): PaintChart {
     return {
@@ -988,6 +1157,7 @@ function createChart({
         objectId,
         sourceViewId,
         role,
+        projectionMode,
         width: CHART_RESOLUTION,
         height: CHART_RESOLUTION,
         depths: Array.from({ length: CHART_RESOLUTION * CHART_RESOLUTION }, () => depth),
@@ -1384,7 +1554,46 @@ function sampleChartDepth(chart: PaintChart, uv: Vec2): number {
 function chartPointToWorldFromView(chart: PaintChart, view: PaintView, uv: Vec2): Vec3 | null {
     const ray = makeViewRay(view, uv);
     if (!ray) return null;
-    return add3(ray.origin, scale3(ray.direction, sampleChartDepth(chart, uv)));
+    const depth = sampleChartDepth(chart, uv);
+    if ((chart.projectionMode ?? "ray-depth") === "ray-depth") {
+        return add3(ray.origin, scale3(ray.direction, depth));
+    }
+    const normal = viewForward(view);
+    const denominator = dot3(ray.direction, normal);
+    if (Math.abs(denominator) <= 1e-6) return null;
+    const rayDistance = depth / denominator;
+    if (!Number.isFinite(rayDistance) || rayDistance <= MIN_DEPTH) return null;
+    return add3(ray.origin, scale3(ray.direction, rayDistance));
+}
+
+function viewPointToWorldAtProjectionDepth(
+    view: PaintView,
+    point: Vec2,
+    depth: number,
+    projectionMode: ChartProjectionMode,
+): Vec3 | null {
+    const ray = makeViewRay(view, point);
+    if (!ray) return null;
+    if (projectionMode === "ray-depth") {
+        return add3(ray.origin, scale3(ray.direction, Math.max(MIN_DEPTH, depth)));
+    }
+    const denominator = dot3(ray.direction, viewForward(view));
+    if (Math.abs(denominator) <= 1e-6) return null;
+    const rayDistance = Math.max(MIN_DEPTH, depth) / denominator;
+    if (!Number.isFinite(rayDistance) || rayDistance <= MIN_DEPTH) return null;
+    return add3(ray.origin, scale3(ray.direction, rayDistance));
+}
+
+function depthForProjectionAtPoint(
+    view: PaintView,
+    point: Vec2,
+    rayDistance: number,
+    projectionMode: ChartProjectionMode,
+): number {
+    if (projectionMode === "ray-depth") return rayDistance;
+    const ray = makeViewRay(view, point);
+    if (!ray) return rayDistance;
+    return Math.max(MIN_DEPTH, rayDistance * dot3(ray.direction, viewForward(view)));
 }
 
 function chartHasCoverage(chart: PaintChart): boolean {
@@ -1668,6 +1877,22 @@ function appendPaintTriangle(
     segments.push({ kind: "triangle", a, b, c, color });
 }
 
+function appendStrokeRenderSegments(
+    segments: RenderPrimitive[],
+    stroke: PaintStroke,
+    worldPointForRef: (ref: SurfaceRef) => Vec3 | null,
+) {
+    const color = parseColor(stroke.style.color, stroke.style.opacity);
+    let previous = stroke.samples.length > 0
+        ? worldPointForRef(stroke.samples[0].surfaceRef)
+        : null;
+    for (let i = 1; i < stroke.samples.length; i++) {
+        const current = worldPointForRef(stroke.samples[i].surfaceRef);
+        appendWorldSegment(segments, previous, current, color, stroke.style.width);
+        previous = current;
+    }
+}
+
 function appendWorldSegment(segments: RenderPrimitive[], a: Vec3 | null, b: Vec3 | null, color: Vec4, width?: number) {
     if (!a || !b) return;
     segments.push({ a, b, color, width });
@@ -1788,6 +2013,10 @@ function cameraCenter(view: PaintView): Vec3 {
     return [view.viewInvMat[12], view.viewInvMat[13], view.viewInvMat[14]];
 }
 
+function viewForward(view: PaintView): Vec3 {
+    return makeViewRay(view, { x: 0, y: 0 })?.direction ?? [0, 0, -1];
+}
+
 function unprojectNdc(invViewProjMat: number[], x: number, y: number, z: number): Vec3 | null {
     const worldX = invViewProjMat[0] * x + invViewProjMat[4] * y + invViewProjMat[8] * z + invViewProjMat[12];
     const worldY = invViewProjMat[1] * x + invViewProjMat[5] * y + invViewProjMat[9] * z + invViewProjMat[13];
@@ -1809,6 +2038,14 @@ function projectVisiblePoint(viewProjMat: number[] | Float32Array, p: Vec3): Vec
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
     if (z < -0.02 || z > 1.02) return null;
     return { x, y };
+}
+
+function projectedDepth(viewProjMat: number[] | Float32Array, p: Vec3): number | null {
+    const clipZ = viewProjMat[2] * p[0] + viewProjMat[6] * p[1] + viewProjMat[10] * p[2] + viewProjMat[14];
+    const clipW = viewProjMat[3] * p[0] + viewProjMat[7] * p[1] + viewProjMat[11] * p[2] + viewProjMat[15];
+    if (!Number.isFinite(clipW) || Math.abs(clipW) <= 1e-6) return null;
+    const depth = clipZ / clipW;
+    return Number.isFinite(depth) ? depth : null;
 }
 
 function parseColor(color: string, opacity: number): Vec4 {

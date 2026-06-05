@@ -10,6 +10,8 @@ export type PlacementMode = "snap" | "new-surface" | "occluding-surface" | "pain
 export type DepthTool = "depth-brush" | "depth-pull";
 export type PaintTool = "paint" | DepthTool | "seam";
 export type ChartRole = "surface" | "occluder" | "behind";
+export type ChartProjectionMode = "view-plane" | "ray-depth";
+export type PaintStrokeRenderMode = "surface" | "view-depth" | "paint-order";
 
 export interface PaintView {
     id: string;
@@ -59,6 +61,7 @@ export interface PaintChart {
     objectId: string;
     sourceViewId: string;
     role: ChartRole;
+    projectionMode: ChartProjectionMode;
     width: number;
     height: number;
     depths: number[];
@@ -117,4 +120,12 @@ export interface DepthBrushPreview {
     tool: DepthTool;
     points: Vec2[];
     delta: number;
+}
+
+export interface PaintRenderOptions {
+    showPaintSurface?: boolean;
+    showBrushLattice?: boolean;
+    showChartWireframe?: boolean;
+    depthPreview?: DepthBrushPreview | null;
+    strokeRenderMode?: PaintStrokeRenderMode;
 }

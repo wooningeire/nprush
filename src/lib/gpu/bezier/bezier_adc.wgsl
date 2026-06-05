@@ -79,6 +79,13 @@ fn pixel_center_coord(px_idx: u32) -> vec2f {
     return vec2f(f32(px_x), f32(px_y)) + 0.5;
 }
 
+fn pixel_depth(px_idx: u32) -> f32 {
+    let ow = u32(uniforms.optim_width);
+    let px_x = px_idx % ow;
+    let px_y = px_idx / ow;
+    return textureLoad(targetDepthTex, vec2u(px_x, px_y), 0).r;
+}
+
 fn pixel_coord_to_world(pixel_coord: vec2f, spawn_depth: f32) -> vec3f {
     let ow = u32(uniforms.optim_width);
     let oh = u32(uniforms.optim_height);
@@ -340,7 +347,8 @@ fn main() {
             nb.p2 = vec4f(pixel_coord_to_world(center_px + tangent_px * half_len_px * 0.33, spawn_depth), 0.0);
             nb.p3 = vec4f(pixel_coord_to_world(center_px + tangent_px * half_len_px, spawn_depth),        0.0);
         } else {
-            let spawn_depth = 0.5;
+            let target_depth = pixel_depth(spawn_px);
+            let spawn_depth = select(target_depth, 0.5, target_depth >= 0.9999);
             let center = pixel_to_world(spawn_px, spawn_depth);
             let angle = fract(sin(seed * 127.1) * 43758.5453) * 6.28318;
             let tx = cos(angle) * f32({@BEZIER_SPAWN_TANGENT_LEN});

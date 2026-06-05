@@ -215,6 +215,83 @@ describe("PaintModelingState prototype", () => {
         expect(renderSegments.length).toBeGreaterThan(emptyOverlayCount);
     });
 
+    it("renders chart paint as the default surface and keeps stroke overlays explicit", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        state.setBrushWidth(48);
+        drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
+
+        const surfacePrimitives = state.buildRenderSegments({ showChartWireframe: false });
+        const surfaceBrushSegments = surfacePrimitives.filter(isRenderSegment).filter(segment => segment.width === 48);
+
+        expect(surfacePrimitives.filter(isRenderTriangle).length).toBeGreaterThan(0);
+        expect(surfaceBrushSegments).toHaveLength(0);
+
+        const overlayPrimitives = state.buildRenderSegments({
+            showChartWireframe: false,
+            strokeRenderMode: "paint-order",
+        });
+        const overlayBrushSegments = overlayPrimitives.filter(isRenderSegment).filter(segment => segment.width === 48);
+
+        expect(overlayBrushSegments.length).toBeGreaterThanOrEqual(state.strokes[0].samples.length - 1);
+    });
+
+    it("renders an in-progress stroke through WebGL preview segments in surface mode", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        state.setBrushWidth(36);
+
+        state.beginStroke({ x: -0.16, y: -0.04 }, 800, 600);
+        state.appendStrokePoint({ x: 0.16, y: 0.04 });
+
+        const draftPrimitives = state.buildRenderSegments({ showChartWireframe: false });
+        const draftBrushSegments = draftPrimitives.filter(isRenderSegment).filter(segment => segment.width === 36);
+
+        expect(draftBrushSegments.length).toBeGreaterThan(0);
+
+        state.finishStroke();
+        const committedPrimitives = state.buildRenderSegments({ showChartWireframe: false });
+        const committedBrushSegments = committedPrimitives.filter(isRenderSegment).filter(segment => segment.width === 36);
+
+        expect(committedBrushSegments).toHaveLength(0);
+        expect(committedPrimitives.filter(isRenderTriangle).length).toBeGreaterThan(0);
+    });
+
+    it("can render chart wire independently from brush lattice previews", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        state.setBrushWidth(48);
+        state.setDepthBrushRadius(0.08);
+        drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
+        const preview = {
+            tool: "depth-brush" as const,
+            points: [{ x: 0, y: 0 }],
+            delta: 0.04,
+        };
+
+        const wireOff = state.buildRenderSegments({ showChartWireframe: false }).filter(isRenderSegment);
+        const wireOn = state.buildRenderSegments({ showChartWireframe: true }).filter(isRenderSegment);
+        const latticeOff = state.buildRenderSegments({
+            showChartWireframe: false,
+            showBrushLattice: false,
+            depthPreview: preview,
+        }).filter(isRenderSegment);
+        const latticeOn = state.buildRenderSegments({
+            showChartWireframe: false,
+            showBrushLattice: true,
+            depthPreview: preview,
+        }).filter(isRenderSegment);
+
+        expect(wireOff.some(segment => segment.width === 1.15)).toBe(false);
+        expect(wireOn.some(segment => segment.width === 1.15)).toBe(true);
+        expect(latticeOff.some(segment => segment.width === 3.2 || segment.width === 2.6)).toBe(false);
+        expect(latticeOn.some(segment => segment.width === 3.2)).toBe(true);
+        expect(latticeOn.some(segment => segment.width === 2.6)).toBe(true);
+    });
+
     it("creates covered surface charts for each painted view", () => {
         const state = new PaintModelingState();
         state.addObject();
@@ -231,6 +308,41 @@ describe("PaintModelingState prototype", () => {
         expect(surfaceCharts.length).toBe(4);
         expect(new Set(surfaceCharts.map(chart => chart.sourceViewId)).size).toBe(4);
         expect(surfaceCharts.every(chart => chart.coverage.some(value => value > 0))).toBe(true);
+    });
+
+    it("can create view-plane or ray-depth charts for new paint surfaces", () => {
+        const plane = new PaintModelingState();
+        plane.addObject();
+        plane.setPlacementMode("new-surface");
+        plane.setChartProjectionMode("view-plane");
+        drawStroke(plane, { x: -0.34, y: 0 }, { x: 0.34, y: 0 });
+
+        const planeChart = plane.activeObject!.charts[0];
+        const planeView = plane.views.find(view => view.id === planeChart.sourceViewId)!;
+        const planeCamera = cameraCenter(planeView.viewInvMat);
+        const planeCenter = plane.surfaceRefWorldPoint({ chartId: planeChart.id, uv: { x: 0, y: 0 } })!;
+        const planeNormal = normalize3(sub3(planeCenter, planeCamera));
+        const planeLeft = plane.surfaceRefWorldPoint({ chartId: planeChart.id, uv: { x: -0.34, y: 0 } })!;
+        const planeRight = plane.surfaceRefWorldPoint({ chartId: planeChart.id, uv: { x: 0.34, y: 0 } })!;
+        const planeDepth = dot3(sub3(planeCenter, planeCamera), planeNormal);
+
+        const ray = new PaintModelingState();
+        ray.addObject();
+        ray.setPlacementMode("new-surface");
+        ray.setChartProjectionMode("ray-depth");
+        drawStroke(ray, { x: -0.34, y: 0 }, { x: 0.34, y: 0 });
+
+        const rayChart = ray.activeObject!.charts[0];
+        const rayView = ray.views.find(view => view.id === rayChart.sourceViewId)!;
+        const rayCamera = cameraCenter(rayView.viewInvMat);
+        const rayLeft = ray.surfaceRefWorldPoint({ chartId: rayChart.id, uv: { x: -0.34, y: 0 } })!;
+        const rayRight = ray.surfaceRefWorldPoint({ chartId: rayChart.id, uv: { x: 0.34, y: 0 } })!;
+
+        expect(planeChart.projectionMode).toBe("view-plane");
+        expect(dot3(sub3(planeLeft, planeCamera), planeNormal)).toBeCloseTo(planeDepth, 5);
+        expect(dot3(sub3(planeRight, planeCamera), planeNormal)).toBeCloseTo(planeDepth, 5);
+        expect(rayChart.projectionMode).toBe("ray-depth");
+        expect(distance3(rayLeft, rayCamera)).toBeCloseTo(distance3(rayRight, rayCamera), 5);
     });
 
     it("rasterizes painterly brush width and opacity into chart paint", () => {
@@ -440,6 +552,19 @@ describe("PaintModelingState prototype", () => {
 
 function cameraCenter(viewInvMat: number[]): Vec3 {
     return [viewInvMat[12], viewInvMat[13], viewInvMat[14]];
+}
+
+function sub3(a: Vec3, b: Vec3): Vec3 {
+    return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+}
+
+function dot3(a: Vec3, b: Vec3): number {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function normalize3(v: Vec3): Vec3 {
+    const length = Math.hypot(v[0], v[1], v[2]);
+    return [v[0] / length, v[1] / length, v[2] / length];
 }
 
 function isRenderSegment(primitive: RenderPrimitive): primitive is RenderSegment {

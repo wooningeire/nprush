@@ -19,6 +19,8 @@ export interface TurntableFrameView {
 	datasetView: GPUTextureView | null;
 	/** View-projection matrix for sorting / rendering (dataset or live camera). */
 	sortVp: Mat4;
+	/** View matrix for mesh normal rendering (dataset or live camera). */
+	viewMat: Mat4;
 	/** Inverse view-projection matrix (dataset or live camera). */
 	vpInv: Mat4;
 	/** Inverse view matrix (dataset or live camera). */
@@ -265,6 +267,7 @@ export class TurntableController {
 
 			const datasetView = ds.textureViews[idx];
 			const sortVp = ds.viewProjMats[idx] as Mat4;
+			const viewMat = ds.viewMats[idx] as Mat4;
 			const vpInv = ds.invViewProjMats[idx] as Mat4;
 			const invView = ds.invViewMats[idx] as Mat4;
 
@@ -283,13 +286,14 @@ export class TurntableController {
 			this.managers.baseColorBezierForwardManager.writeVPMatrix(sortVpFa);
 			this.managers.colorBezierForwardManager.writeVPMatrix(sortVpFa);
 
-			return { datasetView, sortVp, vpInv, invView };
+			return { datasetView, sortVp, viewMat, vpInv, invView };
 		}
 
 		if (viewerState.isTurntableRendering || viewerState.turntableTraining) {
 			return {
 				datasetView: null,
 				sortVp: this.backendCamera.viewProjMat as Mat4,
+				viewMat: this.backendCamera.viewMat as Mat4,
 				vpInv: this.backendCamera.viewProjInvMat as Mat4,
 				invView: this.backendCamera.viewInvMat as Mat4,
 			};
@@ -302,6 +306,7 @@ export class TurntableController {
 		return {
 			datasetView: null,
 			sortVp: this.viewportCamera.viewProjMat as Mat4,
+			viewMat: this.viewportCamera.viewMat as Mat4,
 			vpInv: this.viewportCamera.viewProjInvMat as Mat4,
 			invView: this.viewportCamera.viewInvMat as Mat4,
 		};

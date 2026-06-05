@@ -214,6 +214,28 @@ export class GpuRunner {
             },
         });
 
+        // Seed optimizer uniforms synchronously so the first render-loop tick
+        // cannot step with zeroed clamp/culling settings before Svelte effects run.
+        this.edgeLayerBezierManager.writeMode(2);
+        this.edgeLayerBezierManager.writeMaxWidth(0.005);
+        this.edgeLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
+        this.edgeLayerBezierManager.writeBgPenalty(0.0);
+        this.coarseColorLayerBezierManager.writeMode(1);
+        this.coarseColorLayerBezierManager.writeMaxWidth(0.1);
+        this.coarseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
+        this.coarseColorLayerBezierManager.writeBgPenalty(0.0);
+        this.coarseColorLayerBezierManager.setAdcPeriod(constants.BEZIER_ADC_PERIOD);
+        this.fineColorLayerBezierManager.writeMode(1);
+        this.fineColorLayerBezierManager.writeMaxWidth(0.005);
+        this.fineColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
+        this.fineColorLayerBezierManager.writeBgPenalty(0.0);
+        const initialNoKill =
+            this.viewerState.renderMode === RENDER_MODE_MULTIVIEW || this.viewerState.isTurntableRendering;
+        this.splatOptimizerManager.writeNoKill(initialNoKill);
+        this.edgeLayerBezierManager.writeNoKill(initialNoKill);
+        this.coarseColorLayerBezierManager.writeNoKill(initialNoKill);
+        this.fineColorLayerBezierManager.writeNoKill(initialNoKill);
+
         this.destroy = $effect.root(() => {
             const activeCamera = $derived(
                 this.viewerState.turntableTraining || this.viewerState.isTurntableRendering
@@ -287,22 +309,27 @@ export class GpuRunner {
                 this.fineColorLayerBezierManager.writeMode(1); // Color+Depth mode
                 this.fineColorLayerBezierManager.writeMaxWidth(0.005); // finer strokes on fine bezier layer
                 // Fine bezier layer: less aggressive killing so thin strokes survive,
-                // but background penalty enabled to kill off-model curves.
+                // with no background penalty because the target background is meaningful.
                 this.fineColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
                 this.fineColorLayerBezierManager.writeMaxWidth(0.005);
+                this.coarseColorLayerBezierManager.writeBgPenalty(0.0);
                 this.fineColorLayerBezierManager.writeBgPenalty(0.0);
-                // Coarse bezier layer: no background penalty (blurred target bleeds into bg).
                 // Multiview/turntable sets adam no_kill separately (below) so off-frustum kills
-                // don't remove curves visible from other views. Longer ADC period here dampens
-                // clone/kill churn in ordinary single-view orbit where no_kill stays off.
+                // don't remove curves visible from other views. Keep single-view ADC quick so
+                // cold-start dead slots are seeded from the target immediately; dampen only
+                // moving-view modes where the same stroke may be sampled infrequently.
+                const coarseAdcPeriod =
+                    this.viewerState.renderMode === RENDER_MODE_MULTIVIEW || this.viewerState.isTurntableRendering
+                        ? 150
+                        : constants.BEZIER_ADC_PERIOD;
                 this.coarseColorLayerBezierManager.writeMaxWidth(0.1);
                 this.coarseColorLayerBezierManager.writeKillThresholds(0.0001, 0.0001);
-                this.coarseColorLayerBezierManager.setAdcPeriod(150);
+                this.coarseColorLayerBezierManager.setAdcPeriod(coarseAdcPeriod);
             });
             $effect(() => {
                 // Multiview rotates the effective view each frame; single-view turntable
-                // export also moves the camera. Skip step + ADC kills that treat
-                // "off this view's frustum" as dead so curves survive for other angles.
+                // export also moves the camera. Skip per-view culling there, but keep
+                // single-view realtime recyclable so ADC can repopulate cold-start strokes.
                 const noKillMv =
                     this.viewerState.renderMode === RENDER_MODE_MULTIVIEW || this.viewerState.isTurntableRendering;
                 this.splatOptimizerManager.writeNoKill(noKillMv);
@@ -463,7 +490,12 @@ export class GpuRunner {
 
             // Resolve the current frame's view (dataset slot or live camera).
             const frameView = this.turntable.resolveFrameView();
-            const { datasetView, sortVp, vpInv: vpInvForSplat, invView: invViewForCam } = frameView;
+            const { datasetView, sortVp, viewMat, vpInv: vpInvForSplat, invView: invViewForCam } = frameView;
+
+            this.uniformsManager.writeViewProjMat(sortVp);
+            this.uniformsManager.writeViewMat(viewMat);
+            this.uniformsManager.writeInvViewProjMat(vpInvForSplat);
+            this.pathTracePipelineManager.writeInvViewProjMat(vpInvForSplat as Float32Array);
 
             const camWorld = vec3.transformMat4(vec3.fromValues(0, 0, 0), invViewForCam);
             this.splatOptimizerManager.writeSplatVPMatrix(sortVp, vpInvForSplat, this.viewerState.compareBlurred, [
@@ -471,6 +503,12 @@ export class GpuRunner {
                 camWorld[1],
                 camWorld[2],
             ]);
+            this.edgeLayerBezierManager.writeVPMatrix(sortVp);
+            this.coarseColorLayerBezierManager.writeVPMatrix(sortVp);
+            this.fineColorLayerBezierManager.writeVPMatrix(sortVp);
+            this.edgeLayerBezierManager.writeVPInvMatrix(vpInvForSplat);
+            this.coarseColorLayerBezierManager.writeVPInvMatrix(vpInvForSplat);
+            this.fineColorLayerBezierManager.writeVPInvMatrix(vpInvForSplat);
             this.splatForwardManager.writeVPMatrix(sortVp);
             this.splatForwardManager.writeCameraWorld(camWorld[0], camWorld[1], camWorld[2]);
             this.edgeBezierForwardManager.writeVPMatrix(sortVp);
@@ -679,7 +717,11 @@ export class GpuRunner {
             }
 
             // 2. Optimization Pass (Compute)
-            const defaultPause = this.viewerState.renderMode === RENDER_MODE_MULTIVIEW && (!this.viewerState.turntableTraining || !this.viewerState.multiviewDatasetReady);
+            const renderModeEqualsMultiview = this.viewerState.renderMode === RENDER_MODE_MULTIVIEW;
+            let defaultPause = false;
+            if (renderModeEqualsMultiview) {
+                defaultPause = !this.viewerState.turntableTraining || !this.viewerState.multiviewDatasetReady;
+            }
             
             // Clear all binning and sorting buffers
             if (this.viewerState.splatsEnabled) {

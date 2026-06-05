@@ -288,7 +288,7 @@ export class GpuSplatOptimizerManager {
         const f32 = new Float32Array(extras);
         const u32 = new Uint32Array(extras);
         f32[0] = camWorldXYZ[0]; f32[1] = camWorldXYZ[1]; f32[2] = camWorldXYZ[2];
-        u32[4] = blurEnabled ? 1 : 0; u32[5] = this.stepCount;
+        u32[3] = blurEnabled ? 1 : 0; u32[4] = this.stepCount;
         this.device.queue.writeBuffer(this.splatUniformsBuffer, 128, extras);
     }
 
@@ -369,7 +369,7 @@ export class GpuSplatOptimizerManager {
     }
 
     clearBinningBuffers(commandEncoder: GPUCommandEncoder) {
-        const gridWidth = Math.ceil(this.dims.width);
+        const gridWidth = Math.ceil(this.dims.width / 16);
         const gridHeight = Math.ceil(this.dims.height / 16);
         const nTiles = gridWidth * gridHeight;
 
@@ -388,7 +388,7 @@ export class GpuSplatOptimizerManager {
             this.cachedAdamPixelCount = pixelCount;
             this.device.queue.writeBuffer(this.adamBuffer, this.numParams * 8 + 4, new Uint32Array([pixelCount]));
         }
-        this.device.queue.writeBuffer(this.splatUniformsBuffer, 148, new Uint32Array([this.stepCount]));
+        this.device.queue.writeBuffer(this.splatUniformsBuffer, 144, new Uint32Array([this.stepCount]));
 
         pass.setPipeline(this.backwardPipeline);
         pass.setBindGroup(0, this.backwardBindGroup);
@@ -399,7 +399,7 @@ export class GpuSplatOptimizerManager {
         pass.dispatchWorkgroups(Math.ceil(this.numSplats / 64));
         
         this.stepCount++;
-        if (this.stepCount % constants.splatAdcPeriod === 0) {
+        if (this.stepCount % constants.splatAdcPeriod.value === 0) {
             pass.setPipeline(this.adcPipeline);
             pass.setBindGroup(0, this.adcBindGroup);
             pass.dispatchWorkgroups(1);

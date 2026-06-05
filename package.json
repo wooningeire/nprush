@@ -14,6 +14,7 @@
 		"test:unit": "vitest --project server",
 		"test": "vitest run --project server",
 		"test:browser": "vitest run --project client",
+		"test:e2e": "playwright test",
 		"test:all": "vitest run --project server && vitest run --project client"
 	},
 	"dependencies": {
