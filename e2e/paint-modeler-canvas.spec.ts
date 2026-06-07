@@ -11,8 +11,9 @@ test("paint modeler canvas supports paint, fast depth hover, and depth pull", as
         if (!isExpectedStartupNoise(error.message)) consoleProblems.push(error.message);
     });
 
-    await page.goto("/");
-    await openPaintModeler(page);
+    await page.goto("/paint-modeler");
+    await dismissStartupAlerts(page, 700);
+    await expect(page.locator("paint-viewport")).toBeVisible();
     await page.getByRole("button", { name: "Add Object" }).click();
     await page.getByRole("button", { name: "New" }).click();
     await page.getByRole("button", { name: "View Plane" }).click();
@@ -89,21 +90,6 @@ test("paint modeler canvas supports paint, fast depth hover, and depth pull", as
 function isExpectedStartupNoise(text: string): boolean {
     return text.includes("ResizeObserver loop completed")
         || text.includes("could not get gpu adapter");
-}
-
-async function openPaintModeler(page: Page) {
-    const paintTab = page.getByRole("button", { name: "Paint Modeler" });
-    await expect(paintTab).toBeVisible();
-
-    for (let i = 0; i < 5; i++) {
-        await dismissStartupAlerts(page, 700);
-        await paintTab.click({ timeout: 2_000 }).catch(() => {});
-        await dismissStartupAlerts(page, 700);
-        if (await page.locator("paint-viewport").count() > 0) return;
-        await page.waitForTimeout(150);
-    }
-
-    await expect(page.locator("paint-viewport")).toBeVisible({ timeout: 5_000 });
 }
 
 async function dismissStartupAlerts(page: Page, durationMs = 1_200) {

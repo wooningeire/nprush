@@ -22,9 +22,7 @@ let shiftHeld = $state(false);
 
 // --- lifecycle ---
 
-// Lazily create the renderer once the canvas has non-zero pixel dimensions
-// (ViewPanel sets canvas.width/height reactively from clientWidth/clientHeight,
-//  which are 0 while the parent view-mode-container is display:none).
+// Lazily create the renderer once the canvas has non-zero pixel dimensions.
 async function ensureRenderer() {
     if (renderer || rendererInitializing || !canvas) return;
     if (canvas.width === 0 || canvas.height === 0) return;
