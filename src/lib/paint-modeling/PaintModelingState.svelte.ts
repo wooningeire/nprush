@@ -637,14 +637,38 @@ export class PaintModelingState {
 
         const color = parseColor(this.brush.color, this.brush.opacity);
         const points = samplePaintStrokeSpline(this.draftStroke);
+        const previewDepth = this.draftStrokePreviewDepth(object, view);
         let previous = points.length > 0
-            ? this.draftStrokeWorldPoint(object, view, points[0])
+            ? this.draftStrokePreviewWorldPoint(object, view, points[0], previewDepth)
             : null;
         for (let i = 1; i < points.length; i++) {
-            const current = this.draftStrokeWorldPoint(object, view, points[i]);
+            const current = this.draftStrokePreviewWorldPoint(object, view, points[i], previewDepth);
             appendWorldSegment(segments, previous, current, color, this.brush.width);
             previous = current;
         }
+    }
+
+    private draftStrokePreviewDepth(object: PaintObject, view: PaintView): number {
+        if (this.placementMode !== "snap" || !this.draftStroke || this.draftStroke.length === 0) {
+            return this.defaultDepthForView(view);
+        }
+        const cursor = this.draftStroke.at(-1)!;
+        const hit = this.raycastObjectSurface(object, view, cursor);
+        return hit
+            ? depthForProjectionAtPoint(view, cursor, hit.viewDepth, this.chartProjectionMode)
+            : this.defaultDepthForView(view);
+    }
+
+    private draftStrokePreviewWorldPoint(
+        object: PaintObject,
+        view: PaintView,
+        point: Vec2,
+        previewDepth: number,
+    ): Vec3 | null {
+        if (this.placementMode === "snap") {
+            return viewPointToWorldAtProjectionDepth(view, point, previewDepth, this.chartProjectionMode);
+        }
+        return this.draftStrokeWorldPoint(object, view, point);
     }
 
     private draftStrokeWorldPoint(object: PaintObject, view: PaintView, point: Vec2): Vec3 | null {

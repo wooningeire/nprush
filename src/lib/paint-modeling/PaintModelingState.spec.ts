@@ -237,7 +237,7 @@ describe("PaintModelingState prototype", () => {
         expect(overlayBrushSegments.length).toBe(surfaceBrushSegments.length);
     });
 
-    it("renders an in-progress stroke through WebGL preview segments in surface mode", () => {
+    it("renders an in-progress stroke through preview segments in surface mode", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
@@ -355,6 +355,29 @@ describe("PaintModelingState prototype", () => {
             expect(distance3(prefixSegments[i].a, extendedSegments[i].a)).toBeLessThan(1e-6);
             expect(distance3(prefixSegments[i].b, extendedSegments[i].b)).toBeLessThan(1e-6);
         }
+    });
+
+    it("keeps snap draft preview raycasts bounded after the first surface stroke", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.4, y: -0.1 }, { x: 0.4, y: 0.1 });
+        state.setPlacementMode("snap");
+        state.raycastCountForDiagnostics = 0;
+
+        state.beginStroke({ x: -0.58, y: 0.18 }, 800, 600);
+        for (let i = 1; i <= 180; i++) {
+            const t = i / 180;
+            state.appendStrokePoint({
+                x: -0.58 + t * 1.16,
+                y: 0.18 + Math.sin(t * Math.PI * 10) * 0.16,
+            });
+        }
+
+        const segments = state.buildDraftRenderSegments().filter(isRenderSegment);
+
+        expect(segments.length).toBeGreaterThan(48);
+        expect(state.raycastCountForDiagnostics).toBeLessThanOrEqual(1);
     });
 
     it("keeps committed scene primitives stable while drawing a later draft stroke", () => {
