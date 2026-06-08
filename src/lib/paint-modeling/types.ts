@@ -126,6 +126,7 @@ export interface PaintRenderOptions {
     showPaintSurface?: boolean;
     showBrushLattice?: boolean;
     showChartWireframe?: boolean;
+    showDraftStroke?: boolean;
     depthPreview?: DepthBrushPreview | null;
     strokeRenderMode?: PaintStrokeRenderMode;
 }

@@ -37,9 +37,6 @@ const OCCLUSION_GAP = 0.075;
 const MIN_DEPTH = 0.06;
 const COVERAGE_EPSILON = 0.015;
 const PAINT_EPSILON = 0.015;
-const GRID_EXTENT = 2.5;
-const GRID_STEP = 0.25;
-const GRID_PLANE_Z = -0.02;
 const DEPTH_PREVIEW_RING_WIDTH = 3.2;
 const DEPTH_PREVIEW_TRAIL_WIDTH = 2.6;
 const DEPTH_PREVIEW_IDLE_LENGTH = 0.035;
@@ -532,8 +529,6 @@ export class PaintModelingState {
             }
         }
 
-        appendOrientationSegments(segments);
-
         if (renderOptions.showPaintSurface) {
             for (const object of this.objects) {
                 if (!object.visible) continue;
@@ -573,12 +568,20 @@ export class PaintModelingState {
             appendStrokeRenderSegments(segments, stroke, worldPointForRef);
         }
 
-        this.appendDraftStrokePreviewSegments(segments);
+        if (renderOptions.showDraftStroke) {
+            this.appendDraftStrokePreviewSegments(segments);
+        }
 
         if (renderOptions.depthPreview && renderOptions.showBrushLattice) {
             this.appendDepthBrushPreviewSegments(segments, renderOptions.depthPreview);
         }
 
+        return segments;
+    }
+
+    buildDraftRenderSegments(): RenderPrimitive[] {
+        const segments: RenderPrimitive[] = [];
+        this.appendDraftStrokePreviewSegments(segments);
         return segments;
     }
 
@@ -1125,6 +1128,7 @@ function normalizeRenderOptions(
             showPaintSurface: false,
             showChartWireframe: options,
             showBrushLattice: !!depthPreview,
+            showDraftStroke: true,
             depthPreview: depthPreview ?? null,
             strokeRenderMode: "paint-order",
         };
@@ -1133,6 +1137,7 @@ function normalizeRenderOptions(
         showPaintSurface: options.showPaintSurface ?? false,
         showChartWireframe: options.showChartWireframe ?? true,
         showBrushLattice: options.showBrushLattice ?? false,
+        showDraftStroke: options.showDraftStroke ?? true,
         depthPreview: options.depthPreview ?? null,
         strokeRenderMode: options.strokeRenderMode ?? "surface",
     };
@@ -1705,35 +1710,6 @@ function paintTriangleColor(chart: PaintChart, a: number, b: number, c: number):
         ((chart.paint[a * 4 + 2] ?? 0) * alphaA + (chart.paint[b * 4 + 2] ?? 0) * alphaB + (chart.paint[c * 4 + 2] ?? 0) * alphaC) / alphaWeight,
         clamp(alpha, 0, 1),
     ];
-}
-
-function appendOrientationSegments(segments: RenderPrimitive[]) {
-    const steps = Math.round(GRID_EXTENT / GRID_STEP);
-    for (let i = -steps; i <= steps; i++) {
-        const position = i * GRID_STEP;
-        const isMajor = i === 0 || Math.abs(i) % 4 === 0;
-        const color = isMajor
-            ? [0.58, 0.66, 0.66, 0.2] as Vec4
-            : [0.58, 0.66, 0.66, 0.09] as Vec4;
-        const width = isMajor ? 1.1 : 0.75;
-        segments.push({
-            a: [position, -GRID_EXTENT, GRID_PLANE_Z],
-            b: [position, GRID_EXTENT, GRID_PLANE_Z],
-            color,
-            width,
-        });
-        segments.push({
-            a: [-GRID_EXTENT, position, GRID_PLANE_Z],
-            b: [GRID_EXTENT, position, GRID_PLANE_Z],
-            color,
-            width,
-        });
-    }
-
-    const axisLength = GRID_EXTENT * 0.86;
-    segments.push({ a: [-axisLength, 0, 0], b: [axisLength, 0, 0], color: [0.92, 0.42, 0.38, 0.62], width: 2.15 });
-    segments.push({ a: [0, -axisLength, 0], b: [0, axisLength, 0], color: [0.48, 0.82, 0.55, 0.62], width: 2.15 });
-    segments.push({ a: [0, 0, -axisLength * 0.18], b: [0, 0, axisLength], color: [0.48, 0.62, 0.9, 0.62], width: 2.15 });
 }
 
 function appendPaintTriangles(

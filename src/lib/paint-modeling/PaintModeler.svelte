@@ -27,7 +27,8 @@ let viewportWidth = $state(1);
 let viewportHeight = $state(1);
 let renderer = $state<PaintModelingRenderer | null>(null);
 let renderFrameId: number | null = null;
-let uploadedSceneKey: string | null = null;
+let uploadedStaticSceneKey: string | null = null;
+let uploadedDraftKey: string | null = null;
 let pointerMode = $state<PaintTool | "orbit" | null>(null);
 let rendererError = $state<string | null>(null);
 let showChartWireframe = $state(true);
@@ -84,7 +85,8 @@ onDestroy(() => {
     cancelRender();
     renderer?.destroy();
     renderer = null;
-    uploadedSceneKey = null;
+    uploadedStaticSceneKey = null;
+    uploadedDraftKey = null;
 });
 
 function ensureRenderer() {
@@ -92,7 +94,8 @@ function ensureRenderer() {
     rendererError = null;
     try {
         renderer = PaintModelingRenderer.create(canvas);
-        uploadedSceneKey = null;
+        uploadedStaticSceneKey = null;
+        uploadedDraftKey = null;
     } catch (error) {
         rendererError = (error as Error)?.message ?? String(error);
     }
@@ -112,17 +115,24 @@ function render() {
     if (!renderer) return;
 
     const cameraKey = strokeRenderMode === "view-depth" ? cameraRenderKey() : "camera-independent";
-    const sceneKey = `${modelerState.meshVersion}:${showChartWireframe ? "wire" : "no-wire"}:${strokeRenderMode}:${draftRenderKey()}:${cameraKey}`;
-    if (uploadedSceneKey !== sceneKey) {
+    const staticSceneKey = `${modelerState.meshVersion}:${showChartWireframe ? "wire" : "no-wire"}:${strokeRenderMode}:${cameraKey}`;
+    if (uploadedStaticSceneKey !== staticSceneKey) {
         renderer.setSegments(modelerState.buildRenderSegments({
             showPaintSurface: false,
             showChartWireframe,
             showBrushLattice: false,
+            showDraftStroke: false,
             strokeRenderMode,
         }));
-        uploadedSceneKey = sceneKey;
+        uploadedStaticSceneKey = staticSceneKey;
     }
-    renderer.render(modelerState.camera.viewProjMat);
+
+    const draftKey = draftRenderKey();
+    if (uploadedDraftKey !== draftKey) {
+        renderer.setDraftSegments(modelerState.buildDraftRenderSegments());
+        uploadedDraftKey = draftKey;
+    }
+    renderer.render(modelerState.camera.viewProjMat, modelerState.camera.viewProjInvMat);
 }
 
 function cancelRender() {
@@ -464,7 +474,7 @@ function clamp(value: number, min: number, max: number): number {
                         class:active={strokeRenderMode === mode}
                         onclick={() => {
                             strokeRenderMode = mode;
-                            uploadedSceneKey = null;
+                            uploadedStaticSceneKey = null;
                             requestRender();
                         }}
                     >

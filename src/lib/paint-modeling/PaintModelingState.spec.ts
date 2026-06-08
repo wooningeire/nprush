@@ -91,12 +91,12 @@ describe("PaintModelingState prototype", () => {
         state.setPlacementMode("new-surface");
         drawStroke(state, { x: -0.14, y: 0 }, { x: 0.14, y: 0 });
         const meshVersion = state.meshVersion;
-        const segmentCount = state.buildRenderSegments(true).length;
+        const sceneSegmentCount = state.buildRenderSegments(true).filter(isRenderSegment).length;
 
         state.orbit.turn({ x: 80, y: 16 });
 
         expect(state.meshVersion).toBe(meshVersion);
-        expect(state.buildRenderSegments(true).length).toBe(segmentCount);
+        expect(state.buildRenderSegments(true).filter(isRenderSegment).length).toBe(sceneSegmentCount);
     });
 
     it("undoes a paint stroke together with auto-created object and view", () => {
@@ -357,6 +357,37 @@ describe("PaintModelingState prototype", () => {
         }
     });
 
+    it("keeps committed scene primitives stable while drawing a later draft stroke", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
+
+        const staticBefore = state.buildRenderSegments({
+            showChartWireframe: false,
+            showDraftStroke: false,
+        }).filter(isRenderSegment);
+
+        state.beginStroke({ x: -0.32, y: 0.08 }, 800, 600);
+        for (let i = 1; i <= 96; i++) {
+            const t = i / 96;
+            state.appendStrokePoint({
+                x: -0.32 + t * 0.64,
+                y: 0.08 + Math.sin(t * Math.PI * 4) * 0.08,
+            });
+        }
+
+        const staticDuring = state.buildRenderSegments({
+            showChartWireframe: false,
+            showDraftStroke: false,
+        }).filter(isRenderSegment);
+        const draftSegments = state.buildDraftRenderSegments().filter(isRenderSegment);
+
+        expect(staticBefore.length).toBeGreaterThan(0);
+        expect(draftSegments.length).toBeGreaterThan(0);
+        expectRenderSegmentsToMatch(staticDuring, staticBefore);
+    });
+
     it("can render chart wire independently from brush lattice previews", () => {
         const state = new PaintModelingState();
         state.addObject();
@@ -483,13 +514,12 @@ describe("PaintModelingState prototype", () => {
         expect(primitives.filter(isRenderTriangle)).toHaveLength(0);
     });
 
-    it("renders orientation grid and axis segments even without charts", () => {
+    it("keeps viewport guides out of scene geometry", () => {
         const state = new PaintModelingState();
         const segments = state.buildRenderSegments(false);
         const renderSegments = segments.filter(isRenderSegment);
 
-        expect(renderSegments.length).toBeGreaterThan(40);
-        expect(renderSegments.filter(segment => (segment.width ?? 0) > 2).length).toBe(3);
+        expect(renderSegments).toHaveLength(0);
     });
 
     it("sculpts covered chart lattice points, not only stroke samples", () => {
@@ -692,3 +722,15 @@ function projectVisiblePoint(viewProjMat: number[] | Float32Array, p: Vec3): Vec
 function distance3(a: Vec3, b: Vec3): number {
     return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
+
+const expectRenderSegmentsToMatch = (actual: RenderSegment[], expected: RenderSegment[]) => {
+    expect(actual).toHaveLength(expected.length);
+    for (let i = 0; i < expected.length; i++) {
+        expect(distance3(actual[i].a, expected[i].a)).toBeLessThan(1e-6);
+        expect(distance3(actual[i].b, expected[i].b)).toBeLessThan(1e-6);
+        expect(actual[i].width).toBe(expected[i].width);
+        for (let channel = 0; channel < expected[i].color.length; channel++) {
+            expect(actual[i].color[channel]).toBeCloseTo(expected[i].color[channel], 6);
+        }
+    }
+};

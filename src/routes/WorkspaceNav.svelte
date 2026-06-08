@@ -10,8 +10,6 @@ const toolRoutes: {
 	{ href: "/brushstroke-optimizer", label: "Brushstroke optimizer" },
 	{ href: "/paint-modeler", label: "Paint Modeler" },
 ];
-
-$inspect(page);
 </script>
 
 
