@@ -44,6 +44,8 @@ const DEPTH_PREVIEW_RING_WIDTH = 3.2;
 const DEPTH_PREVIEW_TRAIL_WIDTH = 2.6;
 const DEPTH_PREVIEW_IDLE_LENGTH = 0.035;
 const DEPTH_BRUSH_STAMP_SCALE = 0.15;
+const MIN_STROKE_SPLINE_CONTROL_POINTS = 4;
+const STROKE_SPLINE_SAMPLE_SPACING = 0.018;
 const DEPTH_BRUSH_FOOTPRINT_OFFSETS: Vec2[] = [
     { x: 0, y: 0 },
     { x: 0.62, y: 0 },
@@ -251,7 +253,7 @@ export class PaintModelingState {
         const dx = point.x - last.x;
         const dy = point.y - last.y;
         if (dx * dx + dy * dy < 0.00008) return;
-        this.draftStroke = [...this.draftStroke, point];
+        this.draftStroke.push(point);
     }
 
     finishStroke() {
@@ -267,7 +269,7 @@ export class PaintModelingState {
             return;
         }
 
-        const sourcePoints = resamplePaintPolyline(this.draftStroke, this.maxStrokeSamplesForBrush());
+        const sourcePoints = samplePaintStrokeSpline(this.draftStroke);
         const strokeSamples = this.placeStrokeSamples(object, view, sourcePoints, this.placementMode);
         if (strokeSamples.samples.length < 2) {
             this.draftStroke = null;
@@ -564,10 +566,11 @@ export class PaintModelingState {
             return chartPointToWorldFromView(chart, view, ref.uv);
         };
 
-        if (renderOptions.strokeRenderMode !== "surface") {
-            for (const stroke of this.sortedStrokesForRender(renderOptions.strokeRenderMode, objectById, worldPointForRef)) {
-                appendStrokeRenderSegments(segments, stroke, worldPointForRef);
-            }
+        const committedStrokeRenderMode = renderOptions.strokeRenderMode === "view-depth"
+            ? "view-depth"
+            : "paint-order";
+        for (const stroke of this.sortedStrokesForRender(committedStrokeRenderMode, objectById, worldPointForRef)) {
+            appendStrokeRenderSegments(segments, stroke, worldPointForRef);
         }
 
         this.appendDraftStrokePreviewSegments(segments);
@@ -630,7 +633,7 @@ export class PaintModelingState {
         if (!this.draftStroke || this.draftStroke.length < 2 || !object?.visible || object.locked || !view) return;
 
         const color = parseColor(this.brush.color, this.brush.opacity);
-        const points = resamplePaintPolyline(this.draftStroke, Math.min(this.maxStrokeSamplesForBrush(), 144));
+        const points = samplePaintStrokeSpline(this.draftStroke);
         let previous = points.length > 0
             ? this.draftStrokeWorldPoint(object, view, points[0])
             : null;
@@ -804,7 +807,7 @@ export class PaintModelingState {
         }
 
         for (const run of paintRuns) {
-            if (paintChartStroke(run.chart, run.samples, paintDepthRadius, this.brush, {
+            if (applyStrokeToChartGeometry(run.chart, run.samples, paintDepthRadius, {
                 updateDepth: run.updateDepth,
                 requireCoverage: run.requireCoverage,
             })) {
@@ -850,7 +853,7 @@ export class PaintModelingState {
             });
         }
 
-        paintChartStroke(chart, paintSamples, paintDepthRadius, this.brush, {
+        applyStrokeToChartGeometry(chart, paintSamples, paintDepthRadius, {
             updateDepth: true,
             requireCoverage: false,
         });
@@ -866,10 +869,6 @@ export class PaintModelingState {
     private paintDepthRadiusForView(view: PaintView): number {
         const minDimension = Math.max(1, Math.min(view.width, view.height));
         return clamp(this.brush.width / minDimension * 1.55, 0.035, 0.28);
-    }
-
-    private maxStrokeSamplesForBrush(): number {
-        return Math.round(clamp(300 - this.brush.width * 1.5, 96, 280));
     }
 
     private maxEffectSamplesForBrush(): number {
@@ -1131,7 +1130,7 @@ function normalizeRenderOptions(
         };
     }
     return {
-        showPaintSurface: options.showPaintSurface ?? true,
+        showPaintSurface: options.showPaintSurface ?? false,
         showChartWireframe: options.showChartWireframe ?? true,
         showBrushLattice: options.showBrushLattice ?? false,
         depthPreview: options.depthPreview ?? null,
@@ -1261,6 +1260,86 @@ function resamplePaintPolyline(points: Vec2[], maxSamples: number): Vec2[] {
     return out;
 }
 
+function samplePaintStrokeSpline(points: Vec2[]): Vec2[] {
+    const length = polylineLength(points);
+
+    if (points.length < MIN_STROKE_SPLINE_CONTROL_POINTS) {
+        return resamplePaintPolyline(points, paintStrokePolylineSampleCount(length));
+    }
+
+    if (length <= 1e-6) return [points[0]];
+    return sampleClampedCubicBSpline(points);
+}
+
+function paintStrokePolylineSampleCount(length: number): number {
+    if (length <= 1e-6) return 1;
+    return Math.max(2, Math.ceil(length / STROKE_SPLINE_SAMPLE_SPACING) + 1);
+}
+
+function sampleClampedCubicBSpline(controls: Vec2[]): Vec2[] {
+    if (controls.length < MIN_STROKE_SPLINE_CONTROL_POINTS) {
+        return resamplePaintPolyline(controls, paintStrokePolylineSampleCount(polylineLength(controls)));
+    }
+
+    const padded = [
+        controls[0],
+        controls[0],
+        ...controls,
+        controls[controls.length - 1],
+        controls[controls.length - 1],
+    ];
+    const spanCount = Math.max(1, padded.length - 3);
+    const samples: Vec2[] = [];
+
+    for (let span = 0; span < spanCount; span++) {
+        const p0 = padded[span];
+        const p1 = padded[span + 1];
+        const p2 = padded[span + 2];
+        const p3 = padded[span + 3];
+        const segmentCount = Math.max(
+            1,
+            Math.ceil(cubicBSplineSpanLength(p0, p1, p2, p3) / STROKE_SPLINE_SAMPLE_SPACING),
+        );
+
+        if (span === 0) {
+            samples.push(cubicBSplinePoint(p0, p1, p2, p3, 0));
+        }
+        for (let i = 1; i <= segmentCount; i++) {
+            samples.push(cubicBSplinePoint(p0, p1, p2, p3, i / segmentCount));
+        }
+    }
+
+    samples[0] = controls[0];
+    samples[samples.length - 1] = controls[controls.length - 1];
+    return samples;
+}
+
+function cubicBSplineSpanLength(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2): number {
+    const steps = 4;
+    let length = 0;
+    let previous = cubicBSplinePoint(p0, p1, p2, p3, 0);
+    for (let i = 1; i <= steps; i++) {
+        const current = cubicBSplinePoint(p0, p1, p2, p3, i / steps);
+        length += distance2d(previous, current);
+        previous = current;
+    }
+    return length;
+}
+
+function cubicBSplinePoint(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: number): Vec2 {
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const b0 = (-t3 + 3 * t2 - 3 * t + 1) / 6;
+    const b1 = (3 * t3 - 6 * t2 + 4) / 6;
+    const b2 = (-3 * t3 + 3 * t2 + 3 * t + 1) / 6;
+    const b3 = t3 / 6;
+
+    return {
+        x: p0.x * b0 + p1.x * b1 + p2.x * b2 + p3.x * b3,
+        y: p0.y * b0 + p1.y * b1 + p2.y * b2 + p3.y * b3,
+    };
+}
+
 function polylineLength(points: Vec2[]): number {
     let length = 0;
     for (let i = 1; i < points.length; i++) {
@@ -1350,11 +1429,10 @@ function editChartDepthAlongScreenPolyline(
     return changed;
 }
 
-function paintChartStroke(
+function applyStrokeToChartGeometry(
     chart: PaintChart,
     samples: ChartPaintSample[],
     radius: number,
-    brush: BrushStyle,
     {
         updateDepth,
         requireCoverage,
@@ -1364,9 +1442,10 @@ function paintChartStroke(
     },
 ): boolean {
     if (samples.length === 0) return false;
-    const color = parseColor(brush.color, brush.opacity);
     let changed = false;
 
+    // Paint color stays in vector stroke samples. The chart grid stores only geometry coverage
+    // and depth so brushstrokes do not get baked into a low-resolution color raster.
     forEachGridPoint(chart, (index, uv) => {
         if (requireCoverage && !isGridPointCovered(chart, index)) return;
         const nearest = nearestPaintSampleOnPolyline(samples, uv);
@@ -1377,10 +1456,6 @@ function paintChartStroke(
         if (updateDepth) {
             chart.depths[index] = lerp(chart.depths[index], Math.max(MIN_DEPTH, nearest.depth), influence);
             chart.coverage[index] = Math.max(chart.coverage[index] ?? 0, influence);
-            changed = true;
-        }
-
-        if (blendChartPaint(chart, index, color, influence)) {
             changed = true;
         }
     });
@@ -1516,23 +1591,6 @@ function nearestPointOnSegment(point: Vec2, a: Vec2, b: Vec2): { distance: numbe
         t,
         distance: Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t)),
     };
-}
-
-function blendChartPaint(chart: PaintChart, index: number, color: Vec4, influence: number): boolean {
-    const srcAlpha = clamp(color[3] * influence, 0, 1);
-    if (srcAlpha <= PAINT_EPSILON) return false;
-
-    const offset = index * 4;
-    const dstAlpha = chart.paint[offset + 3] ?? 0;
-    const outAlpha = srcAlpha + dstAlpha * (1 - srcAlpha);
-    if (outAlpha <= PAINT_EPSILON) return false;
-
-    const dstCarry = dstAlpha * (1 - srcAlpha);
-    chart.paint[offset] = (color[0] * srcAlpha + (chart.paint[offset] ?? 0) * dstCarry) / outAlpha;
-    chart.paint[offset + 1] = (color[1] * srcAlpha + (chart.paint[offset + 1] ?? 0) * dstCarry) / outAlpha;
-    chart.paint[offset + 2] = (color[2] * srcAlpha + (chart.paint[offset + 2] ?? 0) * dstCarry) / outAlpha;
-    chart.paint[offset + 3] = outAlpha;
-    return true;
 }
 
 function sampleChartDepth(chart: PaintChart, uv: Vec2): number {

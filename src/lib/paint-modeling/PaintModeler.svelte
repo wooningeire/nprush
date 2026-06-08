@@ -115,7 +115,7 @@ function render() {
     const sceneKey = `${modelerState.meshVersion}:${showChartWireframe ? "wire" : "no-wire"}:${strokeRenderMode}:${draftRenderKey()}:${cameraKey}`;
     if (uploadedSceneKey !== sceneKey) {
         renderer.setSegments(modelerState.buildRenderSegments({
-            showPaintSurface: true,
+            showPaintSurface: false,
             showChartWireframe,
             showBrushLattice: false,
             strokeRenderMode,
