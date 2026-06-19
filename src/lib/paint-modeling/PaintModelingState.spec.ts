@@ -9,6 +9,28 @@ function drawStroke(state: PaintModelingState, a: Vec2, b: Vec2) {
 }
 
 describe("PaintModelingState prototype", () => {
+    it("uses viewport aspect when calibrating paint-view rays", () => {
+        const state = new PaintModelingState();
+
+        const wideView = state.saveCurrentView(1200, 600, false);
+        const tallView = state.saveCurrentView(600, 1200, false);
+
+        expect(projectedSpanAspect(wideView.viewProjInvMat)).toBeCloseTo(2, 5);
+        expect(projectedSpanAspect(tallView.viewProjInvMat)).toBeCloseTo(0.5, 5);
+    });
+
+    it("treats resized paint views as a different calibrated projection", () => {
+        const state = new PaintModelingState();
+
+        state.saveCurrentView(1200, 600, false);
+        expect(state.isCameraAtActiveView).toBe(true);
+
+        state.viewportWidth = 600;
+        state.viewportHeight = 600;
+
+        expect(state.isCameraAtActiveView).toBe(false);
+    });
+
     it("can snap a later-view stroke to an existing surface chart", () => {
         const state = new PaintModelingState();
         state.addObject();
@@ -598,6 +620,26 @@ describe("PaintModelingState prototype", () => {
         )).toBe(true);
     });
 });
+
+function projectedSpanAspect(viewProjInvMat: number[]): number {
+    const left = unprojectNdc(viewProjInvMat, -1, 0, 0.5);
+    const right = unprojectNdc(viewProjInvMat, 1, 0, 0.5);
+    const bottom = unprojectNdc(viewProjInvMat, 0, -1, 0.5);
+    const top = unprojectNdc(viewProjInvMat, 0, 1, 0.5);
+
+    return distance3(left, right) / distance3(bottom, top);
+}
+
+function unprojectNdc(viewProjInvMat: number[], x: number, y: number, z: number): Vec3 {
+    const worldX = viewProjInvMat[0] * x + viewProjInvMat[4] * y + viewProjInvMat[8] * z + viewProjInvMat[12];
+    const worldY = viewProjInvMat[1] * x + viewProjInvMat[5] * y + viewProjInvMat[9] * z + viewProjInvMat[13];
+    const worldZ = viewProjInvMat[2] * x + viewProjInvMat[6] * y + viewProjInvMat[10] * z + viewProjInvMat[14];
+    const worldW = viewProjInvMat[3] * x + viewProjInvMat[7] * y + viewProjInvMat[11] * z + viewProjInvMat[15];
+    if (!Number.isFinite(worldW) || Math.abs(worldW) <= 1e-6) {
+        throw new Error("Cannot unproject NDC point");
+    }
+    return [worldX / worldW, worldY / worldW, worldZ / worldW];
+}
 
 function cameraCenter(viewInvMat: number[]): Vec3 {
     return [viewInvMat[12], viewInvMat[13], viewInvMat[14]];

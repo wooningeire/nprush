@@ -92,6 +92,7 @@ export class PaintModelingState {
     readonly orbit = new CameraOrbit();
     readonly camera = new Camera({
         controlScheme: this.orbit,
+        projectionAspect: "screen",
         screenDims: {
             width: () => this.viewportWidth,
             height: () => this.viewportHeight,
@@ -108,7 +109,10 @@ export class PaintModelingState {
 
     get isCameraAtActiveView(): boolean {
         const view = this.activeView;
-        return !!view && !this.cameraMovedFrom(view);
+        return !!view
+            && !this.cameraMovedFrom(view)
+            && view.width === this.viewportWidth
+            && view.height === this.viewportHeight;
     }
 
     get currentViewName(): string {

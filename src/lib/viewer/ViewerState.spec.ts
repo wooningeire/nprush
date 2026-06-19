@@ -13,6 +13,8 @@ describe("ViewerState Camera Separation", () => {
         expect(state.viewportCamera.screenDims.height()).toBe(600);
         expect(state.backendCamera.screenDims.width()).toBe(512);
         expect(state.backendCamera.screenDims.height()).toBe(512);
+        expect(state.viewportCamera.aspect).toBe(1);
+        expect(state.backendCamera.aspect).toBe(1);
 
         // Modifying window size should NOT affect backend camera
         state.width = 1920;
@@ -21,6 +23,8 @@ describe("ViewerState Camera Separation", () => {
         expect(state.viewportCamera.screenDims.height()).toBe(1080);
         expect(state.backendCamera.screenDims.width()).toBe(512);
         expect(state.backendCamera.screenDims.height()).toBe(512);
+        expect(state.viewportCamera.aspect).toBe(1);
+        expect(state.backendCamera.aspect).toBe(1);
     });
 
     it("should keep viewportOrbit and backendOrbit independent during normal usage", () => {

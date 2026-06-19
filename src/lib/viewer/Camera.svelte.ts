@@ -10,15 +10,27 @@ export interface CameraScreenDims {
     height(): number,
 }
 
+export type CameraProjectionAspect = "screen" | "square";
+
 export class Camera {
     private readonly controlScheme: CameraControlScheme;
+    private readonly projectionAspect: CameraProjectionAspect;
     readonly screenDims: CameraScreenDims;
 
     zNear = $state(0.01);
     zFar = $state(100);
     fov = $state(Math.PI / 2);
     
-    readonly aspect = 1.0;
+    readonly aspect = $derived.by(() => {
+        if (this.projectionAspect === "square") return 1.0;
+
+        const width = this.screenDims.width();
+        const height = this.screenDims.height();
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+            return 1.0;
+        }
+        return width / height;
+    });
 
     readonly proj = $derived.by(() => mat4.perspective(this.fov, this.aspect, this.zNear, this.zFar));
     readonly viewMat = $derived.by(() => this.controlScheme.viewMat());
@@ -28,12 +40,15 @@ export class Camera {
 
     constructor({
         controlScheme,
+        projectionAspect = "square",
         screenDims,
     }: {
         controlScheme: CameraControlScheme,
+        projectionAspect?: CameraProjectionAspect,
         screenDims: CameraScreenDims,
     }) {
         this.controlScheme = controlScheme;
+        this.projectionAspect = projectionAspect;
         this.screenDims = screenDims;
     }
 }
