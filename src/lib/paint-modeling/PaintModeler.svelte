@@ -16,7 +16,8 @@ const modelerState = new PaintModelingState();
 let canvas = $state<HTMLCanvasElement | null>(null);
 let viewportWidth = $state(1);
 let viewportHeight = $state(1);
-let renderer = $state<PaintModelingRenderer | null>(null);
+let renderer: PaintModelingRenderer | null = null;
+let rendererInitializing = false;
 let renderFrameId: number | null = null;
 let uploadedStaticSceneKey: string | null = null;
 let uploadedDraftKey: string | null = null;
@@ -65,15 +66,24 @@ onDestroy(() => {
     uploadedDraftKey = null;
 });
 
-function ensureRenderer() {
-    if (renderer || !canvas) return;
+async function ensureRenderer() {
+    if (
+        renderer
+        || rendererInitializing
+        || !canvas
+        || canvas.width === 0
+        || canvas.height === 0
+    ) return;
+    rendererInitializing = true;
     rendererError = null;
     try {
-        renderer = PaintModelingRenderer.create(canvas);
+        renderer = await PaintModelingRenderer.create(canvas);
         uploadedStaticSceneKey = null;
         uploadedDraftKey = null;
     } catch (error) {
         rendererError = (error as Error)?.message ?? String(error);
+    } finally {
+        rendererInitializing = false;
     }
 }
 
@@ -81,13 +91,13 @@ function requestRender() {
     if (!active || renderFrameId !== null) return;
     renderFrameId = requestAnimationFrame(() => {
         renderFrameId = null;
-        render();
+        void render();
     });
 }
 
-function render() {
+async function render() {
     if (!active) return;
-    ensureRenderer();
+    await ensureRenderer();
     if (!renderer) return;
 
     const staticSceneKey = [

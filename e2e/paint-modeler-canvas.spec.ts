@@ -11,6 +11,8 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
         if (!isExpectedStartupNoise(error.message)) consoleProblems.push(error.message);
     });
 
+    await forbidWebglContexts(page);
+
     await page.goto("/paint-modeler");
     await dismissStartupAlerts(page, 700);
     await expect(page.locator("paint-viewport")).toBeVisible();
@@ -89,4 +91,21 @@ async function waitForAnimationFrame(page: Page) {
     await page.evaluate(() => new Promise<void>(resolve => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     }));
+}
+
+async function forbidWebglContexts(page: Page) {
+    await page.addInitScript(() => {
+        const originalGetContext = HTMLCanvasElement.prototype.getContext;
+        HTMLCanvasElement.prototype.getContext = function(...args) {
+            const [contextId] = args;
+            if (
+                contextId === "webgl"
+                || contextId === "webgl2"
+                || contextId === "experimental-webgl"
+            ) {
+                throw new Error(`Paint Modeler requested ${contextId}; WebGPU only`);
+            }
+            return originalGetContext.apply(this, args);
+        } as typeof HTMLCanvasElement.prototype.getContext;
+    });
 }
