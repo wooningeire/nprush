@@ -1,39 +1,68 @@
-import type { RenderPrimitive, RenderSegment, RenderTriangle } from "./types.ts";
+import type { RenderPrimitive, RenderSegment, RenderStroke, RenderTriangle, Vec3 } from "./types.ts";
 
 const SEGMENT_VERTEX_SHADER = `#version 300 es
-layout(location = 0) in vec3 segmentStart;
-layout(location = 1) in vec3 segmentEnd;
-layout(location = 2) in vec4 color;
-layout(location = 3) in float along;
+layout(location = 0) in vec3 joinPrev;
+layout(location = 1) in vec3 joinPoint;
+layout(location = 2) in vec3 joinNext;
+layout(location = 3) in vec4 color;
 layout(location = 4) in float side;
 layout(location = 5) in float width;
+layout(location = 6) in float cap;
 
 uniform mat4 viewProj;
 uniform vec2 viewportSize;
 
 out vec4 vColor;
 
+float safeClipW(vec4 clip) {
+    return abs(clip.w) > 0.000001 ? clip.w : 0.000001;
+}
+
+vec2 directionPx(vec2 fromNdc, vec2 toNdc, vec2 fallback) {
+    vec2 delta = (toNdc - fromNdc) * viewportSize;
+    float deltaLength = length(delta);
+    return deltaLength > 0.0001 ? delta / deltaLength : fallback;
+}
+
+vec2 perpendicular(vec2 direction) {
+    return vec2(-direction.y, direction.x);
+}
+
 void main() {
-    vec4 startClip = viewProj * vec4(segmentStart, 1.0);
-    vec4 endClip = viewProj * vec4(segmentEnd, 1.0);
-    float startW = abs(startClip.w) > 0.000001 ? startClip.w : 0.000001;
-    float endW = abs(endClip.w) > 0.000001 ? endClip.w : 0.000001;
-    vec2 startNdc = startClip.xy / startW;
-    vec2 endNdc = endClip.xy / endW;
-    vec2 directionPx = (endNdc - startNdc) * viewportSize;
-    float directionLength = length(directionPx);
-    vec2 normal = directionLength > 0.0001
-        ? vec2(-directionPx.y, directionPx.x) / directionLength
-        : vec2(0.0, 1.0);
-    vec2 tangent = directionLength > 0.0001
-        ? directionPx / directionLength
-        : vec2(1.0, 0.0);
-    vec4 clip = mix(startClip, endClip, along);
-    vec2 offsetNdc = normal * side * max(width, 1.0) * 0.5 * 2.0 / viewportSize;
-    vec2 capNdc = tangent * (along < 0.5 ? -1.0 : 1.0) * max(width, 1.0) * 0.5 * 2.0 / viewportSize;
-    clip.xy += offsetNdc * clip.w;
-    clip.xy += capNdc * clip.w;
-    gl_Position = clip;
+    vec4 prevClip = viewProj * vec4(joinPrev, 1.0);
+    vec4 pointClip = viewProj * vec4(joinPoint, 1.0);
+    vec4 nextClip = viewProj * vec4(joinNext, 1.0);
+    float prevW = safeClipW(prevClip);
+    float pointW = safeClipW(pointClip);
+    float nextW = safeClipW(nextClip);
+    vec2 prevNdc = prevClip.xy / prevW;
+    vec2 pointNdc = pointClip.xy / pointW;
+    vec2 nextNdc = nextClip.xy / nextW;
+    vec2 dirIn = directionPx(prevNdc, pointNdc, vec2(0.0, 0.0));
+    vec2 dirOut = directionPx(pointNdc, nextNdc, vec2(0.0, 0.0));
+    float dirInLength = length(dirIn);
+    float dirOutLength = length(dirOut);
+    if (dirInLength <= 0.0001 && dirOutLength > 0.0001) {
+        dirIn = dirOut;
+    } else if (dirOutLength <= 0.0001 && dirInLength > 0.0001) {
+        dirOut = dirIn;
+    } else if (dirInLength <= 0.0001 && dirOutLength <= 0.0001) {
+        dirIn = vec2(1.0, 0.0);
+        dirOut = dirIn;
+    }
+    vec2 tangentSum = dirIn + dirOut;
+    float tangentLength = length(tangentSum);
+    vec2 tangent = tangentLength > 0.0001 ? tangentSum / tangentLength : dirOut;
+    vec2 normalIn = perpendicular(dirIn);
+    vec2 miter = perpendicular(tangent);
+    float denom = dot(miter, normalIn);
+    float miterScale = abs(denom) > 0.15 ? min(abs(1.0 / denom), 2.0) : 1.0;
+    float halfWidth = max(width, 1.0) * 0.5;
+    vec2 offsetNdc = miter * side * halfWidth * miterScale * 2.0 / viewportSize;
+    vec2 capNdc = (cap < 0.0 ? dirOut : dirIn) * cap * halfWidth * 2.0 / viewportSize;
+    pointClip.xy += offsetNdc * pointClip.w;
+    pointClip.xy += capNdc * pointClip.w;
+    gl_Position = pointClip;
     vColor = color;
 }
 `;
@@ -156,7 +185,7 @@ void main() {
 `;
 
 const GRID_PLANE_Z = -0.02;
-const FLOATS_PER_VERTEX = 13;
+const FLOATS_PER_VERTEX = 16;
 const VERTICES_PER_SEGMENT = 6;
 const FLOATS_PER_TRIANGLE_VERTEX = 7;
 const VERTICES_PER_TRIANGLE = 3;
@@ -170,8 +199,12 @@ export class PaintModelingRenderer {
     private readonly segmentProgram: WebGLProgram;
     private readonly segmentVao: WebGLVertexArrayObject;
     private readonly segmentVertexBuffer: WebGLBuffer;
+    private readonly strokeVao: WebGLVertexArrayObject;
+    private readonly strokeVertexBuffer: WebGLBuffer;
     private readonly draftSegmentVao: WebGLVertexArrayObject;
     private readonly draftSegmentVertexBuffer: WebGLBuffer;
+    private readonly draftStrokeVao: WebGLVertexArrayObject;
+    private readonly draftStrokeVertexBuffer: WebGLBuffer;
     private readonly segmentViewProjLocation: WebGLUniformLocation;
     private readonly viewportSizeLocation: WebGLUniformLocation;
     private readonly triangleProgram: WebGLProgram;
@@ -180,8 +213,12 @@ export class PaintModelingRenderer {
     private readonly triangleViewProjLocation: WebGLUniformLocation;
     private segmentCapacityVertices = 0;
     private segmentVertexCount = 0;
+    private strokeCapacityVertices = 0;
+    private strokeVertexCount = 0;
     private draftSegmentCapacityVertices = 0;
     private draftSegmentVertexCount = 0;
+    private draftStrokeCapacityVertices = 0;
+    private draftStrokeVertexCount = 0;
     private triangleCapacityVertices = 0;
     private triangleVertexCount = 0;
 
@@ -220,15 +257,23 @@ export class PaintModelingRenderer {
 
         const segmentVao = gl.createVertexArray();
         const segmentVertexBuffer = gl.createBuffer();
+        const strokeVao = gl.createVertexArray();
+        const strokeVertexBuffer = gl.createBuffer();
         const draftSegmentVao = gl.createVertexArray();
         const draftSegmentVertexBuffer = gl.createBuffer();
+        const draftStrokeVao = gl.createVertexArray();
+        const draftStrokeVertexBuffer = gl.createBuffer();
         const triangleVao = gl.createVertexArray();
         const triangleVertexBuffer = gl.createBuffer();
         if (
             !segmentVao
             || !segmentVertexBuffer
+            || !strokeVao
+            || !strokeVertexBuffer
             || !draftSegmentVao
             || !draftSegmentVertexBuffer
+            || !draftStrokeVao
+            || !draftStrokeVertexBuffer
             || !triangleVao
             || !triangleVertexBuffer
         ) {
@@ -239,13 +284,19 @@ export class PaintModelingRenderer {
         this.gridVao = gridVao;
         this.segmentVao = segmentVao;
         this.segmentVertexBuffer = segmentVertexBuffer;
+        this.strokeVao = strokeVao;
+        this.strokeVertexBuffer = strokeVertexBuffer;
         this.draftSegmentVao = draftSegmentVao;
         this.draftSegmentVertexBuffer = draftSegmentVertexBuffer;
+        this.draftStrokeVao = draftStrokeVao;
+        this.draftStrokeVertexBuffer = draftStrokeVertexBuffer;
         this.triangleVao = triangleVao;
         this.triangleVertexBuffer = triangleVertexBuffer;
 
         configureSegmentVertexArray(gl, this.segmentVao, this.segmentVertexBuffer);
+        configureSegmentVertexArray(gl, this.strokeVao, this.strokeVertexBuffer);
         configureSegmentVertexArray(gl, this.draftSegmentVao, this.draftSegmentVertexBuffer);
+        configureSegmentVertexArray(gl, this.draftStrokeVao, this.draftStrokeVertexBuffer);
 
         gl.bindVertexArray(this.triangleVao);
         gl.bindBuffer(gl.ARRAY_BUFFER, this.triangleVertexBuffer);
@@ -260,10 +311,13 @@ export class PaintModelingRenderer {
     setSegments(segments: RenderPrimitive[]) {
         const gl = this.gl;
         const renderSegments = segments.filter(isRenderSegment);
+        const strokes = segments.filter(isRenderStroke);
         const triangles = segments.filter(isRenderTriangle);
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
+        const strokeVertexCount = strokeStripVertexCount(strokes);
         const triangleVertexCount = triangles.length * VERTICES_PER_TRIANGLE;
         const segmentData = new Float32Array(segmentVertexCount * FLOATS_PER_VERTEX);
+        const strokeData = new Float32Array(strokeVertexCount * FLOATS_PER_VERTEX);
         const triangleData = new Float32Array(triangleVertexCount * FLOATS_PER_TRIANGLE_VERTEX);
         let segmentOffset = 0;
         let triangleOffset = 0;
@@ -271,11 +325,13 @@ export class PaintModelingRenderer {
         for (const segment of renderSegments) {
             segmentOffset = appendSegment(segmentData, segmentOffset, segment);
         }
+        appendStrokeStrips(strokeData, 0, strokes);
         for (const triangle of triangles) {
             triangleOffset = appendTriangle(triangleData, triangleOffset, triangle);
         }
 
         this.segmentVertexCount = segmentVertexCount;
+        this.strokeVertexCount = strokeVertexCount;
         this.triangleVertexCount = triangleVertexCount;
 
         this.segmentCapacityVertices = uploadVertexData(
@@ -285,6 +341,14 @@ export class PaintModelingRenderer {
             segmentData,
             segmentVertexCount,
             this.segmentCapacityVertices,
+        );
+        this.strokeCapacityVertices = uploadVertexData(
+            gl,
+            this.strokeVao,
+            this.strokeVertexBuffer,
+            strokeData,
+            strokeVertexCount,
+            this.strokeCapacityVertices,
         );
 
         gl.bindVertexArray(this.triangleVao);
@@ -301,15 +365,20 @@ export class PaintModelingRenderer {
     setDraftSegments(segments: RenderPrimitive[]) {
         const gl = this.gl;
         const renderSegments = segments.filter(isRenderSegment);
+        const strokes = segments.filter(isRenderStroke);
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
+        const strokeVertexCount = strokeStripVertexCount(strokes);
         const segmentData = new Float32Array(segmentVertexCount * FLOATS_PER_VERTEX);
+        const strokeData = new Float32Array(strokeVertexCount * FLOATS_PER_VERTEX);
         let segmentOffset = 0;
 
         for (const segment of renderSegments) {
             segmentOffset = appendSegment(segmentData, segmentOffset, segment);
         }
+        appendStrokeStrips(strokeData, 0, strokes);
 
         this.draftSegmentVertexCount = segmentVertexCount;
+        this.draftStrokeVertexCount = strokeVertexCount;
         this.draftSegmentCapacityVertices = uploadVertexData(
             gl,
             this.draftSegmentVao,
@@ -317,6 +386,14 @@ export class PaintModelingRenderer {
             segmentData,
             segmentVertexCount,
             this.draftSegmentCapacityVertices,
+        );
+        this.draftStrokeCapacityVertices = uploadVertexData(
+            gl,
+            this.draftStrokeVao,
+            this.draftStrokeVertexBuffer,
+            strokeData,
+            strokeVertexCount,
+            this.draftStrokeCapacityVertices,
         );
     }
 
@@ -352,7 +429,12 @@ export class PaintModelingRenderer {
             gl.bindVertexArray(null);
         }
 
-        if (this.segmentVertexCount === 0 && this.draftSegmentVertexCount === 0) return;
+        if (
+            this.segmentVertexCount === 0
+            && this.strokeVertexCount === 0
+            && this.draftSegmentVertexCount === 0
+            && this.draftStrokeVertexCount === 0
+        ) return;
 
         gl.useProgram(this.segmentProgram);
         gl.uniformMatrix4fv(this.segmentViewProjLocation, false, viewProjMat);
@@ -365,7 +447,9 @@ export class PaintModelingRenderer {
 
         gl.depthMask(false);
         drawSegmentBuffer(gl, this.segmentVao, this.segmentVertexCount);
+        drawStrokeBuffer(gl, this.strokeVao, this.strokeVertexCount);
         drawSegmentBuffer(gl, this.draftSegmentVao, this.draftSegmentVertexCount);
+        drawStrokeBuffer(gl, this.draftStrokeVao, this.draftStrokeVertexCount);
         gl.depthMask(true);
     }
 
@@ -375,9 +459,13 @@ export class PaintModelingRenderer {
         gl.deleteProgram(this.gridProgram);
         gl.deleteBuffer(this.segmentVertexBuffer);
         gl.deleteVertexArray(this.segmentVao);
+        gl.deleteBuffer(this.strokeVertexBuffer);
+        gl.deleteVertexArray(this.strokeVao);
         gl.deleteProgram(this.segmentProgram);
         gl.deleteBuffer(this.draftSegmentVertexBuffer);
         gl.deleteVertexArray(this.draftSegmentVao);
+        gl.deleteBuffer(this.draftStrokeVertexBuffer);
+        gl.deleteVertexArray(this.draftStrokeVao);
         gl.deleteBuffer(this.triangleVertexBuffer);
         gl.deleteVertexArray(this.triangleVao);
         gl.deleteProgram(this.triangleProgram);
@@ -397,13 +485,15 @@ function configureSegmentVertexArray(
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 3, gl.FLOAT, false, stride, 3 * Float32Array.BYTES_PER_ELEMENT);
     gl.enableVertexAttribArray(2);
-    gl.vertexAttribPointer(2, 4, gl.FLOAT, false, stride, 6 * Float32Array.BYTES_PER_ELEMENT);
+    gl.vertexAttribPointer(2, 3, gl.FLOAT, false, stride, 6 * Float32Array.BYTES_PER_ELEMENT);
     gl.enableVertexAttribArray(3);
-    gl.vertexAttribPointer(3, 1, gl.FLOAT, false, stride, 10 * Float32Array.BYTES_PER_ELEMENT);
+    gl.vertexAttribPointer(3, 4, gl.FLOAT, false, stride, 9 * Float32Array.BYTES_PER_ELEMENT);
     gl.enableVertexAttribArray(4);
-    gl.vertexAttribPointer(4, 1, gl.FLOAT, false, stride, 11 * Float32Array.BYTES_PER_ELEMENT);
+    gl.vertexAttribPointer(4, 1, gl.FLOAT, false, stride, 13 * Float32Array.BYTES_PER_ELEMENT);
     gl.enableVertexAttribArray(5);
-    gl.vertexAttribPointer(5, 1, gl.FLOAT, false, stride, 12 * Float32Array.BYTES_PER_ELEMENT);
+    gl.vertexAttribPointer(5, 1, gl.FLOAT, false, stride, 14 * Float32Array.BYTES_PER_ELEMENT);
+    gl.enableVertexAttribArray(6);
+    gl.vertexAttribPointer(6, 1, gl.FLOAT, false, stride, 15 * Float32Array.BYTES_PER_ELEMENT);
     gl.bindVertexArray(null);
 }
 
@@ -434,12 +524,23 @@ function drawSegmentBuffer(gl: WebGL2RenderingContext, vao: WebGLVertexArrayObje
     gl.bindVertexArray(null);
 }
 
+function drawStrokeBuffer(gl: WebGL2RenderingContext, vao: WebGLVertexArrayObject, vertexCount: number) {
+    if (vertexCount === 0) return;
+    gl.bindVertexArray(vao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, vertexCount);
+    gl.bindVertexArray(null);
+}
+
 function isRenderSegment(primitive: RenderPrimitive): primitive is RenderSegment {
-    return primitive.kind !== "triangle";
+    return primitive.kind !== "triangle" && primitive.kind !== "stroke";
 }
 
 function isRenderTriangle(primitive: RenderPrimitive): primitive is RenderTriangle {
     return primitive.kind === "triangle";
+}
+
+function isRenderStroke(primitive: RenderPrimitive): primitive is RenderStroke {
+    return primitive.kind === "stroke";
 }
 
 function appendSegment(
@@ -448,12 +549,45 @@ function appendSegment(
     segment: RenderSegment,
 ): number {
     const width = segment.width ?? 1.25;
-    offset = appendVertex(out, offset, segment, 0, -1, width);
-    offset = appendVertex(out, offset, segment, 1, -1, width);
-    offset = appendVertex(out, offset, segment, 1, 1, width);
-    offset = appendVertex(out, offset, segment, 0, -1, width);
-    offset = appendVertex(out, offset, segment, 1, 1, width);
-    offset = appendVertex(out, offset, segment, 0, 1, width);
+    offset = appendSegmentVertex(out, offset, segment, 0, -1, width);
+    offset = appendSegmentVertex(out, offset, segment, 1, -1, width);
+    offset = appendSegmentVertex(out, offset, segment, 1, 1, width);
+    offset = appendSegmentVertex(out, offset, segment, 0, -1, width);
+    offset = appendSegmentVertex(out, offset, segment, 1, 1, width);
+    offset = appendSegmentVertex(out, offset, segment, 0, 1, width);
+    return offset;
+}
+
+function strokeStripVertexCount(strokes: RenderStroke[]): number {
+    let count = 0;
+    let hasPreviousRun = false;
+    for (const stroke of strokes) {
+        if (stroke.points.length < 2) continue;
+        if (hasPreviousRun) count += 2;
+        count += stroke.points.length * 2;
+        hasPreviousRun = true;
+    }
+    return count;
+}
+
+function appendStrokeStrips(
+    out: Float32Array,
+    offset: number,
+    strokes: RenderStroke[],
+): number {
+    let previousStroke: RenderStroke | null = null;
+    for (const stroke of strokes) {
+        if (stroke.points.length < 2) continue;
+        if (previousStroke) {
+            offset = appendStrokeVertex(out, offset, previousStroke, previousStroke.points.length - 1, 1);
+            offset = appendStrokeVertex(out, offset, stroke, 0, -1);
+        }
+        for (let i = 0; i < stroke.points.length; i++) {
+            offset = appendStrokeVertex(out, offset, stroke, i, -1);
+            offset = appendStrokeVertex(out, offset, stroke, i, 1);
+        }
+        previousStroke = stroke;
+    }
     return offset;
 }
 
@@ -484,7 +618,7 @@ function appendTriangleVertex(
     return offset;
 }
 
-function appendVertex(
+function appendSegmentVertex(
     out: Float32Array,
     offset: number,
     segment: RenderSegment,
@@ -492,19 +626,76 @@ function appendVertex(
     side: number,
     width: number,
 ): number {
-    out[offset++] = segment.a[0];
-    out[offset++] = segment.a[1];
-    out[offset++] = segment.a[2];
-    out[offset++] = segment.b[0];
-    out[offset++] = segment.b[1];
-    out[offset++] = segment.b[2];
-    out[offset++] = segment.color[0];
-    out[offset++] = segment.color[1];
-    out[offset++] = segment.color[2];
-    out[offset++] = segment.color[3];
-    out[offset++] = along;
+    const point = along < 0.5 ? segment.a : segment.b;
+    const cap = along < 0.5
+        ? segment.capStart === false ? 0 : -1
+        : segment.capEnd === false ? 0 : 1;
+    return appendJoinVertex(
+        out,
+        offset,
+        segment.a,
+        point,
+        segment.b,
+        segment.color,
+        side,
+        width,
+        cap,
+    );
+}
+
+function appendStrokeVertex(
+    out: Float32Array,
+    offset: number,
+    stroke: RenderStroke,
+    index: number,
+    side: number,
+): number {
+    const point = stroke.points[index];
+    const cap = index === 0
+        ? -1
+        : index === stroke.points.length - 1
+            ? 1
+            : 0;
+    return appendJoinVertex(
+        out,
+        offset,
+        stroke.points[index - 1] ?? point,
+        point,
+        stroke.points[index + 1] ?? point,
+        stroke.color,
+        side,
+        stroke.width,
+        cap,
+    );
+}
+
+function appendJoinVertex(
+    out: Float32Array,
+    offset: number,
+    joinPrev: Vec3,
+    joinPoint: Vec3,
+    joinNext: Vec3,
+    color: [number, number, number, number],
+    side: number,
+    width: number,
+    cap: number,
+): number {
+    out[offset++] = joinPrev[0];
+    out[offset++] = joinPrev[1];
+    out[offset++] = joinPrev[2];
+    out[offset++] = joinPoint[0];
+    out[offset++] = joinPoint[1];
+    out[offset++] = joinPoint[2];
+    out[offset++] = joinNext[0];
+    out[offset++] = joinNext[1];
+    out[offset++] = joinNext[2];
+    out[offset++] = color[0];
+    out[offset++] = color[1];
+    out[offset++] = color[2];
+    out[offset++] = color[3];
     out[offset++] = side;
     out[offset++] = width;
+    out[offset++] = cap;
     return offset;
 }
 

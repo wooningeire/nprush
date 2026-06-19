@@ -7,11 +7,8 @@ export type Vec3 = [number, number, number];
 export type Vec4 = [number, number, number, number];
 
 export type PlacementMode = "snap" | "new-surface" | "occluding-surface" | "paint-behind";
-export type DepthTool = "depth-brush" | "depth-pull";
-export type PaintTool = "paint" | DepthTool | "seam";
 export type ChartRole = "surface" | "occluder" | "behind";
 export type ChartProjectionMode = "view-plane" | "ray-depth";
-export type PaintStrokeRenderMode = "surface" | "view-depth" | "paint-order";
 
 export interface PaintView {
     id: string;
@@ -104,6 +101,8 @@ export interface RenderSegment {
     b: Vec3;
     color: Vec4;
     width?: number;
+    capStart?: boolean;
+    capEnd?: boolean;
 }
 
 export interface RenderTriangle {
@@ -114,19 +113,17 @@ export interface RenderTriangle {
     color: Vec4;
 }
 
-export type RenderPrimitive = RenderSegment | RenderTriangle;
-
-export interface DepthBrushPreview {
-    tool: DepthTool;
-    points: Vec2[];
-    delta: number;
+export interface RenderStroke {
+    kind: "stroke";
+    points: Vec3[];
+    color: Vec4;
+    width: number;
 }
 
+export type RenderPrimitive = RenderSegment | RenderTriangle | RenderStroke;
+
 export interface PaintRenderOptions {
-    showPaintSurface?: boolean;
-    showBrushLattice?: boolean;
     showChartWireframe?: boolean;
+    showSurfaceField?: boolean;
     showDraftStroke?: boolean;
-    depthPreview?: DepthBrushPreview | null;
-    strokeRenderMode?: PaintStrokeRenderMode;
 }

@@ -3,16 +3,7 @@ import { onDestroy } from "svelte";
 import { PaintModelingRenderer } from "./PaintModelingRenderer.ts";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
 import { clampNdcPoint, ndcFromClientPoint } from "../contour-modeler/contourGeometry.ts";
-import type { ChartProjectionMode, DepthTool, PaintStrokeRenderMode, PaintTool, PlacementMode, Vec2 } from "./types.ts";
-
-type DepthBrushDirection = "raise" | "lower";
-type ScreenLine = {
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-    kind: "grid" | "normal";
-};
+import type { Vec2 } from "./types.ts";
 
 let {
     active,
@@ -29,21 +20,11 @@ let renderer = $state<PaintModelingRenderer | null>(null);
 let renderFrameId: number | null = null;
 let uploadedStaticSceneKey: string | null = null;
 let uploadedDraftKey: string | null = null;
-let pointerMode = $state<PaintTool | "orbit" | null>(null);
+let pointerMode = $state<"paint" | "orbit" | null>(null);
 let rendererError = $state<string | null>(null);
 let showChartWireframe = $state(true);
-let showBrushLattice = $state(false);
-let strokeRenderMode = $state<PaintStrokeRenderMode>("surface");
-let depthBrushDirection = $state<DepthBrushDirection>("raise");
-let effectLastPoint = $state<Vec2 | null>(null);
-let effectCursor = $state<Vec2 | null>(null);
-let depthPullAnchor = $state<Vec2 | null>(null);
+let showSurfaceField = $state(false);
 
-const placementModes: PlacementMode[] = ["snap", "new-surface", "occluding-surface", "paint-behind"];
-const projectionModes: ChartProjectionMode[] = ["view-plane", "ray-depth"];
-const strokeRenderModes: PaintStrokeRenderMode[] = ["surface", "view-depth", "paint-order"];
-const depthBrushDirections: DepthBrushDirection[] = ["raise", "lower"];
-const tools: PaintTool[] = ["paint", "depth-brush", "depth-pull", "seam"];
 let sortedObjects = $derived([...modelerState.objects].sort((a, b) => a.layerIndex - b.layerIndex));
 let sortedViews = $derived([...modelerState.views].sort((a, b) => a.createdAt - b.createdAt));
 
@@ -64,12 +45,7 @@ $effect(() => {
     modelerState.draftStroke;
     modelerState.brush;
     showChartWireframe;
-    showBrushLattice;
-    strokeRenderMode;
-    modelerState.chartProjectionMode;
-    modelerState.tool;
-    effectCursor;
-    depthPullAnchor;
+    showSurfaceField;
     requestRender();
 });
 
@@ -114,15 +90,16 @@ function render() {
     ensureRenderer();
     if (!renderer) return;
 
-    const cameraKey = strokeRenderMode === "view-depth" ? cameraRenderKey() : "camera-independent";
-    const staticSceneKey = `${modelerState.meshVersion}:${showChartWireframe ? "wire" : "no-wire"}:${strokeRenderMode}:${cameraKey}`;
+    const staticSceneKey = [
+        modelerState.meshVersion,
+        showChartWireframe ? "wire" : "no-wire",
+        showSurfaceField ? "field" : "no-field",
+    ].join(":");
     if (uploadedStaticSceneKey !== staticSceneKey) {
         renderer.setSegments(modelerState.buildRenderSegments({
-            showPaintSurface: false,
             showChartWireframe,
-            showBrushLattice: false,
+            showSurfaceField,
             showDraftStroke: false,
-            strokeRenderMode,
         }));
         uploadedStaticSceneKey = staticSceneKey;
     }
@@ -149,29 +126,8 @@ function onPointerDown(event: PointerEvent) {
     const point = pointerNdc(event, target);
 
     if (event.button === 0) {
-        if (modelerState.tool === "paint") {
-            modelerState.beginStroke(point, target.clientWidth, target.clientHeight);
-            pointerMode = "paint";
-        } else if (modelerState.tool === "depth-brush") {
-            modelerState.beginUndoGroup();
-            modelerState.brushDepthAt(point, depthBrushReverse(event));
-            effectLastPoint = point;
-            effectCursor = point;
-            depthPullAnchor = null;
-            pointerMode = "depth-brush";
-        } else if (modelerState.tool === "depth-pull") {
-            modelerState.beginUndoGroup();
-            effectLastPoint = point;
-            effectCursor = point;
-            depthPullAnchor = point;
-            pointerMode = "depth-pull";
-        } else {
-            modelerState.beginUndoGroup();
-            modelerState.markSeamAt(point);
-            effectLastPoint = point;
-            depthPullAnchor = null;
-            pointerMode = "seam";
-        }
+        modelerState.beginStroke(point, target.clientWidth, target.clientHeight);
+        pointerMode = "paint";
     } else if (event.button === 1) {
         pointerMode = "orbit";
     }
@@ -185,34 +141,10 @@ function onPointerMove(event: PointerEvent) {
     const target = event.currentTarget as HTMLElement;
     const point = pointerNdc(event, target);
 
-    if (isDepthTool(modelerState.tool)) {
-        effectCursor = point;
-        if (pointerMode === null) {
-            depthPullAnchor = null;
-            requestRender();
-            return;
-        }
-    } else if (pointerMode === null) {
-        return;
-    }
+    if (pointerMode === null) return;
 
     if (pointerMode === "paint") {
         modelerState.appendStrokePoint(point);
-    } else if (pointerMode === "depth-brush") {
-        const previous = effectLastPoint ?? point;
-        modelerState.brushDepthAlong([previous, point], depthBrushReverse(event));
-        effectLastPoint = point;
-        depthPullAnchor = null;
-    } else if (pointerMode === "depth-pull") {
-        const anchor = depthPullAnchor ?? effectLastPoint ?? point;
-        const delta = depthPullDeltaFromPointer(event, target);
-        if (Math.abs(delta) > 1e-6) {
-            modelerState.sculptDepthAlong([anchor], delta);
-        }
-        effectLastPoint = point;
-    } else if (pointerMode === "seam") {
-        modelerState.markSeamAlong(effectLastPoint ? [effectLastPoint, point] : [point]);
-        effectLastPoint = point;
     } else {
         const movement = { x: event.movementX, y: event.movementY };
         if (event.shiftKey) {
@@ -227,20 +159,11 @@ function onPointerMove(event: PointerEvent) {
 }
 
 function onPointerUp(event: PointerEvent) {
-    const completedMode = pointerMode;
     const target = event.currentTarget as HTMLElement;
     if (pointerMode === "paint") {
         modelerState.finishStroke();
-    } else if (isDepthTool(pointerMode) || pointerMode === "seam") {
-        modelerState.commitUndoGroup();
     }
     pointerMode = null;
-    effectLastPoint = null;
-    depthPullAnchor = null;
-    if (isDepthTool(completedMode)) {
-        const point = pointerNdc(event, target);
-        effectCursor = point;
-    }
     if (target.hasPointerCapture(event.pointerId)) {
         target.releasePointerCapture(event.pointerId);
     }
@@ -250,76 +173,11 @@ function onPointerUp(event: PointerEvent) {
 
 function onPointerLeave() {
     if (pointerMode !== null) return;
-    effectCursor = null;
-    depthPullAnchor = null;
     requestRender();
 }
 
 function pointerNdc(event: PointerEvent, target: HTMLElement): Vec2 {
     return clampNdcPoint(ndcFromClientPoint(event.clientX, event.clientY, target.getBoundingClientRect()));
-}
-
-function screenPoint(point: Vec2): Vec2 {
-    return {
-        x: (point.x * 0.5 + 0.5) * viewportWidth,
-        y: (-point.y * 0.5 + 0.5) * viewportHeight,
-    };
-}
-
-function depthBrushScreenRadius(): number {
-    return modelerState.depthBrushRadius * Math.min(viewportWidth, viewportHeight) * 0.5;
-}
-
-function brushLatticeLines(): ScreenLine[] {
-    if (!effectCursor) return [];
-    const center = screenPoint(effectCursor);
-    const radius = depthBrushScreenRadius();
-    if (radius < 6) return [];
-
-    const lines: ScreenLine[] = [];
-    const spacing = clamp(radius / 3, 12, 30);
-    const limit = Math.floor(radius / spacing) * spacing;
-
-    for (let offset = -limit; offset <= limit + 0.001; offset += spacing) {
-        const halfLength = Math.sqrt(Math.max(0, radius * radius - offset * offset));
-        if (halfLength < 1) continue;
-        lines.push({
-            x1: center.x - halfLength,
-            y1: center.y + offset,
-            x2: center.x + halfLength,
-            y2: center.y + offset,
-            kind: "grid",
-        });
-        lines.push({
-            x1: center.x + offset,
-            y1: center.y - halfLength,
-            x2: center.x + offset,
-            y2: center.y + halfLength,
-            kind: "grid",
-        });
-    }
-
-    const tickLength = clamp(radius * 0.25, 8, 26);
-    const tickOffsets = [
-        { x: 0, y: 0 },
-        { x: -0.46, y: 0 },
-        { x: 0.46, y: 0 },
-        { x: 0, y: -0.46 },
-        { x: 0, y: 0.46 },
-    ];
-    const direction = modelerState.tool === "depth-brush" && depthBrushDirection === "lower" ? 1 : -1;
-    for (const offset of tickOffsets) {
-        const x = center.x + offset.x * radius;
-        const y = center.y + offset.y * radius;
-        lines.push({
-            x1: x,
-            y1: y - direction * tickLength * 0.5,
-            x2: x,
-            y2: y + direction * tickLength * 0.5,
-            kind: "normal",
-        });
-    }
-    return lines;
 }
 
 function draftRenderKey(): string {
@@ -333,74 +191,16 @@ function draftRenderKey(): string {
         last.y.toFixed(4),
         modelerState.brush.color,
         modelerState.brush.width.toFixed(1),
-        modelerState.brush.opacity.toFixed(2),
-        modelerState.placementMode,
-        modelerState.chartProjectionMode,
     ].join(":");
 }
 
-function cameraRenderKey(): string {
-    return Array.from(modelerState.camera.viewProjMat, value => value.toFixed(4)).join(",");
-}
-
-function depthPullDeltaFromPointer(event: PointerEvent, target: HTMLElement): number {
-    const minDimension = Math.max(1, Math.min(target.clientWidth, target.clientHeight));
-    const direction = event.altKey ? -1 : 1;
-    return clamp(
-        event.movementY / minDimension * modelerState.depthBrushStrength * 12 * direction,
-        -modelerState.depthBrushStrength,
-        modelerState.depthBrushStrength,
-    );
-}
-
-function depthBrushReverse(event: PointerEvent): boolean {
-    const reverse = depthBrushDirection === "lower";
-    return event.altKey ? !reverse : reverse;
-}
-
-function isDepthTool(tool: PaintTool | "orbit" | null): tool is DepthTool {
-    return tool === "depth-brush" || tool === "depth-pull";
-}
-
-function placementLabel(mode: PlacementMode): string {
-    if (mode === "snap") return "Snap";
-    if (mode === "new-surface") return "New";
-    if (mode === "occluding-surface") return "Occlude";
-    return "Behind";
-}
-
-function projectionLabel(mode: ChartProjectionMode): string {
-    if (mode === "view-plane") return "View Plane";
-    return "Ray Depth";
-}
-
-function strokeRenderLabel(mode: PaintStrokeRenderMode): string {
-    if (mode === "surface") return "Surface";
-    if (mode === "view-depth") return "View Depth";
-    return "Paint Order";
-}
-
-function depthBrushDirectionLabel(direction: DepthBrushDirection): string {
-    return direction === "raise" ? "Raise" : "Lower";
-}
-
-function toolLabel(tool: PaintTool): string {
-    if (tool === "paint") return "Paint";
-    if (tool === "depth-brush") return "Depth Brush";
-    if (tool === "depth-pull") return "Depth Pull";
-    return "Seam";
-}
-
-function clamp(value: number, min: number, max: number): number {
-    return Math.max(min, Math.min(max, value));
-}
 </script>
 
 <paint-modeler-content>
     <aside class="control-panel">
         <section>
             <div class="section-title">Paint Modeler</div>
-            <div class="subtle">Ray-depth prototype</div>
+            <div class="subtle">Surface paint prototype</div>
         </section>
 
         <div class="separator"></div>
@@ -419,74 +219,6 @@ function clamp(value: number, min: number, max: number): number {
         <div class="separator"></div>
 
         <section>
-            <div class="section-title">Tool</div>
-            <div class="segmented tools">
-                {#each tools as tool}
-                    <button
-                        class:active={modelerState.tool === tool}
-                        onclick={() => modelerState.setTool(tool)}
-                    >
-                        {toolLabel(tool)}
-                    </button>
-                {/each}
-            </div>
-        </section>
-
-        <div class="separator"></div>
-
-        <section>
-            <div class="section-title">Placement</div>
-            <div class="segmented two">
-                {#each placementModes as mode}
-                    <button
-                        class:active={modelerState.placementMode === mode}
-                        onclick={() => modelerState.setPlacementMode(mode)}
-                    >
-                        {placementLabel(mode)}
-                    </button>
-                {/each}
-            </div>
-        </section>
-
-        <div class="separator"></div>
-
-        <section>
-            <div class="section-title">Projection</div>
-            <div class="segmented two">
-                {#each projectionModes as mode}
-                    <button
-                        class:active={modelerState.chartProjectionMode === mode}
-                        onclick={() => modelerState.setChartProjectionMode(mode)}
-                    >
-                        {projectionLabel(mode)}
-                    </button>
-                {/each}
-            </div>
-        </section>
-
-        <div class="separator"></div>
-
-        <section>
-            <div class="section-title">Render</div>
-            <div class="segmented three">
-                {#each strokeRenderModes as mode}
-                    <button
-                        class:active={strokeRenderMode === mode}
-                        onclick={() => {
-                            strokeRenderMode = mode;
-                            uploadedStaticSceneKey = null;
-                            requestRender();
-                        }}
-                    >
-                        {strokeRenderLabel(mode)}
-                    </button>
-                {/each}
-            </div>
-        </section>
-
-        <div class="separator"></div>
-
-        <section>
             <div class="section-title">Brush</div>
             <label class="color-row">
                 <span>Color</span>
@@ -497,7 +229,7 @@ function clamp(value: number, min: number, max: number): number {
                 />
             </label>
             <label class="range-row">
-                <span>Paint</span>
+                <span>Width</span>
                 <input
                     type="range"
                     min="1"
@@ -508,71 +240,13 @@ function clamp(value: number, min: number, max: number): number {
                 />
                 <small>{Math.round(modelerState.brush.width)}</small>
             </label>
-            <label class="range-row">
-                <span>Opacity</span>
-                <input
-                    type="range"
-                    min="0.05"
-                    max="1"
-                    step="0.01"
-                    value={modelerState.brush.opacity}
-                    oninput={(event) => modelerState.setBrushOpacity(Number((event.currentTarget as HTMLInputElement).value))}
-                />
-                <small>{Math.round(modelerState.brush.opacity * 100)}%</small>
-            </label>
-            <label class="range-row">
-                <span>Depth rate</span>
-                <input
-                    type="range"
-                    min="0.01"
-                    max="0.2"
-                    step="0.005"
-                    value={modelerState.depthBrushStrength}
-                    oninput={(event) => modelerState.setDepthBrushStrength(Number((event.currentTarget as HTMLInputElement).value))}
-                />
-                <small>{modelerState.depthBrushStrength.toFixed(2)}</small>
-            </label>
-            <div class="segmented two compact">
-                {#each depthBrushDirections as direction}
-                    <button
-                        class:active={depthBrushDirection === direction}
-                        onclick={() => depthBrushDirection = direction}
-                    >
-                        {depthBrushDirectionLabel(direction)}
-                    </button>
-                {/each}
-            </div>
-            <label class="range-row">
-                <span>Depth radius</span>
-                <input
-                    type="range"
-                    min="0.04"
-                    max="0.85"
-                    step="0.01"
-                    value={modelerState.depthBrushRadius}
-                    oninput={(event) => modelerState.setDepthBrushRadius(Number((event.currentTarget as HTMLInputElement).value))}
-                />
-                <small>{modelerState.depthBrushRadius.toFixed(2)}</small>
-            </label>
-            <label class="range-row">
-                <span>Seam size</span>
-                <input
-                    type="range"
-                    min="0.015"
-                    max="0.22"
-                    step="0.005"
-                    value={modelerState.seamBrushRadius}
-                    oninput={(event) => modelerState.setSeamBrushRadius(Number((event.currentTarget as HTMLInputElement).value))}
-                />
-                <small>{modelerState.seamBrushRadius.toFixed(2)}</small>
-            </label>
             <label class="toggle-row">
                 <input type="checkbox" bind:checked={showChartWireframe} />
                 <span>Chart wire</span>
             </label>
             <label class="toggle-row">
-                <input type="checkbox" bind:checked={showBrushLattice} />
-                <span>Brush lattice</span>
+                <input type="checkbox" bind:checked={showSurfaceField} />
+                <span>Surface field</span>
             </label>
         </section>
 
@@ -655,7 +329,6 @@ function clamp(value: number, min: number, max: number): number {
         <section class="stats">
             <span>Charts {modelerState.chartCount}</span>
             <span>Claims {modelerState.occlusionClaims.length}</span>
-            <span>Seams {modelerState.seamCount}</span>
         </section>
 
         {#if rendererError}
@@ -666,9 +339,6 @@ function clamp(value: number, min: number, max: number): number {
     <paint-viewport
         bind:clientWidth={() => viewportWidth, value => viewportWidth = value}
         bind:clientHeight={() => viewportHeight, value => viewportHeight = value}
-        class:depth-brush-active={modelerState.tool === "depth-brush"}
-        class:depth-pull-active={modelerState.tool === "depth-pull"}
-        class:seam-active={modelerState.tool === "seam"}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
@@ -683,70 +353,10 @@ function clamp(value: number, min: number, max: number): number {
         role="application"
     >
         <canvas bind:this={canvas}></canvas>
-        <svg
-            class="drawing-overlay"
-            viewBox={`0 0 ${viewportWidth} ${viewportHeight}`}
-            preserveAspectRatio="none"
-        >
-            {#if modelerState.tool === "depth-pull" && depthPullAnchor && effectCursor}
-                <line
-                    class="depth-pull-drag"
-                    x1={screenPoint(depthPullAnchor).x}
-                    y1={screenPoint(depthPullAnchor).y}
-                    x2={screenPoint(effectCursor).x}
-                    y2={screenPoint(effectCursor).y}
-                />
-                <circle
-                    class="depth-pull-anchor"
-                    cx={screenPoint(depthPullAnchor).x}
-                    cy={screenPoint(depthPullAnchor).y}
-                    r="5"
-                />
-            {/if}
-            {#if isDepthTool(modelerState.tool) && effectCursor}
-                {#if showBrushLattice}
-                    <g
-                        class="brush-lattice"
-                        class:brush={modelerState.tool === "depth-brush"}
-                        class:lower={modelerState.tool === "depth-brush" && depthBrushDirection === "lower"}
-                        class:pull={modelerState.tool === "depth-pull"}
-                    >
-                        {#each brushLatticeLines() as line}
-                            <line
-                                class:normal={line.kind === "normal"}
-                                x1={line.x1}
-                                y1={line.y1}
-                                x2={line.x2}
-                                y2={line.y2}
-                            />
-                        {/each}
-                    </g>
-                {/if}
-                <circle
-                    class="depth-brush-cursor"
-                    class:brush={modelerState.tool === "depth-brush"}
-                    class:lower={modelerState.tool === "depth-brush" && depthBrushDirection === "lower"}
-                    class:pull={modelerState.tool === "depth-pull"}
-                    class:dragging={isDepthTool(pointerMode)}
-                    cx={screenPoint(effectCursor).x}
-                    cy={screenPoint(effectCursor).y}
-                    r={depthBrushScreenRadius()}
-                />
-                <circle
-                    class="depth-brush-dot"
-                    cx={screenPoint(effectCursor).x}
-                    cy={screenPoint(effectCursor).y}
-                    r="3.5"
-                />
-            {/if}
-        </svg>
 
         <div class="viewport-hud">
             <span>{modelerState.activeObject?.name ?? "No object"}</span>
             <span>{modelerState.currentViewName}</span>
-            <span>{modelerState.tool === "depth-brush" ? `${toolLabel(modelerState.tool)} ${depthBrushDirectionLabel(depthBrushDirection)}` : toolLabel(modelerState.tool)}</span>
-            <span>{placementLabel(modelerState.placementMode)}</span>
-            <span>{strokeRenderLabel(strokeRenderMode)}</span>
         </div>
     </paint-viewport>
 </paint-modeler-content>
@@ -821,37 +431,6 @@ button {
     display: grid !important;
     grid-template-columns: 1fr 1fr;
     gap: 0.45rem;
-}
-
-.segmented {
-    display: grid;
-    gap: 0.32rem;
-
-    &.two {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    &.three {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-
-    &.tools {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    &.compact button {
-        min-height: 1.75rem;
-    }
-
-    button {
-        font-size: 0.76rem;
-        padding: 0 0.25rem;
-
-        &.active {
-            background: rgba(76, 154, 131, 0.34);
-            border-color: rgba(125, 221, 189, 0.48);
-        }
-    }
 }
 
 .color-row,
@@ -950,25 +529,12 @@ paint-viewport {
     background: #090b0c;
     cursor: crosshair;
 
-    &.depth-brush-active {
-        cursor: crosshair;
-    }
-
-    &.depth-pull-active {
-        cursor: ns-resize;
-    }
-
-    &.seam-active {
-        cursor: cell;
-    }
-
     > :global(*) {
         grid-area: 1 / 1;
     }
 }
 
-canvas,
-.drawing-overlay {
+canvas {
     width: 100%;
     height: 100%;
     position: relative;
@@ -977,84 +543,6 @@ canvas,
 canvas {
     display: block;
     z-index: 1;
-}
-
-.drawing-overlay {
-    z-index: 10;
-    pointer-events: none;
-    overflow: visible;
-}
-
-.brush-lattice {
-    line {
-        stroke: rgba(190, 242, 231, 0.45);
-        stroke-width: 1px;
-        vector-effect: non-scaling-stroke;
-
-        &.normal {
-            stroke-width: 2px;
-            stroke-linecap: round;
-        }
-    }
-
-    &.brush line.normal {
-        stroke: rgba(112, 207, 255, 0.94);
-    }
-
-    &.brush.lower line.normal {
-        stroke: rgba(255, 204, 88, 0.95);
-    }
-
-    &.pull line.normal {
-        stroke: rgba(255, 225, 102, 0.95);
-    }
-}
-
-.depth-brush-cursor {
-    stroke-width: 2px;
-    stroke-dasharray: 7 5;
-    vector-effect: non-scaling-stroke;
-
-    &.brush {
-        fill: rgba(68, 163, 255, 0.1);
-        stroke: rgba(128, 210, 255, 0.96);
-    }
-
-    &.brush.lower {
-        fill: rgba(255, 184, 72, 0.11);
-        stroke: rgba(255, 211, 94, 0.98);
-    }
-
-    &.pull {
-        fill: rgba(255, 202, 65, 0.11);
-        stroke: rgba(255, 228, 112, 0.98);
-    }
-
-    &.dragging {
-        stroke-dasharray: none;
-        stroke-width: 2.6px;
-    }
-}
-
-.depth-brush-dot {
-    fill: rgba(255, 255, 255, 0.95);
-    stroke: rgba(0, 0, 0, 0.7);
-    stroke-width: 1.5px;
-    vector-effect: non-scaling-stroke;
-}
-
-.depth-pull-drag {
-    stroke: rgba(255, 218, 92, 0.9);
-    stroke-width: 2px;
-    stroke-linecap: round;
-    vector-effect: non-scaling-stroke;
-}
-
-.depth-pull-anchor {
-    fill: rgba(255, 224, 118, 0.98);
-    stroke: rgba(0, 0, 0, 0.72);
-    stroke-width: 1.6px;
-    vector-effect: non-scaling-stroke;
 }
 
 .viewport-hud {

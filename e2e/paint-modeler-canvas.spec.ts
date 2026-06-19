@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "playwright/test";
 
-test("paint modeler canvas supports paint, fast depth hover, and depth pull", async ({ page }) => {
+test("paint modeler canvas supports the simplified paint tool surface", async ({ page }) => {
     const consoleProblems: string[] = [];
     page.on("console", message => {
         if (message.type() === "error" && !isExpectedStartupNoise(message.text())) {
@@ -15,11 +15,20 @@ test("paint modeler canvas supports paint, fast depth hover, and depth pull", as
     await dismissStartupAlerts(page, 700);
     await expect(page.locator("paint-viewport")).toBeVisible();
     await page.getByRole("button", { name: "Add Object" }).click();
-    await page.getByRole("button", { name: "New" }).click();
-    await page.getByRole("button", { name: "View Plane" }).click();
-    await page.getByRole("button", { name: "Surface" }).click();
+    await expect(page.getByRole("button", { name: "Depth Brush" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Depth Pull" })).toHaveCount(0);
+    await expect(page.getByText("Placement", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Projection", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Render", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Tool", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Seam" })).toHaveCount(0);
+    await expect(page.getByLabel("Opacity")).toHaveCount(0);
+    await expect(page.getByLabel("Depth rate")).toHaveCount(0);
+    await expect(page.getByLabel("Brush lattice")).toHaveCount(0);
+    await expect(page.getByLabel("Seam size")).toHaveCount(0);
+    await expect(page.getByLabel("Surface field")).not.toBeChecked();
 
-    await page.locator('input[type="range"]').nth(0).evaluate(element => {
+    await page.getByLabel("Width").evaluate(element => {
         const input = element as HTMLInputElement;
         input.value = "66";
         input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -40,48 +49,19 @@ test("paint modeler canvas supports paint, fast depth hover, and depth pull", as
     await page.mouse.up();
 
     await expect(page.getByText("Charts 1")).toBeVisible();
-    await expect(page.getByText("View Plane")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Surface" })).toHaveClass(/active/);
 
-    await page.getByRole("button", { name: "Paint", exact: true }).click();
+    const withoutSurfaceField = await page.locator("canvas").screenshot();
+    await page.getByLabel("Surface field").check();
+    await expect(page.getByLabel("Surface field")).toBeChecked();
+    await waitForAnimationFrame(page);
+    const withSurfaceField = await page.locator("canvas").screenshot();
+    expect(withSurfaceField.equals(withoutSurfaceField)).toBe(false);
+    await page.getByLabel("Surface field").uncheck();
+
     await page.mouse.move(cx - 130, cy + 74);
     await page.mouse.down();
     await page.mouse.move(cx + 42, cy + 84, { steps: 6 });
     await expect(page.locator(".draft")).toHaveCount(0);
-    await page.mouse.up();
-
-    await page.getByLabel("Brush lattice").uncheck();
-    await page.getByRole("button", { name: "Depth Brush" }).click();
-    await expect(page.getByRole("button", { name: "Raise" })).toHaveClass(/active/);
-
-    const hoverStart = Date.now();
-    for (let i = 0; i < 32; i++) {
-        await page.mouse.move(cx - 120 + i * 7, cy + Math.sin(i / 3) * 18);
-    }
-    const hoverMs = Date.now() - hoverStart;
-    expect(hoverMs).toBeLessThan(5_000);
-    await expect(page.locator(".depth-brush-cursor.brush")).toBeVisible();
-
-    await page.getByLabel("Brush lattice").check();
-    await page.mouse.move(cx + 12, cy + 4, { steps: 4 });
-    await expect(page.locator(".depth-brush-cursor.brush")).toBeVisible();
-    const latticeLines = page.locator(".brush-lattice line");
-    await expect(latticeLines).not.toHaveCount(0);
-    const firstLatticeLength = await latticeLines.first().evaluate(element => {
-        const line = element as SVGLineElement;
-        return Math.hypot(
-            line.x1.baseVal.value - line.x2.baseVal.value,
-            line.y1.baseVal.value - line.y2.baseVal.value,
-        );
-    });
-    expect(firstLatticeLength).toBeGreaterThan(1);
-
-    await page.getByRole("button", { name: "Depth Pull" }).click();
-    await page.mouse.move(cx + 8, cy + 2);
-    await page.mouse.down();
-    await page.mouse.move(cx + 8, cy + 84, { steps: 6 });
-    await expect(page.locator(".depth-brush-cursor.pull")).toBeVisible();
-    await expect(page.locator(".depth-pull-anchor")).toBeVisible();
     await page.mouse.up();
 
     expect(consoleProblems).toEqual([]);
@@ -103,4 +83,10 @@ async function dismissStartupAlerts(page: Page, durationMs = 1_200) {
             await page.waitForTimeout(100);
         }
     }
+}
+
+async function waitForAnimationFrame(page: Page) {
+    await page.evaluate(() => new Promise<void>(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
 }

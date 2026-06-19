@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
-import type { RenderPrimitive, RenderSegment, RenderTriangle, Vec2, Vec3 } from "./types.ts";
+import type { RenderPrimitive, RenderSegment, RenderStroke, RenderTriangle, Vec2, Vec3 } from "./types.ts";
 
 function drawStroke(state: PaintModelingState, a: Vec2, b: Vec2) {
     state.beginStroke(a, 800, 600);
@@ -9,29 +9,7 @@ function drawStroke(state: PaintModelingState, a: Vec2, b: Vec2) {
 }
 
 describe("PaintModelingState prototype", () => {
-    it("preserves the source-view projection when source depth is sculpted", () => {
-        const state = new PaintModelingState();
-        state.addObject();
-        state.setPlacementMode("new-surface");
-        drawStroke(state, { x: -0.15, y: 0 }, { x: 0.15, y: 0 });
-
-        const stroke = state.strokes[0];
-        const sample = stroke.samples[Math.floor(stroke.samples.length / 2)];
-        const sourceView = state.views.find(view => view.id === stroke.sourceViewId)!;
-        const beforeProjection = state.projectSurfaceRef(sample.surfaceRef, sourceView)!;
-        const beforeWorld = state.surfaceRefWorldPoint(sample.surfaceRef)!;
-
-        expect(state.sculptDepthAt(sample.sourcePoint)).toBe(true);
-
-        const afterProjection = state.projectSurfaceRef(sample.surfaceRef, sourceView)!;
-        const afterWorld = state.surfaceRefWorldPoint(sample.surfaceRef)!;
-
-        expect(afterProjection.x).toBeCloseTo(beforeProjection.x, 5);
-        expect(afterProjection.y).toBeCloseTo(beforeProjection.y, 5);
-        expect(distance3(afterWorld, beforeWorld)).toBeGreaterThan(0.005);
-    });
-
-    it("snaps a later-view stroke to an existing surface chart by default", () => {
+    it("can snap a later-view stroke to an existing surface chart", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
@@ -118,18 +96,12 @@ describe("PaintModelingState prototype", () => {
         expect(state.canUndo).toBe(false);
     });
 
-    it("undoes depth and seam edits, not only paint strokes", () => {
+    it("undoes seam edits, not only paint strokes", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
         drawStroke(state, { x: -0.14, y: 0 }, { x: 0.14, y: 0 });
         const sample = state.strokes[0].samples[Math.floor(state.strokes[0].samples.length / 2)];
-        const beforeDepthWorld = state.surfaceRefWorldPoint(sample.surfaceRef)!;
-
-        expect(state.sculptDepthAt(sample.sourcePoint)).toBe(true);
-        expect(distance3(state.surfaceRefWorldPoint(sample.surfaceRef)!, beforeDepthWorld)).toBeGreaterThan(0.005);
-        expect(state.undo()).toBe(true);
-        expect(distance3(state.surfaceRefWorldPoint(sample.surfaceRef)!, beforeDepthWorld)).toBeLessThan(0.0001);
 
         expect(state.markSeamAt(sample.sourcePoint)).toBe(true);
         expect(state.seamCount).toBeGreaterThan(0);
@@ -186,13 +158,12 @@ describe("PaintModelingState prototype", () => {
         expect(state.strokes.at(-1)?.placement).toBe("snap");
     });
 
-    it("does not treat unpainted chart area as snap or edit surface", () => {
+    it("does not treat unpainted chart area as a seam surface", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
         drawStroke(state, { x: -0.72, y: -0.52 }, { x: -0.48, y: -0.52 });
 
-        expect(state.sculptDepthAt({ x: 0.62, y: 0.54 })).toBe(false);
         expect(state.markSeamAt({ x: 0.62, y: 0.54 })).toBe(false);
     });
 
@@ -207,9 +178,9 @@ describe("PaintModelingState prototype", () => {
         const primitives = state.buildRenderSegments(true);
         const renderSegments = primitives.filter(isRenderSegment);
         const chartOverlaySegments = renderSegments.filter(segment => segment.width === 1.15).length;
-        const brushSegments = renderSegments.filter(segment => segment.width === 18);
+        const brushStrokes = strokeRunsForWidth(primitives, 18);
 
-        expect(brushSegments.length).toBeGreaterThanOrEqual(state.strokes[0].samples.length - 1);
+        expect(strokeSegmentCount(brushStrokes)).toBeGreaterThanOrEqual(state.strokes[0].samples.length - 1);
         expect(chartOverlaySegments).toBeGreaterThan(0);
         expect(chartOverlaySegments).toBeLessThan(520);
         expect(renderSegments.length).toBeGreaterThan(emptyOverlayCount);
@@ -222,19 +193,11 @@ describe("PaintModelingState prototype", () => {
         state.setBrushWidth(48);
         drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
 
-        const surfacePrimitives = state.buildRenderSegments({ showChartWireframe: false });
-        const surfaceBrushSegments = surfacePrimitives.filter(isRenderSegment).filter(segment => segment.width === 48);
+        const primitives = state.buildRenderSegments({ showChartWireframe: false });
+        const brushStrokes = strokeRunsForWidth(primitives, 48);
 
-        expect(surfacePrimitives.filter(isRenderTriangle)).toHaveLength(0);
-        expect(surfaceBrushSegments.length).toBeGreaterThanOrEqual(state.strokes[0].samples.length - 1);
-
-        const overlayPrimitives = state.buildRenderSegments({
-            showChartWireframe: false,
-            strokeRenderMode: "paint-order",
-        });
-        const overlayBrushSegments = overlayPrimitives.filter(isRenderSegment).filter(segment => segment.width === 48);
-
-        expect(overlayBrushSegments.length).toBe(surfaceBrushSegments.length);
+        expect(primitives.filter(isRenderTriangle)).toHaveLength(0);
+        expect(strokeSegmentCount(brushStrokes)).toBeGreaterThanOrEqual(state.strokes[0].samples.length - 1);
     });
 
     it("renders an in-progress stroke through preview segments in surface mode", () => {
@@ -247,15 +210,15 @@ describe("PaintModelingState prototype", () => {
         state.appendStrokePoint({ x: 0.16, y: 0.04 });
 
         const draftPrimitives = state.buildRenderSegments({ showChartWireframe: false });
-        const draftBrushSegments = draftPrimitives.filter(isRenderSegment).filter(segment => segment.width === 36);
+        const draftBrushStrokes = strokeRunsForWidth(draftPrimitives, 36);
 
-        expect(draftBrushSegments.length).toBeGreaterThan(0);
+        expect(strokeSegmentCount(draftBrushStrokes)).toBeGreaterThan(0);
 
         state.finishStroke();
         const committedPrimitives = state.buildRenderSegments({ showChartWireframe: false });
-        const committedBrushSegments = committedPrimitives.filter(isRenderSegment).filter(segment => segment.width === 36);
+        const committedBrushStrokes = strokeRunsForWidth(committedPrimitives, 36);
 
-        expect(committedBrushSegments.length).toBeGreaterThan(0);
+        expect(strokeSegmentCount(committedBrushStrokes)).toBeGreaterThan(0);
         expect(committedPrimitives.filter(isRenderTriangle)).toHaveLength(0);
     });
 
@@ -274,23 +237,24 @@ describe("PaintModelingState prototype", () => {
         }
 
         const draftPrimitives = state.buildRenderSegments({ showChartWireframe: false });
-        const draftBrushSegments = draftPrimitives.filter(isRenderSegment).filter(segment => segment.width === 18);
+        const draftBrushStrokes = strokeRunsForWidth(draftPrimitives, 18);
         const rawPointCount = state.draftStroke?.length ?? 0;
 
         state.finishStroke();
         const stroke = state.strokes.at(-1);
         const committedPrimitives = state.buildRenderSegments({ showChartWireframe: false });
-        const committedBrushSegments = committedPrimitives.filter(isRenderSegment).filter(segment => segment.width === 18);
+        const committedBrushStrokes = strokeRunsForWidth(committedPrimitives, 18);
 
         expect(rawPointCount).toBeGreaterThan(100);
         expect(stroke).toBeDefined();
-        expect(draftBrushSegments.length).toBe(stroke!.samples.length - 1);
-        expect(committedBrushSegments.length).toBe(draftBrushSegments.length);
+        expect(draftBrushStrokes).toHaveLength(1);
+        expect(committedBrushStrokes).toHaveLength(1);
+        expect(draftBrushStrokes[0].points).toHaveLength(stroke!.samples.length);
+        expect(committedBrushStrokes[0].points).toHaveLength(draftBrushStrokes[0].points.length);
         expect(stroke!.samples.length).toBeGreaterThan(112);
 
-        for (let i = 0; i < draftBrushSegments.length; i++) {
-            expect(distance3(draftBrushSegments[i].a, committedBrushSegments[i].a)).toBeLessThan(1e-6);
-            expect(distance3(draftBrushSegments[i].b, committedBrushSegments[i].b)).toBeLessThan(1e-6);
+        for (let i = 0; i < draftBrushStrokes[0].points.length; i++) {
+            expect(distance3(draftBrushStrokes[0].points[i], committedBrushStrokes[0].points[i])).toBeLessThan(1e-6);
         }
     });
 
@@ -300,18 +264,20 @@ describe("PaintModelingState prototype", () => {
         short.setPlacementMode("new-surface");
         short.beginStroke({ x: -0.12, y: 0 }, 800, 600);
         short.appendStrokePoint({ x: 0.12, y: 0 });
-        const shortSegments = short.buildRenderSegments({ showChartWireframe: false })
-            .filter(isRenderSegment)
-            .filter(segment => segment.width === 18).length;
+        const shortSegments = strokeSegmentCount(strokeRunsForWidth(
+            short.buildRenderSegments({ showChartWireframe: false }),
+            18,
+        ));
 
         const long = new PaintModelingState();
         long.addObject();
         long.setPlacementMode("new-surface");
         long.beginStroke({ x: -0.72, y: 0 }, 800, 600);
         long.appendStrokePoint({ x: 0.72, y: 0 });
-        const longSegments = long.buildRenderSegments({ showChartWireframe: false })
-            .filter(isRenderSegment)
-            .filter(segment => segment.width === 18).length;
+        const longSegments = strokeSegmentCount(strokeRunsForWidth(
+            long.buildRenderSegments({ showChartWireframe: false }),
+            18,
+        ));
 
         expect(shortSegments).toBeGreaterThan(8);
         expect(longSegments).toBeGreaterThan(shortSegments * 4);
@@ -332,9 +298,10 @@ describe("PaintModelingState prototype", () => {
             });
         }
 
-        const prefixSegments = state.buildRenderSegments({ showChartWireframe: false })
-            .filter(isRenderSegment)
-            .filter(segment => segment.width === 18);
+        const prefixStroke = strokeRunsForWidth(
+            state.buildRenderSegments({ showChartWireframe: false }),
+            18,
+        )[0];
 
         for (let i = 81; i <= 160; i++) {
             const t = i / 160;
@@ -344,16 +311,16 @@ describe("PaintModelingState prototype", () => {
             });
         }
 
-        const extendedSegments = state.buildRenderSegments({ showChartWireframe: false })
-            .filter(isRenderSegment)
-            .filter(segment => segment.width === 18);
-        const stablePrefixCount = Math.max(8, prefixSegments.length - 16);
+        const extendedStroke = strokeRunsForWidth(
+            state.buildRenderSegments({ showChartWireframe: false }),
+            18,
+        )[0];
+        const stablePrefixCount = Math.max(8, prefixStroke.points.length - 16);
 
-        expect(prefixSegments.length).toBeGreaterThan(32);
-        expect(extendedSegments.length).toBeGreaterThan(prefixSegments.length);
+        expect(prefixStroke.points.length).toBeGreaterThan(32);
+        expect(extendedStroke.points.length).toBeGreaterThan(prefixStroke.points.length);
         for (let i = 0; i < stablePrefixCount; i++) {
-            expect(distance3(prefixSegments[i].a, extendedSegments[i].a)).toBeLessThan(1e-6);
-            expect(distance3(prefixSegments[i].b, extendedSegments[i].b)).toBeLessThan(1e-6);
+            expect(distance3(prefixStroke.points[i], extendedStroke.points[i])).toBeLessThan(1e-6);
         }
     });
 
@@ -374,9 +341,9 @@ describe("PaintModelingState prototype", () => {
             });
         }
 
-        const segments = state.buildDraftRenderSegments().filter(isRenderSegment);
+        const draftStrokes = state.buildDraftRenderSegments().filter(isRenderStroke);
 
-        expect(segments.length).toBeGreaterThan(48);
+        expect(strokeSegmentCount(draftStrokes)).toBeGreaterThan(48);
         expect(state.raycastCountForDiagnostics).toBeLessThanOrEqual(1);
     });
 
@@ -389,7 +356,7 @@ describe("PaintModelingState prototype", () => {
         const staticBefore = state.buildRenderSegments({
             showChartWireframe: false,
             showDraftStroke: false,
-        }).filter(isRenderSegment);
+        }).filter(isRenderStroke);
 
         state.beginStroke({ x: -0.32, y: 0.08 }, 800, 600);
         for (let i = 1; i <= 96; i++) {
@@ -403,45 +370,47 @@ describe("PaintModelingState prototype", () => {
         const staticDuring = state.buildRenderSegments({
             showChartWireframe: false,
             showDraftStroke: false,
-        }).filter(isRenderSegment);
-        const draftSegments = state.buildDraftRenderSegments().filter(isRenderSegment);
+        }).filter(isRenderStroke);
+        const draftStrokes = state.buildDraftRenderSegments().filter(isRenderStroke);
 
         expect(staticBefore.length).toBeGreaterThan(0);
-        expect(draftSegments.length).toBeGreaterThan(0);
-        expectRenderSegmentsToMatch(staticDuring, staticBefore);
+        expect(strokeSegmentCount(draftStrokes)).toBeGreaterThan(0);
+        expectRenderStrokesToMatch(staticDuring, staticBefore);
     });
 
-    it("can render chart wire independently from brush lattice previews", () => {
+    it("can render chart wire independently from committed brush strokes", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
         state.setBrushWidth(48);
-        state.setDepthBrushRadius(0.08);
         drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
-        const preview = {
-            tool: "depth-brush" as const,
-            points: [{ x: 0, y: 0 }],
-            delta: 0.04,
-        };
 
         const wireOff = state.buildRenderSegments({ showChartWireframe: false }).filter(isRenderSegment);
         const wireOn = state.buildRenderSegments({ showChartWireframe: true }).filter(isRenderSegment);
-        const latticeOff = state.buildRenderSegments({
-            showChartWireframe: false,
-            showBrushLattice: false,
-            depthPreview: preview,
-        }).filter(isRenderSegment);
-        const latticeOn = state.buildRenderSegments({
-            showChartWireframe: false,
-            showBrushLattice: true,
-            depthPreview: preview,
-        }).filter(isRenderSegment);
 
         expect(wireOff.some(segment => segment.width === 1.15)).toBe(false);
         expect(wireOn.some(segment => segment.width === 1.15)).toBe(true);
-        expect(latticeOff.some(segment => segment.width === 3.2 || segment.width === 2.6)).toBe(false);
-        expect(latticeOn.some(segment => segment.width === 3.2)).toBe(true);
-        expect(latticeOn.some(segment => segment.width === 2.6)).toBe(true);
+    });
+
+    it("renders a surface normal field without requiring depth preview", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
+
+        const fieldOff = state.buildRenderSegments({
+            showChartWireframe: false,
+            showSurfaceField: false,
+        }).filter(isRenderSegment);
+        const fieldOn = state.buildRenderSegments({
+            showChartWireframe: false,
+            showSurfaceField: true,
+        }).filter(isRenderSegment);
+        const fieldSegments = fieldOn.filter(segment => segment.width === 1.6);
+
+        expect(fieldSegments.length).toBeGreaterThan(0);
+        expect(fieldOn.length).toBeGreaterThan(fieldOff.length);
+        expect(fieldOn.some(segment => segment.width === 1.15)).toBe(false);
     });
 
     it("creates covered surface charts for each painted view", () => {
@@ -497,7 +466,7 @@ describe("PaintModelingState prototype", () => {
         expect(distance3(rayLeft, rayCamera)).toBeCloseTo(distance3(rayRight, rayCamera), 5);
     });
 
-    it("keeps painterly brush width and opacity in vector strokes", () => {
+    it("keeps painterly brush width and fixed opacity in vector strokes", () => {
         const narrow = new PaintModelingState();
         narrow.addObject();
         narrow.setPlacementMode("new-surface");
@@ -514,12 +483,40 @@ describe("PaintModelingState prototype", () => {
         const narrowCovered = coveredTexelCount(narrow);
         const wideCovered = coveredTexelCount(wide);
         const primitives = wide.buildRenderSegments(false);
-        const wideBrushSegments = primitives.filter(isRenderSegment).filter(segment => segment.width === 48);
+        const wideBrushStrokes = strokeRunsForWidth(primitives, 48);
 
         expect(wideCovered).toBeGreaterThan(narrowCovered * 2);
-        expect(wideBrushSegments.length).toBeGreaterThan(0);
-        expect(wideBrushSegments[0].color[3]).toBeCloseTo(0.42, 5);
+        expect(strokeSegmentCount(wideBrushStrokes)).toBeGreaterThan(0);
+        expect(wideBrushStrokes[0].color[3]).toBe(1);
         expect(primitives.filter(isRenderTriangle)).toHaveLength(0);
+    });
+
+    it("emits brush paths as single stroke runs with fixed opacity", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        state.setBrushWidth(48);
+        state.setBrushOpacity(0.42);
+
+        state.beginStroke({ x: -0.44, y: -0.08 }, 800, 600);
+        for (let i = 1; i <= 80; i++) {
+            const t = i / 80;
+            state.appendStrokePoint({
+                x: -0.44 + t * 0.88,
+                y: -0.08 + Math.sin(t * Math.PI * 3) * 0.12,
+            });
+        }
+        state.finishStroke();
+
+        const brushStrokes = strokeRunsForWidth(
+            state.buildRenderSegments({ showChartWireframe: false }),
+            48,
+        );
+
+        expect(brushStrokes).toHaveLength(1);
+        expect(brushStrokes[0].points.length).toBeGreaterThan(8);
+        expect(brushStrokes[0].points.length).toBe(state.strokes[0].samples.length);
+        expect(brushStrokes[0].color[3]).toBe(1);
     });
 
     it("keeps thin committed strokes visible even when chart fill triangles are sparse", () => {
@@ -530,10 +527,10 @@ describe("PaintModelingState prototype", () => {
         drawStroke(state, { x: -0.32, y: -0.2 }, { x: 0.32, y: 0.2 });
 
         const primitives = state.buildRenderSegments(false);
-        const brushSegments = primitives.filter(isRenderSegment).filter(segment => segment.width === 3);
+        const brushStrokes = strokeRunsForWidth(primitives, 3);
 
         expect(state.strokes).toHaveLength(1);
-        expect(brushSegments.length).toBeGreaterThan(12);
+        expect(strokeSegmentCount(brushStrokes)).toBeGreaterThan(12);
         expect(primitives.filter(isRenderTriangle)).toHaveLength(0);
     });
 
@@ -543,103 +540,6 @@ describe("PaintModelingState prototype", () => {
         const renderSegments = segments.filter(isRenderSegment);
 
         expect(renderSegments).toHaveLength(0);
-    });
-
-    it("sculpts covered chart lattice points, not only stroke samples", () => {
-        const state = new PaintModelingState();
-        state.addObject();
-        state.setPlacementMode("new-surface");
-        drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
-        const chart = state.activeObject!.charts[0];
-        const beforeDepths = [...chart.depths];
-
-        expect(state.sculptDepthAt({ x: 0, y: 0 }, 0.04)).toBe(true);
-
-        const editedCoveredTexels = chart.depths.filter((depth, index) =>
-            chart.coverage[index] > 0
-            && Math.abs(depth - beforeDepths[index]) > 1e-6
-        ).length;
-
-        expect(editedCoveredTexels).toBeGreaterThan(6);
-    });
-
-    it("separates steady depth brushing from anchored depth pulling", () => {
-        const state = new PaintModelingState();
-        state.addObject();
-        state.setPlacementMode("new-surface");
-        drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
-        const chart = state.activeObject!.charts[0];
-        const beforeBrushDepths = [...chart.depths];
-
-        state.setTool("depth-brush");
-        expect(state.brushDepthAt({ x: 0, y: 0 })).toBe(true);
-        const brushChart = state.activeObject!.charts[0];
-        const brushedTexels = brushChart.depths.filter((depth, index) =>
-            brushChart.coverage[index] > 0
-            && Math.abs(depth - beforeBrushDepths[index]) > 1e-6
-        ).length;
-
-        const beforePullDepths = [...brushChart.depths];
-        state.setTool("depth-pull");
-        expect(state.sculptDepthAt({ x: 0, y: 0 }, -0.035)).toBe(true);
-        const pullChart = state.activeObject!.charts[0];
-        const pulledTexels = pullChart.depths.filter((depth, index) =>
-            pullChart.coverage[index] > 0
-            && Math.abs(depth - beforePullDepths[index]) > 1e-6
-        ).length;
-
-        expect(state.tool).toBe("depth-pull");
-        expect(brushedTexels).toBeGreaterThan(6);
-        expect(pulledTexels).toBeGreaterThan(6);
-    });
-
-    it("applies depth brush edits under the current cursor footprint after orbiting", () => {
-        const state = new PaintModelingState();
-        state.addObject();
-        state.setPlacementMode("new-surface");
-        state.setBrushWidth(56);
-        drawStroke(state, { x: -0.22, y: 0 }, { x: 0.22, y: 0 });
-        const sample = state.strokes[0].samples[Math.floor(state.strokes[0].samples.length / 2)];
-        const beforeWorld = state.surfaceRefWorldPoint(sample.surfaceRef)!;
-
-        state.orbit.turn({ x: 28, y: 4 });
-        const currentScreenPoint = projectVisiblePoint(state.camera.viewProjMat, beforeWorld)!;
-
-        expect(state.brushDepthAt(currentScreenPoint)).toBe(true);
-        expect(distance3(state.surfaceRefWorldPoint(sample.surfaceRef)!, beforeWorld)).toBeGreaterThan(0.001);
-    });
-
-    it("adds visible depth brush preview ring and movement trails over hit surfaces", () => {
-        const state = new PaintModelingState();
-        state.addObject();
-        state.setPlacementMode("new-surface");
-        state.setBrushWidth(48);
-        state.setDepthBrushRadius(0.08);
-        drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
-        const meshVersion = state.meshVersion;
-
-        const brushPrimitives = state.buildRenderSegments(false, {
-            tool: "depth-brush",
-            points: [{ x: 0, y: 0 }],
-            delta: 0.04,
-        });
-        const pullPrimitives = state.buildRenderSegments(false, {
-            tool: "depth-pull",
-            points: [{ x: 0, y: 0 }],
-            delta: 0.04,
-        });
-        const brushSegments = brushPrimitives.filter(isRenderSegment);
-        const pullSegments = pullPrimitives.filter(isRenderSegment);
-        const brushRing = brushSegments.find(segment => segment.width === 3.2);
-        const pullRing = pullSegments.find(segment => segment.width === 3.2);
-
-        expect(brushSegments.filter(segment => segment.width === 3.2).length).toBeGreaterThan(8);
-        expect(brushSegments.filter(segment => segment.width === 2.6).length).toBeGreaterThan(0);
-        expect(brushRing).toBeDefined();
-        expect(pullRing).toBeDefined();
-        expect(brushRing!.color[2]).toBeGreaterThan(brushRing!.color[0]);
-        expect(pullRing!.color[0]).toBeGreaterThan(pullRing!.color[2]);
-        expect(state.meshVersion).toBe(meshVersion);
     });
 
     it("deletes an object and removes its strokes, charts, and occlusion claims", () => {
@@ -717,41 +617,41 @@ function normalize3(v: Vec3): Vec3 {
 }
 
 function isRenderSegment(primitive: RenderPrimitive): primitive is RenderSegment {
-    return primitive.kind !== "triangle";
+    return primitive.kind !== "triangle" && primitive.kind !== "stroke";
 }
 
 function isRenderTriangle(primitive: RenderPrimitive): primitive is RenderTriangle {
     return primitive.kind === "triangle";
 }
 
-function coveredTexelCount(state: PaintModelingState): number {
-    return state.activeObject!.charts[0].coverage.filter(value => value > 0.015).length;
+function isRenderStroke(primitive: RenderPrimitive): primitive is RenderStroke {
+    return primitive.kind === "stroke";
 }
 
-function projectVisiblePoint(viewProjMat: number[] | Float32Array, p: Vec3): Vec2 | null {
-    const clipX = viewProjMat[0] * p[0] + viewProjMat[4] * p[1] + viewProjMat[8] * p[2] + viewProjMat[12];
-    const clipY = viewProjMat[1] * p[0] + viewProjMat[5] * p[1] + viewProjMat[9] * p[2] + viewProjMat[13];
-    const clipZ = viewProjMat[2] * p[0] + viewProjMat[6] * p[1] + viewProjMat[10] * p[2] + viewProjMat[14];
-    const clipW = viewProjMat[3] * p[0] + viewProjMat[7] * p[1] + viewProjMat[11] * p[2] + viewProjMat[15];
-    if (!Number.isFinite(clipW) || clipW <= 1e-5) return null;
-    const x = clipX / clipW;
-    const y = clipY / clipW;
-    const z = clipZ / clipW;
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
-    if (z < -0.02 || z > 1.02) return null;
-    return { x, y };
+function strokeRunsForWidth(primitives: RenderPrimitive[], width: number): RenderStroke[] {
+    return primitives.filter(isRenderStroke).filter(stroke => stroke.width === width);
+}
+
+function strokeSegmentCount(strokes: RenderStroke[]): number {
+    return strokes.reduce((count, stroke) => count + Math.max(0, stroke.points.length - 1), 0);
+}
+
+function coveredTexelCount(state: PaintModelingState): number {
+    return state.activeObject!.charts[0].coverage.filter(value => value > 0.015).length;
 }
 
 function distance3(a: Vec3, b: Vec3): number {
     return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
 
-const expectRenderSegmentsToMatch = (actual: RenderSegment[], expected: RenderSegment[]) => {
+const expectRenderStrokesToMatch = (actual: RenderStroke[], expected: RenderStroke[]) => {
     expect(actual).toHaveLength(expected.length);
     for (let i = 0; i < expected.length; i++) {
-        expect(distance3(actual[i].a, expected[i].a)).toBeLessThan(1e-6);
-        expect(distance3(actual[i].b, expected[i].b)).toBeLessThan(1e-6);
         expect(actual[i].width).toBe(expected[i].width);
+        expect(actual[i].points).toHaveLength(expected[i].points.length);
+        for (let point = 0; point < expected[i].points.length; point++) {
+            expect(distance3(actual[i].points[point], expected[i].points[point])).toBeLessThan(1e-6);
+        }
         for (let channel = 0; channel < expected[i].color.length; channel++) {
             expect(actual[i].color[channel]).toBeCloseTo(expected[i].color[channel], 6);
         }
