@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
-import type { RenderPrimitive, RenderSegment, RenderStroke, RenderTriangle, Vec2, Vec3 } from "./types.ts";
+import type {
+    PaintSample,
+    PaintView,
+    RenderPrimitive,
+    RenderSegment,
+    RenderStroke,
+    RenderTriangle,
+    Vec2,
+    Vec3,
+} from "./types.ts";
 
 function drawStroke(state: PaintModelingState, a: Vec2, b: Vec2) {
     state.beginStroke(a, 800, 600);
@@ -70,6 +79,91 @@ describe("PaintModelingState prototype", () => {
         expect(snappedStroke.placement).toBe("snap");
         expect(snappedStroke.samples.some(sample => sample.surfaceRef.chartId === originalRef.chartId)).toBe(true);
         expect(state.activeObject?.charts.length).toBe(1);
+    });
+
+    it("carries last surface depth when later-view snap strokes leave coverage", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.56, y: 0.18 }, { x: -0.28, y: 0.18 });
+
+        const sourceStroke = state.strokes[0];
+        const sourceChart = state.activeObject!.charts[0];
+        const sourceViewId = state.activeViewId!;
+        const sourceRef = sourceStroke.samples[Math.floor(sourceStroke.samples.length / 2)].surfaceRef;
+
+        state.orbit.turn({ x: 58, y: 10 });
+        state.ensureActiveView(800, 600);
+        const laterView = state.activeView!;
+        const laterPoint = state.projectSurfaceRef(sourceRef, laterView)!;
+        const strokeEnd = {
+            x: Math.min(0.92, laterPoint.x + 0.56),
+            y: Math.max(-0.92, Math.min(0.92, laterPoint.y + 0.04)),
+        };
+
+        state.setPlacementMode("snap");
+        drawStroke(state, laterPoint, strokeEnd);
+
+        const laterStroke = state.strokes.at(-1)!;
+        const fallbackSampleIndex = laterStroke.samples.findIndex(sample => sample.surfaceRef.chartId !== sourceChart.id);
+        const lastHitBeforeFallback = laterStroke.samples
+            .slice(0, fallbackSampleIndex)
+            .findLast(sample => sample.surfaceRef.chartId === sourceChart.id)!;
+        expect(laterView.id).not.toBe(sourceViewId);
+        expect(fallbackSampleIndex).toBeGreaterThan(0);
+
+        const fallbackSample = laterStroke.samples[fallbackSampleIndex];
+        const fallbackChart = state.activeObject!.charts.find(chart => chart.id === fallbackSample.surfaceRef.chartId);
+        const carriedDepth = strokeSampleRayDepthInView(state, laterView, lastHitBeforeFallback);
+        const fallbackDepths = laterStroke.samples
+            .slice(fallbackSampleIndex)
+            .filter(sample => sample.surfaceRef.chartId !== sourceChart.id)
+            .map(sample => strokeSampleRayDepthInView(state, laterView, sample));
+        const depthErrors = fallbackDepths.map(depth => Math.abs(depth - carriedDepth));
+        const depthSteps = fallbackDepths.slice(1).map((depth, index) => Math.abs(depth - fallbackDepths[index]));
+
+        expect(fallbackChart?.sourceViewId).toBe(laterView.id);
+        expect(fallbackDepths.length).toBeGreaterThan(6);
+        expect(Math.max(...depthErrors)).toBeLessThan(0.025);
+        expect(Math.max(...depthSteps)).toBeLessThan(0.025);
+    });
+
+    it("backfills leading snap misses from the first surface depth", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.56, y: 0.18 }, { x: -0.28, y: 0.18 });
+
+        const sourceStroke = state.strokes[0];
+        const sourceChart = state.activeObject!.charts[0];
+        const sourceRef = sourceStroke.samples[Math.floor(sourceStroke.samples.length / 2)].surfaceRef;
+
+        state.orbit.turn({ x: 58, y: 10 });
+        state.ensureActiveView(800, 600);
+        const laterView = state.activeView!;
+        const laterPoint = state.projectSurfaceRef(sourceRef, laterView)!;
+        const strokeStart = {
+            x: Math.max(-0.92, laterPoint.x - 0.56),
+            y: Math.max(-0.92, Math.min(0.92, laterPoint.y + 0.04)),
+        };
+
+        state.setPlacementMode("snap");
+        drawStroke(state, strokeStart, laterPoint);
+
+        const laterStroke = state.strokes.at(-1)!;
+        const firstHitIndex = laterStroke.samples.findIndex(sample => sample.surfaceRef.chartId === sourceChart.id);
+        expect(firstHitIndex).toBeGreaterThan(0);
+
+        const firstHitDepth = strokeSampleRayDepthInView(state, laterView, laterStroke.samples[firstHitIndex]);
+        const leadingDepths = laterStroke.samples
+            .slice(0, firstHitIndex)
+            .filter(sample => sample.surfaceRef.chartId !== sourceChart.id)
+            .map(sample => strokeSampleRayDepthInView(state, laterView, sample));
+
+        const leadingDepthErrors = leadingDepths.map(depth => Math.abs(depth - firstHitDepth));
+
+        expect(leadingDepths.length).toBeGreaterThan(3);
+        expect(Math.max(...leadingDepthErrors)).toBeLessThan(0.025);
     });
 
     it("creates surface-only brush masks without visible paint strokes", () => {
@@ -768,6 +862,32 @@ function unprojectNdc(viewProjInvMat: number[], x: number, y: number, z: number)
 
 function cameraCenter(viewInvMat: number[]): Vec3 {
     return [viewInvMat[12], viewInvMat[13], viewInvMat[14]];
+}
+
+function rayDepthAtPoint(view: PaintView, world: Vec3, point: Vec2): number {
+    const ray = viewRay(view, point);
+    return dot3(sub3(world, ray.origin), ray.direction);
+}
+
+function strokeSampleRayDepthInView(
+    state: PaintModelingState,
+    view: PaintView,
+    sample: PaintSample,
+): number {
+    return rayDepthAtPoint(
+        view,
+        state.surfaceRefWorldPoint(sample.surfaceRef)!,
+        sample.sourcePoint,
+    );
+}
+
+function viewRay(view: PaintView, point: Vec2): { origin: Vec3; direction: Vec3 } {
+    const near = unprojectNdc(view.viewProjInvMat, point.x, point.y, 0.02);
+    const far = unprojectNdc(view.viewProjInvMat, point.x, point.y, 0.98);
+    return {
+        origin: cameraCenter(view.viewInvMat),
+        direction: normalize3(sub3(far, near)),
+    };
 }
 
 function sub3(a: Vec3, b: Vec3): Vec3 {

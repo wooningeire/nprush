@@ -65,16 +65,28 @@ interface ChartPaintSample {
     depth: number;
 }
 
+type DepthWriteMode = "blend" | "replace";
+
 interface ChartPaintRun {
     chart: PaintChart;
     samples: ChartPaintSample[];
     updateDepth: boolean;
     requireCoverage: boolean;
+    depthWriteMode: DepthWriteMode;
 }
 
 interface ChartUvRun {
     chart: PaintChart;
     points: Vec2[];
+}
+
+interface SnapCarryDepth {
+    rayDepth: number;
+}
+
+interface SnapPlacementPlan {
+    hits: Array<SurfaceHit | null>;
+    carriedDepths: Array<SnapCarryDepth | null>;
 }
 
 export class PaintModelingState {
@@ -707,10 +719,14 @@ export class PaintModelingState {
         let fallbackChart: PaintChart | null = null;
         const fallbackDepth = this.defaultDepthForView(view);
         const paintDepthRadius = this.paintDepthRadiusForView(view);
+        const snapPlacementPlan = placement === "snap"
+            ? this.planSnapPlacement(object, view, points)
+            : null;
 
-        for (const point of points) {
+        for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
+            const point = points[pointIndex];
             if (placement === "snap") {
-                const hit = this.raycastObjectSurface(object, view, point);
+                const hit = snapPlacementPlan?.hits[pointIndex] ?? null;
                 if (hit) {
                     const chart = this.findChart(hit.chartId);
                     if (chart) {
@@ -759,12 +775,21 @@ export class PaintModelingState {
 
             const role: ChartRole = placement === "paint-behind" ? "behind" : "surface";
             fallbackChart ??= this.getOrCreateChart(object, view, role);
+            const carriedDepth = placement === "snap"
+                ? depthForCarriedSnapAtPoint(
+                    view,
+                    point,
+                    snapPlacementPlan?.carriedDepths[pointIndex] ?? null,
+                    fallbackChart.projectionMode,
+                )
+                : null;
             appendPaintRun(paintRuns, fallbackChart, {
                 point,
-                depth: depthIsViewRayDistance
-                    ? depthForProjectionAtPoint(view, point, depth, fallbackChart.projectionMode)
-                    : depth,
-            }, true, false);
+                depth: carriedDepth
+                    ?? (depthIsViewRayDistance
+                        ? depthForProjectionAtPoint(view, point, depth, fallbackChart.projectionMode)
+                        : depth),
+            }, true, false, placement === "snap" ? "replace" : "blend");
             samples.push({
                 sourcePoint: point,
                 surfaceRef: { chartId: fallbackChart.id, uv: { ...point } },
@@ -776,6 +801,7 @@ export class PaintModelingState {
             if (applyStrokeToChartGeometry(run.chart, run.samples, paintDepthRadius, {
                 updateDepth: run.updateDepth,
                 requireCoverage: run.requireCoverage,
+                depthWriteMode: run.depthWriteMode,
             })) {
                 touchedChartIds.add(run.chart.id);
             }
@@ -825,6 +851,22 @@ export class PaintModelingState {
         });
         markChartSeamAlongPolyline(chart, points, SEAM_BRUSH_RADIUS);
         return { samples, occlusionClaim: claim, touchedChartIds };
+    }
+
+    private planSnapPlacement(
+        object: PaintObject,
+        view: PaintView,
+        points: Vec2[],
+    ): SnapPlacementPlan {
+        const hits = points.map(point => this.raycastObjectSurface(object, view, point));
+        const directDepths = hits.map(hit => hit
+            ? snapCarryDepthAtPoint(hit.viewDepth)
+            : null);
+
+        return {
+            hits,
+            carriedDepths: carryStrokeDepths(directDepths),
+        };
     }
 
     private defaultDepthForView(view: PaintView): number {
@@ -1245,6 +1287,7 @@ function appendPaintRun(
     sample: ChartPaintSample,
     updateDepth: boolean,
     requireCoverage: boolean,
+    depthWriteMode: DepthWriteMode = "blend",
 ) {
     const previous = runs.at(-1);
     if (
@@ -1252,11 +1295,12 @@ function appendPaintRun(
         && previous.chart.id === chart.id
         && previous.updateDepth === updateDepth
         && previous.requireCoverage === requireCoverage
+        && previous.depthWriteMode === depthWriteMode
     ) {
         previous.samples.push(sample);
         return;
     }
-    runs.push({ chart, samples: [sample], updateDepth, requireCoverage });
+    runs.push({ chart, samples: [sample], updateDepth, requireCoverage, depthWriteMode });
 }
 
 function appendUvRun(runs: ChartUvRun[], chart: PaintChart, point: Vec2) {
@@ -1275,9 +1319,11 @@ function applyStrokeToChartGeometry(
     {
         updateDepth,
         requireCoverage,
+        depthWriteMode = "blend",
     }: {
         updateDepth: boolean;
         requireCoverage: boolean;
+        depthWriteMode?: DepthWriteMode;
     },
 ): boolean {
     if (samples.length === 0) return false;
@@ -1293,7 +1339,10 @@ function applyStrokeToChartGeometry(
         const influence = (1 - t * t) ** 2;
 
         if (updateDepth) {
-            chart.depths[index] = lerp(chart.depths[index], Math.max(MIN_DEPTH, nearest.depth), influence);
+            const depth = Math.max(MIN_DEPTH, nearest.depth);
+            chart.depths[index] = depthWriteMode === "replace"
+                ? depth
+                : lerp(chart.depths[index], depth, influence);
             chart.coverage[index] = Math.max(chart.coverage[index] ?? 0, influence);
             changed = true;
         }
@@ -1428,6 +1477,41 @@ function depthForProjectionAtPoint(
     const ray = makeViewRay(view, point);
     if (!ray) return rayDistance;
     return Math.max(MIN_DEPTH, rayDistance * dot3(ray.direction, viewForward(view)));
+}
+
+function snapCarryDepthAtPoint(rayDistance: number): SnapCarryDepth {
+    return {
+        rayDepth: Math.max(MIN_DEPTH, rayDistance),
+    };
+}
+
+function carryStrokeDepths(directDepths: Array<SnapCarryDepth | null>): Array<SnapCarryDepth | null> {
+    const carriedDepths = new Array<SnapCarryDepth | null>(directDepths.length).fill(null);
+    let lastDepth: SnapCarryDepth | null = null;
+    for (let index = 0; index < directDepths.length; index++) {
+        lastDepth = directDepths[index] ?? lastDepth;
+        carriedDepths[index] = lastDepth;
+    }
+
+    let firstDepthAhead: SnapCarryDepth | null = null;
+    for (let index = directDepths.length - 1; index >= 0; index--) {
+        firstDepthAhead = directDepths[index] ?? firstDepthAhead;
+        carriedDepths[index] ??= firstDepthAhead;
+    }
+
+    return carriedDepths;
+}
+
+function depthForCarriedSnapAtPoint(
+    view: PaintView,
+    point: Vec2,
+    depth: SnapCarryDepth | null,
+    projectionMode: ChartProjectionMode,
+): number | null {
+    if (!depth) return null;
+    // Carry ray distance, then convert at the fallback point. Reusing the hit point's
+    // view-plane scalar changes the actual ray depth as the cursor moves.
+    return depthForProjectionAtPoint(view, point, depth.rayDepth, projectionMode);
 }
 
 function chartHasCoverage(chart: PaintChart): boolean {
