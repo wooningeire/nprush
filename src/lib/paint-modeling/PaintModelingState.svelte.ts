@@ -1532,6 +1532,13 @@ function mixSnapCarryDepths(a: SnapCarryDepth, b: SnapCarryDepth, t: number): Sn
 }
 
 function exitEntryDepthMix(point: Vec2, exitPoint: Vec2, entryPoint: Vec2): number {
+    // extended distance/fac function;
+    //  1. 0 at the exit point
+    //  2. 1 at the entry point
+    //  3. naturally tends to 0.5 when far away from both
+    // https://www.desmos.com/calculator/fndo5xyztv
+    // https://www.desmos.com/3d/ksz46dpbr8
+    
     const exitDistance = distance2d(point, exitPoint);
     const entryDistance = distance2d(point, entryPoint);
     const denominator = exitDistance + entryDistance;
