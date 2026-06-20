@@ -23,10 +23,17 @@ import type {
     Vec4,
 } from "./types.ts";
 
-const DEFAULT_BRUSH: BrushStyle = {
+const MIN_BRUSH_WIDTH = 1;
+const MAX_BRUSH_WIDTH = 72;
+
+const DEFAULT_COLOR_BRUSH: BrushStyle = {
     color: "#ffd27a",
     width: 18,
     opacity: 1,
+};
+const DEFAULT_BRUSH_WIDTH_BY_MODE: Record<BrushMode, number> = {
+    color: DEFAULT_COLOR_BRUSH.width,
+    surface: Math.min(MAX_BRUSH_WIDTH, DEFAULT_COLOR_BRUSH.width * 4),
 };
 
 const CHART_RESOLUTION = 65;
@@ -83,11 +90,12 @@ export class PaintModelingState {
     placementMode = $state<PlacementMode>("snap");
     chartProjectionMode = $state<ChartProjectionMode>("view-plane");
     brushMode = $state<BrushMode>("color");
-    brush = $state<BrushStyle>({ ...DEFAULT_BRUSH });
+    brush = $state<BrushStyle>({ ...DEFAULT_COLOR_BRUSH });
     draftStroke = $state<Vec2[] | null>(null);
     undoStack = $state<PaintSceneSnapshot[]>([]);
     meshVersion = $state(0);
     raycastCountForDiagnostics = 0;
+    private brushWidthByMode: Record<BrushMode, number> = { ...DEFAULT_BRUSH_WIDTH_BY_MODE };
     private pendingStrokeUndoSnapshot: PaintSceneSnapshot | null = null;
     private undoGroup: { snapshot: PaintSceneSnapshot; dirty: boolean } | null = null;
 
@@ -165,7 +173,9 @@ export class PaintModelingState {
     }
 
     setBrushMode(mode: BrushMode) {
+        this.brushWidthByMode[this.brushMode] = this.brush.width;
         this.brushMode = mode;
+        this.brush.width = this.brushWidthByMode[mode];
     }
 
     setChartProjectionMode(mode: ChartProjectionMode) {
@@ -173,15 +183,17 @@ export class PaintModelingState {
     }
 
     setBrushColor(color: string) {
-        this.brush = { ...this.brush, color };
+        this.brush.color = color;
     }
 
     setBrushWidth(width: number) {
-        this.brush = { ...this.brush, width: clamp(width, 1, 72) };
+        const clampedWidth = clamp(width, MIN_BRUSH_WIDTH, MAX_BRUSH_WIDTH);
+        this.brushWidthByMode[this.brushMode] = clampedWidth;
+        this.brush.width = clampedWidth;
     }
 
     setBrushOpacity(_opacity: number) {
-        this.brush = { ...this.brush, opacity: 1 };
+        this.brush.opacity = 1;
     }
 
     resetDiagnostics() {
@@ -1456,19 +1468,53 @@ function appendChartSegments(
 ) {
     if (!chartHasCoverage(chart)) return;
 
+    const gridWorldAt = cachedChartGridWorld(chart, worldAt);
     const color = chart.role === "occluder"
         ? [1, 0.48, 0.32, 0.38] as Vec4
         : chart.role === "behind"
             ? [0.46, 0.55, 1, 0.24] as Vec4
             : [0.44, 0.92, 0.82, 0.18] as Vec4;
+    const fillColor = chart.role === "occluder"
+        ? [1, 0.44, 0.28, 0.1] as Vec4
+        : chart.role === "behind"
+            ? [0.42, 0.5, 1, 0.08] as Vec4
+            : [0.34, 0.82, 0.72, 0.085] as Vec4;
     const stride = 4;
+
+    for (let y = 1; y < chart.height; y++) {
+        for (let x = 1; x < chart.width; x++) {
+            const i00 = (y - 1) * chart.width + x - 1;
+            const i10 = (y - 1) * chart.width + x;
+            const i01 = y * chart.width + x - 1;
+            const i11 = y * chart.width + x;
+
+            if (isGridTriangleCovered(chart, i00, i10, i11)) {
+                appendWorldTriangle(
+                    segments,
+                    gridWorldAt(x - 1, y - 1),
+                    gridWorldAt(x, y - 1),
+                    gridWorldAt(x, y),
+                    fillColor,
+                );
+            }
+            if (isGridTriangleCovered(chart, i00, i11, i01)) {
+                appendWorldTriangle(
+                    segments,
+                    gridWorldAt(x - 1, y - 1),
+                    gridWorldAt(x, y),
+                    gridWorldAt(x - 1, y),
+                    fillColor,
+                );
+            }
+        }
+    }
 
     for (let y = 0; y < chart.height; y += stride) {
         for (let x = 1; x < chart.width; x++) {
             const aIndex = y * chart.width + x - 1;
             const bIndex = y * chart.width + x;
             if (!isGridEdgeCovered(chart, aIndex, bIndex)) continue;
-            appendWorldSegment(segments, worldAt(gridUv(chart, x - 1, y)), worldAt(gridUv(chart, x, y)), color, 1.15);
+            appendWorldSegment(segments, gridWorldAt(x - 1, y), gridWorldAt(x, y), color, 1.15);
         }
     }
     for (let x = 0; x < chart.width; x += stride) {
@@ -1476,7 +1522,7 @@ function appendChartSegments(
             const aIndex = (y - 1) * chart.width + x;
             const bIndex = y * chart.width + x;
             if (!isGridEdgeCovered(chart, aIndex, bIndex)) continue;
-            appendWorldSegment(segments, worldAt(gridUv(chart, x, y - 1)), worldAt(gridUv(chart, x, y)), color, 1.15);
+            appendWorldSegment(segments, gridWorldAt(x, y - 1), gridWorldAt(x, y), color, 1.15);
         }
     }
 
@@ -1489,6 +1535,20 @@ function appendChartSegments(
         appendWorldSegment(segments, a, b, [1, 0.16, 0.16, 0.95], 2.4);
         appendWorldSegment(segments, c, d, [1, 0.16, 0.16, 0.95], 2.4);
     });
+}
+
+function cachedChartGridWorld(
+    chart: PaintChart,
+    worldAt: (uv: Vec2) => Vec3 | null,
+): (x: number, y: number) => Vec3 | null {
+    const worlds = new Array<Vec3 | null | undefined>(chart.width * chart.height);
+    return (x: number, y: number): Vec3 | null => {
+        const index = y * chart.width + x;
+        if (worlds[index] !== undefined) return worlds[index];
+        const world = worldAt(gridUv(chart, x, y));
+        worlds[index] = world;
+        return world;
+    };
 }
 
 function appendChartSurfaceFieldSegments(
@@ -1619,6 +1679,23 @@ function appendWorldSegment(
         color,
         width,
         ...caps,
+    });
+}
+
+function appendWorldTriangle(
+    segments: RenderPrimitive[],
+    a: Vec3 | null,
+    b: Vec3 | null,
+    c: Vec3 | null,
+    color: Vec4,
+) {
+    if (!a || !b || !c) return;
+    segments.push({
+        kind: "triangle",
+        a,
+        b,
+        c,
+        color,
     });
 }
 

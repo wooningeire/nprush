@@ -31,8 +31,10 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await expect(page.getByLabel("Surface field")).not.toBeChecked();
     await expect(page.getByRole("group", { name: "Brush mode" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Width")).toHaveValue("18");
     await page.getByRole("button", { name: "Surface" }).click();
     await expect(page.getByRole("button", { name: "Surface" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Width")).toHaveValue("72");
     await expect(page.getByLabel("Color")).toBeDisabled();
 
     await page.getByLabel("Width").evaluate(element => {
@@ -40,6 +42,7 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
         input.value = "66";
         input.dispatchEvent(new Event("input", { bubbles: true }));
     });
+    await expect(page.getByLabel("Width")).toHaveValue("66");
 
     const viewport = page.locator("paint-viewport");
     await expect(viewport).toBeVisible();
@@ -70,6 +73,16 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
         await page.getByLabel("Surface field").check();
         await expect(page.getByLabel("Surface field")).toBeChecked();
     } else {
+        const withChartWire = await page.locator("canvas").screenshot();
+        await page.getByLabel("Chart wire").uncheck();
+        await expect(page.getByLabel("Chart wire")).not.toBeChecked();
+        await waitForAnimationFrame(page);
+        const withoutChartWire = await page.locator("canvas").screenshot();
+        expect(withoutChartWire.equals(withChartWire)).toBe(false);
+        await page.getByLabel("Chart wire").check();
+        await expect(page.getByLabel("Chart wire")).toBeChecked();
+        await waitForAnimationFrame(page);
+
         const withoutSurfaceField = await page.locator("canvas").screenshot();
         await page.getByLabel("Surface field").check();
         await expect(page.getByLabel("Surface field")).toBeChecked();
@@ -80,6 +93,7 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await page.getByLabel("Surface field").uncheck();
     await page.getByRole("button", { name: "Color" }).click();
     await expect(page.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Width")).toHaveValue("18");
     await expect(page.getByLabel("Color")).toBeEnabled();
 
     await page.mouse.move(cx - 130, cy + 74);

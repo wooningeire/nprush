@@ -31,6 +31,26 @@ describe("PaintModelingState prototype", () => {
         expect(state.isCameraAtActiveView).toBe(false);
     });
 
+    it("defaults surface mode to a wider brush and remembers per-mode widths", () => {
+        const state = new PaintModelingState();
+
+        expect(state.brush.width).toBe(18);
+
+        state.setBrushMode("surface");
+        expect(state.brush.width).toBe(72);
+
+        state.setBrushWidth(48);
+        state.setBrushMode("color");
+        expect(state.brush.width).toBe(18);
+
+        state.setBrushWidth(12);
+        state.setBrushMode("surface");
+        expect(state.brush.width).toBe(48);
+
+        state.setBrushMode("color");
+        expect(state.brush.width).toBe(12);
+    });
+
     it("can snap a later-view stroke to an existing surface chart", () => {
         const state = new PaintModelingState();
         state.addObject();
@@ -67,8 +87,13 @@ describe("PaintModelingState prototype", () => {
         expect(state.occlusionClaims).toHaveLength(0);
         expect(chart.role).toBe("surface");
         expect(chart.projectionMode).toBe("view-plane");
+        const chartFill = wirePrimitives.filter(isRenderTriangle);
+
         expect(coveredTexelCount(state)).toBeGreaterThan(0);
         expect(noWirePrimitives.filter(isRenderStroke)).toHaveLength(0);
+        expect(noWirePrimitives.filter(isRenderTriangle)).toHaveLength(0);
+        expect(chartFill.length).toBeGreaterThan(0);
+        expect(chartFill.every(triangle => triangle.color[3] > 0 && triangle.color[3] <= 0.1)).toBe(true);
         expect(wirePrimitives.filter(isRenderSegment).length).toBeGreaterThan(0);
     });
 
@@ -501,11 +526,17 @@ describe("PaintModelingState prototype", () => {
         state.setBrushWidth(48);
         drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
 
-        const wireOff = state.buildRenderSegments({ showChartWireframe: false }).filter(isRenderSegment);
-        const wireOn = state.buildRenderSegments({ showChartWireframe: true }).filter(isRenderSegment);
+        const wireOffPrimitives = state.buildRenderSegments({ showChartWireframe: false });
+        const wireOnPrimitives = state.buildRenderSegments({ showChartWireframe: true });
+        const wireOff = wireOffPrimitives.filter(isRenderSegment);
+        const wireOn = wireOnPrimitives.filter(isRenderSegment);
+        const chartFill = wireOnPrimitives.filter(isRenderTriangle);
 
         expect(wireOff.some(segment => segment.width === 1.15)).toBe(false);
+        expect(wireOffPrimitives.filter(isRenderTriangle)).toHaveLength(0);
         expect(wireOn.some(segment => segment.width === 1.15)).toBe(true);
+        expect(chartFill.length).toBeGreaterThan(0);
+        expect(chartFill.every(triangle => triangle.color[3] > 0 && triangle.color[3] <= 0.1)).toBe(true);
     });
 
     it("renders a surface normal field without requiring depth preview", () => {

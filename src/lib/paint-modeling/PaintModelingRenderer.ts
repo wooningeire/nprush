@@ -428,7 +428,7 @@ const createTrianglePipeline = (
     depthStencil: {
         format: DEPTH_FORMAT,
         depthCompare: "less-equal",
-        depthWriteEnabled: true,
+        depthWriteEnabled: false,
     },
 });
 
