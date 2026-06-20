@@ -1,0 +1,9 @@
+export const DEPTH_FORMAT: GPUTextureFormat = "depth24plus";
+export const GRID_PLANE_Z = -0.02;
+export const FLOATS_PER_VERTEX = 16;
+export const VERTICES_PER_SEGMENT = 6;
+export const FLOATS_PER_TRIANGLE_VERTEX = 7;
+export const VERTICES_PER_TRIANGLE = 3;
+export const MATRIX_FLOATS = 16;
+export const GRID_UNIFORM_FLOATS = 20;
+export const SEGMENT_UNIFORM_FLOATS = 20;

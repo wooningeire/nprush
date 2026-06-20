@@ -64,7 +64,6 @@ export interface PaintChart {
     height: number;
     depths: number[];
     coverage: number[];
-    paint: number[];
     seams: boolean[];
     createdAt: number;
 }

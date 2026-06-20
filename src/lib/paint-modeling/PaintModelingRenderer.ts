@@ -1,25 +1,47 @@
 import { requestGpu } from "$/gpu/setup/requestGpu";
-import paintModelerShaderSource from "./paint_modeler.wgsl?raw";
-import type { RenderPrimitive, RenderSegment, RenderStroke, RenderTriangle, Vec3 } from "./types.ts";
-
-const DEPTH_FORMAT: GPUTextureFormat = "depth24plus";
-const GRID_PLANE_Z = -0.02;
-const FLOATS_PER_VERTEX = 16;
-const VERTICES_PER_SEGMENT = 6;
-const FLOATS_PER_TRIANGLE_VERTEX = 7;
-const VERTICES_PER_TRIANGLE = 3;
-const MATRIX_FLOATS = 16;
-const GRID_UNIFORM_FLOATS = 20;
-const SEGMENT_UNIFORM_FLOATS = 20;
-
-type VertexBufferState = {
-    buffer: GPUBuffer | null,
-    capacityVertices: number,
-};
+import { GpuPaintChartStore } from "./gpu/GpuPaintChartStore.ts";
+import gridShaderSource from "./paint_modeler_grid.wgsl?raw";
+import segmentShaderSource from "./paint_modeler_segments.wgsl?raw";
+import triangleShaderSource from "./paint_modeler_triangles.wgsl?raw";
+import type { PaintObject, PaintView, RenderPrimitive, SurfaceHit, Vec2 } from "./types.ts";
+import type { ChartPaintRun } from "./state/chartPainting.ts";
+import { COVERAGE_EPSILON, MIN_DEPTH } from "./state/constants.ts";
+import {
+    DEPTH_FORMAT,
+    GRID_PLANE_Z,
+    GRID_UNIFORM_FLOATS,
+    MATRIX_FLOATS,
+    SEGMENT_UNIFORM_FLOATS,
+    VERTICES_PER_SEGMENT,
+    VERTICES_PER_TRIANGLE,
+} from "./renderer/constants.ts";
+import {
+    createUniformBindGroup,
+    createUniformBuffer,
+    createVertexBufferState,
+    destroyVertexBuffer,
+    uploadVertexData,
+    type VertexBufferState,
+} from "./renderer/buffers.ts";
+import {
+    createGridPipeline,
+    createSegmentPipeline,
+    createTrianglePipeline,
+} from "./renderer/pipelines.ts";
+import {
+    createSegmentData,
+    createStrokeData,
+    createTriangleData,
+    isRenderSegment,
+    isRenderStroke,
+    isRenderTriangle,
+    strokeStripVertexCount,
+} from "./renderer/vertices.ts";
 
 export class PaintModelingRenderer {
     private readonly device: GPUDevice;
     private readonly context: GPUCanvasContext;
+    private readonly chartStore: GpuPaintChartStore;
     private readonly gridPipeline: GPURenderPipeline;
     private readonly segmentPipeline: GPURenderPipeline;
     private readonly strokePipeline: GPURenderPipeline;
@@ -43,6 +65,12 @@ export class PaintModelingRenderer {
     private draftSegmentVertexCount = 0;
     private draftStrokeVertexCount = 0;
     private triangleVertexCount = 0;
+    private chartScene = {
+        objects: [] as PaintObject[],
+        views: [] as PaintView[],
+        showChartWireframe: false,
+        showSurfaceField: false,
+    };
 
     static async create(canvas: HTMLCanvasElement): Promise<PaintModelingRenderer> {
         const gpu = await requestGpu({});
@@ -67,16 +95,11 @@ export class PaintModelingRenderer {
     ) {
         this.device = device;
         this.context = context;
+        this.chartStore = new GpuPaintChartStore(device, format);
 
-        const shaderModule = device.createShaderModule({
-            label: "paint modeler renderer shader",
-            code: paintModelerShaderSource,
-        });
-        void shaderModule.getCompilationInfo().then(info => {
-            for (const message of info.messages) {
-                console.warn(`[paint_modeler] ${message.type}: ${message.message} (line ${message.lineNum})`);
-            }
-        });
+        const gridModule = createLoggedShaderModule(device, "paint modeler grid shader", gridShaderSource);
+        const segmentModule = createLoggedShaderModule(device, "paint modeler segment shader", segmentShaderSource);
+        const triangleModule = createLoggedShaderModule(device, "paint modeler triangle shader", triangleShaderSource);
 
         const uniformBindGroupLayout = device.createBindGroupLayout({
             label: "paint modeler uniform bind group layout",
@@ -91,10 +114,10 @@ export class PaintModelingRenderer {
             bindGroupLayouts: [uniformBindGroupLayout],
         });
 
-        this.gridPipeline = createGridPipeline(device, pipelineLayout, shaderModule, format);
-        this.segmentPipeline = createSegmentPipeline(device, pipelineLayout, shaderModule, format, "triangle-list");
-        this.strokePipeline = createSegmentPipeline(device, pipelineLayout, shaderModule, format, "triangle-strip");
-        this.trianglePipeline = createTrianglePipeline(device, pipelineLayout, shaderModule, format);
+        this.gridPipeline = createGridPipeline(device, pipelineLayout, gridModule, format);
+        this.segmentPipeline = createSegmentPipeline(device, pipelineLayout, segmentModule, format, "triangle-list");
+        this.strokePipeline = createSegmentPipeline(device, pipelineLayout, segmentModule, format, "triangle-strip");
+        this.trianglePipeline = createTrianglePipeline(device, pipelineLayout, triangleModule, format);
 
         this.gridUniformBuffer = createUniformBuffer(device, GRID_UNIFORM_FLOATS, "paint modeler grid uniforms");
         this.segmentUniformBuffer = createUniformBuffer(device, SEGMENT_UNIFORM_FLOATS, "paint modeler segment uniforms");
@@ -126,19 +149,9 @@ export class PaintModelingRenderer {
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
         const strokeVertexCount = strokeStripVertexCount(strokes);
         const triangleVertexCount = triangles.length * VERTICES_PER_TRIANGLE;
-        const segmentData = new Float32Array(segmentVertexCount * FLOATS_PER_VERTEX);
-        const strokeData = new Float32Array(strokeVertexCount * FLOATS_PER_VERTEX);
-        const triangleData = new Float32Array(triangleVertexCount * FLOATS_PER_TRIANGLE_VERTEX);
-        let segmentOffset = 0;
-        let triangleOffset = 0;
-
-        for (const segment of renderSegments) {
-            segmentOffset = appendSegment(segmentData, segmentOffset, segment);
-        }
-        appendStrokeStrips(strokeData, 0, strokes);
-        for (const triangle of triangles) {
-            triangleOffset = appendTriangle(triangleData, triangleOffset, triangle);
-        }
+        const segmentData = createSegmentData(renderSegments);
+        const strokeData = createStrokeData(strokes);
+        const triangleData = createTriangleData(triangles);
 
         this.segmentVertexCount = segmentVertexCount;
         this.strokeVertexCount = strokeVertexCount;
@@ -154,14 +167,8 @@ export class PaintModelingRenderer {
         const strokes = segments.filter(isRenderStroke);
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
         const strokeVertexCount = strokeStripVertexCount(strokes);
-        const segmentData = new Float32Array(segmentVertexCount * FLOATS_PER_VERTEX);
-        const strokeData = new Float32Array(strokeVertexCount * FLOATS_PER_VERTEX);
-        let segmentOffset = 0;
-
-        for (const segment of renderSegments) {
-            segmentOffset = appendSegment(segmentData, segmentOffset, segment);
-        }
-        appendStrokeStrips(strokeData, 0, strokes);
+        const segmentData = createSegmentData(renderSegments);
+        const strokeData = createStrokeData(strokes);
 
         this.draftSegmentVertexCount = segmentVertexCount;
         this.draftStrokeVertexCount = strokeVertexCount;
@@ -181,6 +188,48 @@ export class PaintModelingRenderer {
         );
     }
 
+    syncChartState(objects: PaintObject[]) {
+        this.chartStore.syncObjects(objects);
+    }
+
+    setChartScene(
+        objects: PaintObject[],
+        views: PaintView[],
+        showChartWireframe: boolean,
+        showSurfaceField: boolean,
+    ) {
+        this.chartScene = {
+            objects,
+            views,
+            showChartWireframe,
+            showSurfaceField,
+        };
+    }
+
+    raycastObjectSurfaceBatch(
+        object: PaintObject,
+        views: PaintView[],
+        view: PaintView,
+        points: Vec2[],
+        excludeChartId?: string,
+    ): Promise<Array<SurfaceHit | null>> {
+        return this.chartStore.raycastObjectSurfaceBatch(object, views, view, points, excludeChartId);
+    }
+    applyChartPaintRuns(runs: ChartPaintRun[]) {
+        if (runs.length === 0) return;
+        const encoder = this.device.createCommandEncoder({ label: "paint modeler chart paint encoder" });
+        for (const run of runs) {
+            this.chartStore.applyPaintRun(encoder, run.chart, run.samples, {
+                radius: run.radius,
+                requireCoverage: run.requireCoverage,
+                depthWriteMode: run.depthWriteMode,
+                coverageEpsilon: COVERAGE_EPSILON,
+                minDepth: MIN_DEPTH,
+            });
+        }
+        this.device.queue.submit([encoder.finish()]);
+    }
+
     render(viewProjMat: number[] | Float32Array, viewProjInvMat: number[] | Float32Array) {
         const width = Math.floor(this.context.canvas.width);
         const height = Math.floor(this.context.canvas.height);
@@ -188,6 +237,13 @@ export class PaintModelingRenderer {
 
         this.ensureDepthTexture(width, height);
         this.writeUniforms(viewProjMat, viewProjInvMat);
+        const chartRenderItems = this.chartStore.prepareRenderItems(
+            this.chartScene.objects,
+            this.chartScene.views,
+            viewProjMat,
+            this.chartScene.showChartWireframe,
+            this.chartScene.showSurfaceField,
+        );
 
         const encoder = this.device.createCommandEncoder({ label: "paint modeler render encoder" });
         const pass = encoder.beginRenderPass({
@@ -209,6 +265,7 @@ export class PaintModelingRenderer {
         pass.setPipeline(this.gridPipeline);
         pass.setBindGroup(0, this.gridBindGroup);
         pass.draw(3);
+        this.chartStore.drawRenderItems(pass, chartRenderItems);
 
         if (this.triangleVertexCount > 0 && this.triangleBuffer.buffer) {
             pass.setPipeline(this.trianglePipeline);
@@ -236,6 +293,7 @@ export class PaintModelingRenderer {
         this.gridUniformBuffer.destroy();
         this.segmentUniformBuffer.destroy();
         this.triangleUniformBuffer.destroy();
+        this.chartStore.destroy();
         this.device.destroy();
     }
 
@@ -290,334 +348,16 @@ export class PaintModelingRenderer {
     }
 }
 
-const createVertexBufferState = (): VertexBufferState => ({
-    buffer: null,
-    capacityVertices: 0,
-});
-
-const createUniformBuffer = (device: GPUDevice, floatCount: number, label: string): GPUBuffer => device.createBuffer({
-    label,
-    size: floatCount * Float32Array.BYTES_PER_ELEMENT,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-});
-
-const createUniformBindGroup = (
+const createLoggedShaderModule = (
     device: GPUDevice,
-    layout: GPUBindGroupLayout,
-    buffer: GPUBuffer,
     label: string,
-): GPUBindGroup => device.createBindGroup({
-    label,
-    layout,
-    entries: [{ binding: 0, resource: { buffer } }],
-});
-
-const createColorTarget = (format: GPUTextureFormat): GPUColorTargetState => ({
-    format,
-    blend: {
-        color: {
-            operation: "add",
-            srcFactor: "src-alpha",
-            dstFactor: "one-minus-src-alpha",
-        },
-        alpha: {
-            operation: "add",
-            srcFactor: "src-alpha",
-            dstFactor: "one-minus-src-alpha",
-        },
-    },
-});
-
-const createGridPipeline = (
-    device: GPUDevice,
-    layout: GPUPipelineLayout,
-    module: GPUShaderModule,
-    format: GPUTextureFormat,
-): GPURenderPipeline => device.createRenderPipeline({
-    label: "paint modeler grid pipeline",
-    layout,
-    vertex: {
-        module,
-        entryPoint: "grid_vertex",
-    },
-    fragment: {
-        module,
-        entryPoint: "grid_fragment",
-        targets: [createColorTarget(format)],
-    },
-    primitive: {
-        topology: "triangle-list",
-        cullMode: "none",
-    },
-    depthStencil: {
-        format: DEPTH_FORMAT,
-        depthCompare: "always",
-        depthWriteEnabled: false,
-    },
-});
-
-const createSegmentPipeline = (
-    device: GPUDevice,
-    layout: GPUPipelineLayout,
-    module: GPUShaderModule,
-    format: GPUTextureFormat,
-    topology: GPUPrimitiveTopology,
-): GPURenderPipeline => device.createRenderPipeline({
-    label: `paint modeler segment ${topology} pipeline`,
-    layout,
-    vertex: {
-        module,
-        entryPoint: "segment_vertex",
-        buffers: [{
-            arrayStride: FLOATS_PER_VERTEX * Float32Array.BYTES_PER_ELEMENT,
-            attributes: [
-                { shaderLocation: 0, offset: 0, format: "float32x3" },
-                { shaderLocation: 1, offset: 3 * Float32Array.BYTES_PER_ELEMENT, format: "float32x3" },
-                { shaderLocation: 2, offset: 6 * Float32Array.BYTES_PER_ELEMENT, format: "float32x3" },
-                { shaderLocation: 3, offset: 9 * Float32Array.BYTES_PER_ELEMENT, format: "float32x4" },
-                { shaderLocation: 4, offset: 13 * Float32Array.BYTES_PER_ELEMENT, format: "float32" },
-                { shaderLocation: 5, offset: 14 * Float32Array.BYTES_PER_ELEMENT, format: "float32" },
-                { shaderLocation: 6, offset: 15 * Float32Array.BYTES_PER_ELEMENT, format: "float32" },
-            ],
-        }],
-    },
-    fragment: {
-        module,
-        entryPoint: "segment_fragment",
-        targets: [createColorTarget(format)],
-    },
-    primitive: {
-        topology,
-        cullMode: "none",
-    },
-    depthStencil: {
-        format: DEPTH_FORMAT,
-        depthCompare: "less-equal",
-        depthWriteEnabled: false,
-    },
-});
-
-const createTrianglePipeline = (
-    device: GPUDevice,
-    layout: GPUPipelineLayout,
-    module: GPUShaderModule,
-    format: GPUTextureFormat,
-): GPURenderPipeline => device.createRenderPipeline({
-    label: "paint modeler triangle pipeline",
-    layout,
-    vertex: {
-        module,
-        entryPoint: "triangle_vertex",
-        buffers: [{
-            arrayStride: FLOATS_PER_TRIANGLE_VERTEX * Float32Array.BYTES_PER_ELEMENT,
-            attributes: [
-                { shaderLocation: 0, offset: 0, format: "float32x3" },
-                { shaderLocation: 1, offset: 3 * Float32Array.BYTES_PER_ELEMENT, format: "float32x4" },
-            ],
-        }],
-    },
-    fragment: {
-        module,
-        entryPoint: "triangle_fragment",
-        targets: [createColorTarget(format)],
-    },
-    primitive: {
-        topology: "triangle-list",
-        cullMode: "none",
-    },
-    depthStencil: {
-        format: DEPTH_FORMAT,
-        depthCompare: "less-equal",
-        depthWriteEnabled: false,
-    },
-});
-
-const uploadVertexData = (
-    device: GPUDevice,
-    state: VertexBufferState,
-    data: Float32Array,
-    vertexCount: number,
-    label: string,
-) => {
-    if (vertexCount === 0) return;
-    if (vertexCount > state.capacityVertices || !state.buffer) {
-        state.buffer?.destroy();
-        state.buffer = device.createBuffer({
-            label,
-            size: data.byteLength,
-            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-        });
-        state.capacityVertices = vertexCount;
-    }
-    device.queue.writeBuffer(state.buffer, 0, data);
-};
-
-const destroyVertexBuffer = (state: VertexBufferState) => {
-    state.buffer?.destroy();
-    state.buffer = null;
-    state.capacityVertices = 0;
-};
-
-const isRenderSegment = (primitive: RenderPrimitive): primitive is RenderSegment => (
-    primitive.kind !== "triangle" && primitive.kind !== "stroke"
-);
-
-const isRenderTriangle = (primitive: RenderPrimitive): primitive is RenderTriangle => primitive.kind === "triangle";
-
-const isRenderStroke = (primitive: RenderPrimitive): primitive is RenderStroke => primitive.kind === "stroke";
-
-const appendSegment = (
-    out: Float32Array,
-    offset: number,
-    segment: RenderSegment,
-): number => {
-    const width = segment.width ?? 1.25;
-    offset = appendSegmentVertex(out, offset, segment, 0, -1, width);
-    offset = appendSegmentVertex(out, offset, segment, 1, -1, width);
-    offset = appendSegmentVertex(out, offset, segment, 1, 1, width);
-    offset = appendSegmentVertex(out, offset, segment, 0, -1, width);
-    offset = appendSegmentVertex(out, offset, segment, 1, 1, width);
-    offset = appendSegmentVertex(out, offset, segment, 0, 1, width);
-    return offset;
-};
-
-const strokeStripVertexCount = (strokes: RenderStroke[]): number => {
-    let count = 0;
-    let hasPreviousRun = false;
-    for (const stroke of strokes) {
-        if (stroke.points.length < 2) continue;
-        if (hasPreviousRun) count += 2;
-        count += stroke.points.length * 2;
-        hasPreviousRun = true;
-    }
-    return count;
-};
-
-const appendStrokeStrips = (
-    out: Float32Array,
-    offset: number,
-    strokes: RenderStroke[],
-): number => {
-    let previousStroke: RenderStroke | null = null;
-    for (const stroke of strokes) {
-        if (stroke.points.length < 2) continue;
-        if (previousStroke) {
-            offset = appendStrokeVertex(out, offset, previousStroke, previousStroke.points.length - 1, 1);
-            offset = appendStrokeVertex(out, offset, stroke, 0, -1);
+    code: string,
+): GPUShaderModule => {
+    const module = device.createShaderModule({ label, code });
+    void module.getCompilationInfo().then(info => {
+        for (const message of info.messages) {
+            console.warn(`[${label}] ${message.type}: ${message.message} (line ${message.lineNum})`);
         }
-        for (let i = 0; i < stroke.points.length; i++) {
-            offset = appendStrokeVertex(out, offset, stroke, i, -1);
-            offset = appendStrokeVertex(out, offset, stroke, i, 1);
-        }
-        previousStroke = stroke;
-    }
-    return offset;
-};
-
-const appendTriangle = (
-    out: Float32Array,
-    offset: number,
-    triangle: RenderTriangle,
-): number => {
-    offset = appendTriangleVertex(out, offset, triangle.a, triangle.color);
-    offset = appendTriangleVertex(out, offset, triangle.b, triangle.color);
-    offset = appendTriangleVertex(out, offset, triangle.c, triangle.color);
-    return offset;
-};
-
-const appendTriangleVertex = (
-    out: Float32Array,
-    offset: number,
-    position: [number, number, number],
-    color: [number, number, number, number],
-): number => {
-    out[offset++] = position[0];
-    out[offset++] = position[1];
-    out[offset++] = position[2];
-    out[offset++] = color[0];
-    out[offset++] = color[1];
-    out[offset++] = color[2];
-    out[offset++] = color[3];
-    return offset;
-};
-
-const appendSegmentVertex = (
-    out: Float32Array,
-    offset: number,
-    segment: RenderSegment,
-    along: number,
-    side: number,
-    width: number,
-): number => {
-    const point = along < 0.5 ? segment.a : segment.b;
-    const cap = along < 0.5
-        ? segment.capStart === false ? 0 : -1
-        : segment.capEnd === false ? 0 : 1;
-    return appendJoinVertex(
-        out,
-        offset,
-        segment.a,
-        point,
-        segment.b,
-        segment.color,
-        side,
-        width,
-        cap,
-    );
-};
-
-const appendStrokeVertex = (
-    out: Float32Array,
-    offset: number,
-    stroke: RenderStroke,
-    index: number,
-    side: number,
-): number => {
-    const point = stroke.points[index];
-    const cap = index === 0
-        ? -1
-        : index === stroke.points.length - 1
-            ? 1
-            : 0;
-    return appendJoinVertex(
-        out,
-        offset,
-        stroke.points[index - 1] ?? point,
-        point,
-        stroke.points[index + 1] ?? point,
-        stroke.color,
-        side,
-        stroke.width,
-        cap,
-    );
-};
-
-const appendJoinVertex = (
-    out: Float32Array,
-    offset: number,
-    joinPrev: Vec3,
-    joinPoint: Vec3,
-    joinNext: Vec3,
-    color: [number, number, number, number],
-    side: number,
-    width: number,
-    cap: number,
-): number => {
-    out[offset++] = joinPrev[0];
-    out[offset++] = joinPrev[1];
-    out[offset++] = joinPrev[2];
-    out[offset++] = joinPoint[0];
-    out[offset++] = joinPoint[1];
-    out[offset++] = joinPoint[2];
-    out[offset++] = joinNext[0];
-    out[offset++] = joinNext[1];
-    out[offset++] = joinNext[2];
-    out[offset++] = color[0];
-    out[offset++] = color[1];
-    out[offset++] = color[2];
-    out[offset++] = color[3];
-    out[offset++] = side;
-    out[offset++] = width;
-    out[offset++] = cap;
-    return offset;
+    });
+    return module;
 };

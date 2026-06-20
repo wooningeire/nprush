@@ -7,6 +7,7 @@ import type {
     RenderSegment,
     RenderStroke,
     RenderTriangle,
+    SurfaceHit,
     Vec2,
     Vec3,
 } from "./types.ts";
@@ -637,6 +638,89 @@ describe("PaintModelingState prototype", () => {
         expect(state.raycastCountForDiagnostics).toBeLessThanOrEqual(1);
     });
 
+    it("reuses snap raycast target caches across draft previews", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.4, y: -0.1 }, { x: 0.4, y: 0.1 });
+        state.setPlacementMode("snap");
+        state.resetDiagnostics();
+
+        state.beginStroke({ x: -0.2, y: -0.02 }, 800, 600);
+        state.appendStrokePoint({ x: 0.2, y: 0.02 });
+
+        state.buildDraftRenderSegments();
+        const firstBuilds = state.raycastCacheBuildCountForDiagnostics;
+        state.buildDraftRenderSegments();
+
+        expect(firstBuilds).toBeGreaterThan(0);
+        expect(state.raycastCountForDiagnostics).toBeGreaterThan(1);
+        expect(state.raycastCacheBuildCountForDiagnostics).toBe(firstBuilds);
+    });
+    it("batches snap commit raycasts after the first surface stroke", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.4, y: -0.1 }, { x: 0.4, y: 0.1 });
+        state.setPlacementMode("snap");
+
+        state.beginStroke({ x: -0.3, y: -0.04 }, 800, 600);
+        for (let i = 1; i <= 160; i++) {
+            const t = i / 160;
+            state.appendStrokePoint({
+                x: -0.3 + t * 0.6,
+                y: -0.04 + t * 0.08,
+            });
+        }
+
+        state.raycastCountForDiagnostics = 0;
+        state.finishStroke();
+
+        expect(state.strokes.at(-1)?.placement).toBe("snap");
+        expect(state.raycastCountForDiagnostics).toBeLessThanOrEqual(1);
+    });
+
+    it("uses provided snap placement plan without CPU commit raycasts", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.24, y: -0.04 }, { x: 0.24, y: 0.04 });
+
+        const sourceSample = state.strokes[0].samples[Math.floor(state.strokes[0].samples.length / 2)];
+        const sourceRef = sourceSample.surfaceRef;
+        const sourceWorld = state.surfaceRefWorldPoint(sourceRef)!;
+
+        state.orbit.turn({ x: 38, y: 4 });
+        state.ensureActiveView(800, 600);
+        const view = state.activeView!;
+        const laterPoint = state.projectSurfaceRef(sourceRef, view)!;
+
+        state.setPlacementMode("snap");
+        state.beginStroke({ x: laterPoint.x - 0.025, y: laterPoint.y }, 800, 600);
+        state.appendStrokePoint({ x: laterPoint.x + 0.025, y: laterPoint.y });
+        const points = state.draftStrokeSourcePoints()!;
+        const hits: Array<SurfaceHit | null> = points.map(point => {
+            const viewDepth = rayDepthAtPoint(view, sourceWorld, point);
+            return {
+                objectId: state.activeObject!.id,
+                chartId: sourceRef.chartId,
+                surfaceRef: sourceRef,
+                world: sourceWorld,
+                viewDepth,
+            };
+        });
+
+        state.raycastCountForDiagnostics = 0;
+        state.finishStroke({
+            snapPlacementPlan: {
+                hits,
+                carriedDepths: hits.map(hit => hit ? { rayDepth: hit.viewDepth } : null),
+            },
+        });
+
+        expect(state.raycastCountForDiagnostics).toBe(0);
+        expect(state.strokes.at(-1)?.samples.every(sample => sample.surfaceRef.chartId === sourceRef.chartId)).toBe(true);
+    });
     it("keeps committed scene primitives stable while drawing a later draft stroke", () => {
         const state = new PaintModelingState();
         state.addObject();

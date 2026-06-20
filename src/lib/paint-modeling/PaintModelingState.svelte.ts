@@ -1,6 +1,49 @@
-import { vec3 } from "wgpu-matrix";
 import { Camera } from "../viewer/Camera.svelte.ts";
 import { CameraOrbit } from "../viewer/CameraOrbit.svelte.ts";
+import {
+    defaultDepthForPaintView,
+    getOrCreatePaintChart,
+    paintDepthRadiusForView,
+    raycastPaintObjectSurfaceBatchWithViews,
+    raycastPaintObjectSurfaceWithViews,
+    raycastPaintObjectSurfacesWithViews,
+} from "./state/chartAccess.ts";
+import type { ChartPaintRun } from "./state/chartPainting.ts";
+import { touchPaintCharts } from "./state/chartMutation.ts";
+import {
+    MAX_BRUSH_WIDTH,
+    MIN_BRUSH_WIDTH,
+} from "./state/constants.ts";
+import { makeId } from "./state/sceneData.ts";
+import {
+    cameraMovedFromPaintView,
+    capturePaintView,
+    deletePaintObject,
+    deletePaintView,
+    selectPaintView,
+    viewHasAuthoredContent,
+} from "./state/sceneLifecycle.ts";
+import {
+    capturePaintSceneSnapshot,
+    restorePaintSceneSnapshot,
+    type PaintSceneSnapshot,
+} from "./state/sceneHistory.ts";
+import {
+    buildDraftPaintRenderSegments,
+    buildPaintRenderSegments,
+    paintSurfaceRefWorldPoint,
+    projectPaintSurfaceRef,
+    type RenderAssemblyContext,
+} from "./state/renderAssembly.ts";
+import { planPaintChartSeams } from "./state/seamEditing.ts";
+import { planFinishedStroke } from "./state/strokeSession.ts";
+import { samplePaintStrokeSpline } from "./state/strokeSampling.ts";
+import type {
+    SnapPlacementPlan,
+    StrokePlacementContext,
+} from "./state/strokePlacement.ts";
+import { PaintSurfaceRaycastCache } from "./state/surfaceRaycastCache.ts";
+import { clamp } from "./state/vectorMath.ts";
 import type {
     BrushStyle,
     BrushMode,
@@ -9,22 +52,17 @@ import type {
     OcclusionClaim,
     PaintChart,
     PaintObject,
-    PaintSample,
     PaintStroke,
     PaintView,
     PaintRenderOptions,
     PlacementMode,
     RenderPrimitive,
-    RenderSegment,
     SurfaceHit,
     SurfaceRef,
     Vec2,
     Vec3,
-    Vec4,
 } from "./types.ts";
 
-const MIN_BRUSH_WIDTH = 1;
-const MAX_BRUSH_WIDTH = 72;
 
 const DEFAULT_COLOR_BRUSH: BrushStyle = {
     color: "#ffd27a",
@@ -35,59 +73,6 @@ const DEFAULT_BRUSH_WIDTH_BY_MODE: Record<BrushMode, number> = {
     color: DEFAULT_COLOR_BRUSH.width,
     surface: Math.min(MAX_BRUSH_WIDTH, DEFAULT_COLOR_BRUSH.width * 4),
 };
-
-const CHART_RESOLUTION = 65;
-const OCCLUSION_GAP = 0.075;
-const MIN_DEPTH = 0.06;
-const COVERAGE_EPSILON = 0.015;
-const MAX_EFFECT_SAMPLES = 96;
-const SEAM_BRUSH_RADIUS = 0.055;
-const SURFACE_FIELD_STRIDE = 8;
-const SURFACE_FIELD_NORMAL_LENGTH = 0.035;
-const SURFACE_FIELD_NORMAL_WIDTH = 1.6;
-const MIN_STROKE_SPLINE_CONTROL_POINTS = 4;
-const STROKE_SPLINE_SAMPLE_SPACING = 0.018;
-
-interface PaintSceneSnapshot {
-    viewportWidth: number;
-    viewportHeight: number;
-    views: PaintView[];
-    objects: PaintObject[];
-    strokes: PaintStroke[];
-    occlusionClaims: OcclusionClaim[];
-    activeObjectId: string | null;
-    activeViewId: string | null;
-    chartProjectionMode: ChartProjectionMode;
-}
-
-interface ChartPaintSample {
-    point: Vec2;
-    depth: number;
-}
-
-type DepthWriteMode = "blend" | "replace";
-
-interface ChartPaintRun {
-    chart: PaintChart;
-    samples: ChartPaintSample[];
-    updateDepth: boolean;
-    requireCoverage: boolean;
-    depthWriteMode: DepthWriteMode;
-}
-
-interface ChartUvRun {
-    chart: PaintChart;
-    points: Vec2[];
-}
-
-interface SnapCarryDepth {
-    rayDepth: number;
-}
-
-interface SnapPlacementPlan {
-    hits: Array<SurfaceHit | null>;
-    carriedDepths: Array<SnapCarryDepth | null>;
-}
 
 export class PaintModelingState {
     viewportWidth = $state(1);
@@ -107,8 +92,13 @@ export class PaintModelingState {
     undoStack = $state<PaintSceneSnapshot[]>([]);
     meshVersion = $state(0);
     raycastCountForDiagnostics = 0;
+    raycastCacheBuildCountForDiagnostics = 0;
+    private readonly surfaceRaycastCache = new PaintSurfaceRaycastCache(() => {
+        this.raycastCacheBuildCountForDiagnostics += 1;
+    });
     private brushWidthByMode: Record<BrushMode, number> = { ...DEFAULT_BRUSH_WIDTH_BY_MODE };
     private pendingStrokeUndoSnapshot: PaintSceneSnapshot | null = null;
+    private pendingGpuChartPaintRuns: ChartPaintRun[] = [];
     private undoGroup: { snapshot: PaintSceneSnapshot; dirty: boolean } | null = null;
 
     readonly orbit = new CameraOrbit();
@@ -121,13 +111,9 @@ export class PaintModelingState {
         },
     });
 
-    get activeObject(): PaintObject | null {
-        return this.objects.find(object => object.id === this.activeObjectId) ?? null;
-    }
+    get activeObject(): PaintObject | null { return this.objects.find(object => object.id === this.activeObjectId) ?? null; }
 
-    get activeView(): PaintView | null {
-        return this.views.find(view => view.id === this.activeViewId) ?? null;
-    }
+    get activeView(): PaintView | null { return this.views.find(view => view.id === this.activeViewId) ?? null; }
 
     get isCameraAtActiveView(): boolean {
         const view = this.activeView;
@@ -142,9 +128,7 @@ export class PaintModelingState {
         return this.activeView ? "New view" : "No saved view";
     }
 
-    get chartCount(): number {
-        return this.objects.reduce((sum, object) => sum + object.charts.length, 0);
-    }
+    get chartCount(): number { return this.objects.reduce((sum, object) => sum + object.charts.length, 0); }
 
     get seamCount(): number {
         return this.objects.reduce(
@@ -153,9 +137,7 @@ export class PaintModelingState {
         );
     }
 
-    get canUndo(): boolean {
-        return this.undoStack.length > 0;
-    }
+    get canUndo(): boolean { return this.undoStack.length > 0; }
 
     addObject(name?: string, recordHistory = true) {
         if (recordHistory) this.recordUndoSnapshot();
@@ -175,14 +157,10 @@ export class PaintModelingState {
     }
 
     selectObject(objectId: string) {
-        if (this.objects.some(object => object.id === objectId)) {
-            this.activeObjectId = objectId;
-        }
+        if (this.objects.some(object => object.id === objectId)) this.activeObjectId = objectId;
     }
 
-    setPlacementMode(mode: PlacementMode) {
-        this.placementMode = mode;
-    }
+    setPlacementMode(mode: PlacementMode) { this.placementMode = mode; }
 
     setBrushMode(mode: BrushMode) {
         this.brushWidthByMode[this.brushMode] = this.brush.width;
@@ -190,13 +168,9 @@ export class PaintModelingState {
         this.brush.width = this.brushWidthByMode[mode];
     }
 
-    setChartProjectionMode(mode: ChartProjectionMode) {
-        this.chartProjectionMode = mode;
-    }
+    setChartProjectionMode(mode: ChartProjectionMode) { this.chartProjectionMode = mode; }
 
-    setBrushColor(color: string) {
-        this.brush.color = color;
-    }
+    setBrushColor(color: string) { this.brush.color = color; }
 
     setBrushWidth(width: number) {
         const clampedWidth = clamp(width, MIN_BRUSH_WIDTH, MAX_BRUSH_WIDTH);
@@ -204,12 +178,11 @@ export class PaintModelingState {
         this.brush.width = clampedWidth;
     }
 
-    setBrushOpacity(_opacity: number) {
-        this.brush.opacity = 1;
-    }
+    setBrushOpacity(_opacity: number) { this.brush.opacity = 1; }
 
     resetDiagnostics() {
         this.raycastCountForDiagnostics = 0;
+        this.raycastCacheBuildCountForDiagnostics = 0;
     }
 
     beginUndoGroup() {
@@ -228,8 +201,12 @@ export class PaintModelingState {
         this.undoGroup = null;
     }
 
-    cancelUndoGroup() {
-        this.undoGroup = null;
+    cancelUndoGroup() { this.undoGroup = null; }
+
+    consumeGpuChartPaintRuns(): ChartPaintRun[] {
+        const runs = this.pendingGpuChartPaintRuns;
+        this.pendingGpuChartPaintRuns = [];
+        return runs;
     }
 
     beginStroke(point: Vec2, width: number, height: number) {
@@ -256,63 +233,45 @@ export class PaintModelingState {
         this.draftStroke.push(point);
     }
 
-    finishStroke() {
-        const undoSnapshot = this.pendingStrokeUndoSnapshot ?? this.captureSceneSnapshot();
+    draftStrokeSourcePoints(): Vec2[] | null {
         const object = this.activeObject;
-        const view = this.activeView;
-        if (!this.draftStroke || this.draftStroke.length < 2 || !object || !view) {
-            this.draftStroke = null;
-            if (this.pendingStrokeUndoSnapshot) {
-                this.restoreSceneSnapshot(this.pendingStrokeUndoSnapshot);
-            }
-            this.pendingStrokeUndoSnapshot = null;
-            return;
+        if (!this.draftStroke || this.draftStroke.length < 2 || !object || object.locked || !object.visible || !this.activeView) {
+            return null;
         }
+        return samplePaintStrokeSpline(this.draftStroke);
+    }
 
-        const sourcePoints = samplePaintStrokeSpline(this.draftStroke);
-        if (this.brushMode === "surface") {
-            const touchedChartIds = this.placeSurfaceBrushMask(object, view, sourcePoints);
-            if (touchedChartIds.size === 0) {
-                this.draftStroke = null;
-                this.restoreSceneSnapshot(undoSnapshot);
-                this.pendingStrokeUndoSnapshot = null;
-                return;
-            }
+    finishStroke(options: { snapPlacementPlan?: SnapPlacementPlan } = {}) {
+        const result = planFinishedStroke({
+            draftStroke: this.draftStroke,
+            pendingStrokeUndoSnapshot: this.pendingStrokeUndoSnapshot,
+            undoSnapshot: this.pendingStrokeUndoSnapshot ?? this.captureSceneSnapshot(),
+            object: this.activeObject,
+            view: this.activeView,
+            brushMode: this.brushMode,
+            placementMode: this.placementMode,
+            brush: this.brush,
+            placementContext: this.strokePlacementContext(),
+            nextPaintOrder: objectId => this.nextPaintOrder(objectId),
+            snapPlacementPlan: options.snapPlacementPlan,
+        });
 
-            this.pushUndoSnapshot(undoSnapshot);
-            this.touchCharts(touchedChartIds);
-            this.draftStroke = null;
-            this.pendingStrokeUndoSnapshot = null;
-            this.meshVersion += 1;
-            return;
-        }
-
-        const strokeSamples = this.placeStrokeSamples(object, view, sourcePoints, this.placementMode);
-        if (strokeSamples.samples.length < 2) {
-            this.draftStroke = null;
-            this.restoreSceneSnapshot(undoSnapshot);
-            this.pendingStrokeUndoSnapshot = null;
-            return;
-        }
-
-        this.pushUndoSnapshot(undoSnapshot);
-        const stroke: PaintStroke = {
-            id: makeId("stroke"),
-            objectId: object.id,
-            sourceViewId: view.id,
-            placement: this.placementMode,
-            samples: strokeSamples.samples,
-            style: { ...this.brush },
-            paintOrder: this.nextPaintOrder(object.id),
-        };
-
-        this.strokes = [...this.strokes, stroke];
-        if (strokeSamples.occlusionClaim) {
-            this.occlusionClaims = [...this.occlusionClaims, strokeSamples.occlusionClaim];
-        }
-        this.touchCharts(strokeSamples.touchedChartIds);
         this.draftStroke = null;
         this.pendingStrokeUndoSnapshot = null;
+        if (result.kind === "discard") {
+            if (result.restoreSnapshot) this.restoreSceneSnapshot(result.restoreSnapshot);
+            return;
+        }
+
+        this.pushUndoSnapshot(result.undoSnapshot);
+        this.pendingGpuChartPaintRuns.push(...result.gpuChartPaintRuns);
+        this.touchCharts(result.touchedChartIds);
+        if (result.kind === "stroke") {
+            this.strokes = [...this.strokes, result.stroke];
+            if (result.occlusionClaim) {
+                this.occlusionClaims = [...this.occlusionClaims, result.occlusionClaim];
+            }
+        }
         this.meshVersion += 1;
     }
 
@@ -324,91 +283,69 @@ export class PaintModelingState {
         return true;
     }
 
-    undoStroke(): boolean {
-        return this.undo();
-    }
+    undoStroke(): boolean { return this.undo(); }
 
-    deleteActiveObject(): boolean {
-        return this.activeObjectId ? this.deleteObject(this.activeObjectId) : false;
-    }
+    deleteActiveObject(): boolean { return this.activeObjectId ? this.deleteObject(this.activeObjectId) : false; }
 
     deleteObject(objectId: string): boolean {
-        const existing = this.objects.find(object => object.id === objectId);
-        if (!existing) return false;
+        const deletion = deletePaintObject(
+            objectId,
+            this.objects,
+            this.strokes,
+            this.occlusionClaims,
+            this.activeObjectId,
+        );
+        if (!deletion) return false;
 
         this.recordUndoSnapshot();
-        this.objects = this.objects.filter(object => object.id !== objectId);
-        this.strokes = this.strokes.filter(stroke => stroke.objectId !== objectId);
-        this.occlusionClaims = this.occlusionClaims.filter(claim => claim.objectId !== objectId);
-
-        if (this.activeObjectId === objectId) {
-            this.activeObjectId = this.objects[0]?.id ?? null;
-        }
+        this.objects = deletion.objects;
+        this.strokes = deletion.strokes;
+        this.occlusionClaims = deletion.occlusionClaims;
+        this.activeObjectId = deletion.activeObjectId;
         this.draftStroke = null;
         this.meshVersion += 1;
         return true;
     }
 
-    deleteActiveView(): boolean {
-        return this.activeViewId ? this.deleteView(this.activeViewId) : false;
-    }
+    deleteActiveView(): boolean { return this.activeViewId ? this.deleteView(this.activeViewId) : false; }
 
     deleteView(viewId: string): boolean {
-        const existing = this.views.find(view => view.id === viewId);
-        if (!existing) return false;
+        const deletion = deletePaintView(
+            viewId,
+            this.objects,
+            this.views,
+            this.strokes,
+            this.occlusionClaims,
+            this.activeViewId,
+        );
+        if (!deletion) return false;
 
         this.recordUndoSnapshot();
-        const removedChartIds = new Set<string>();
-        this.objects = this.objects.map(object => {
-            const keptCharts = object.charts.filter(chart => {
-                if (chart.sourceViewId !== viewId) return true;
-                removedChartIds.add(chart.id);
-                return false;
-            });
-            return { ...object, charts: keptCharts };
-        });
-
-        this.views = this.views.filter(view => view.id !== viewId);
-        this.strokes = this.strokes.filter(stroke =>
-            stroke.sourceViewId !== viewId
-            && !stroke.samples.some(sample => removedChartIds.has(sample.surfaceRef.chartId))
-        );
-        this.occlusionClaims = this.occlusionClaims.filter(claim =>
-            claim.viewId !== viewId
-            && !removedChartIds.has(claim.frontChartId)
-            && !claim.backRefs.some(ref => removedChartIds.has(ref.chartId))
-        );
-
-        if (this.activeViewId === viewId) {
-            const nextView = this.views[0] ?? null;
-            this.activeViewId = null;
-            if (nextView) {
-                this.selectView(nextView.id);
-            }
+        this.objects = deletion.objects;
+        this.views = deletion.views;
+        this.strokes = deletion.strokes;
+        this.occlusionClaims = deletion.occlusionClaims;
+        this.activeViewId = null;
+        if (deletion.selectViewId) {
+            this.selectView(deletion.selectViewId);
         }
         this.draftStroke = null;
         this.meshVersion += 1;
         return true;
     }
 
-    markSeamAt(point: Vec2): boolean {
-        return this.markSeamAlong([point]);
-    }
+    markSeamAt(point: Vec2): boolean { return this.markSeamAlong([point]); }
 
     markSeamAlong(points: Vec2[]): boolean {
         const object = this.activeObject;
         const view = this.currentEffectView();
         if (!object || !view || object.locked) return false;
-        const runs = this.collectHitRuns(object, view, points, MAX_EFFECT_SAMPLES);
-        if (runs.length === 0) return false;
+        const seamEdit = planPaintChartSeams(object, this.views, view, points);
+        this.raycastCountForDiagnostics += seamEdit.raycastCount;
+        if (!seamEdit.hasHits) return false;
 
         this.recordUndoSnapshot();
-        const touchedChartIds = new Set<string>();
-        for (const run of runs) {
-            if (markChartSeamAlongPolyline(run.chart, run.points, SEAM_BRUSH_RADIUS)) {
-                touchedChartIds.add(run.chart.id);
-            }
-        }
+        const touchedChartIds = seamEdit.apply();
         if (touchedChartIds.size === 0) return false;
         this.touchCharts(touchedChartIds);
         this.meshVersion += 1;
@@ -426,13 +363,9 @@ export class PaintModelingState {
     }
 
     selectView(viewId: string) {
-        const view = this.views.find(item => item.id === viewId);
+        const view = selectPaintView(this.views, this.orbit, viewId);
         if (!view) return;
         this.activeViewId = view.id;
-        this.orbit.long = view.long;
-        this.orbit.lat = view.lat;
-        this.orbit.radius = view.radius;
-        this.orbit.offset = vec3.fromValues(view.offset[0], view.offset[1], view.offset[2]);
     }
 
     ensureActiveView(width = this.viewportWidth, height = this.viewportHeight, recordHistory = true) {
@@ -441,7 +374,7 @@ export class PaintModelingState {
         const active = this.activeView;
         if (active && !this.cameraMovedFrom(active)) {
             if (active.width === this.viewportWidth && active.height === this.viewportHeight) return;
-            if (!this.viewHasAuthoredContent(active.id)) {
+            if (!viewHasAuthoredContent(active.id, this.objects, this.strokes, this.occlusionClaims)) {
                 const refreshedView = this.captureCurrentView(active.name, this.viewportWidth, this.viewportHeight);
                 this.views = this.views.map(view => view.id === active.id
                     ? {
@@ -456,202 +389,36 @@ export class PaintModelingState {
         this.saveCurrentView(width, height, recordHistory);
     }
 
-    cameraMovedFrom(view: PaintView): boolean {
-        const offset = Array.from(this.orbit.offset).slice(0, 3) as Vec3;
-        const offsetDelta = distance3(offset, view.offset);
-        return Math.abs(this.orbit.long - view.long) > 0.015
-            || Math.abs(this.orbit.lat - view.lat) > 0.015
-            || Math.abs(Math.log(this.orbit.radius / view.radius)) > 0.015
-            || offsetDelta > 0.01;
-    }
+    cameraMovedFrom(view: PaintView): boolean { return cameraMovedFromPaintView(view, this.orbit); }
 
-    surfaceRefWorldPoint(ref: SurfaceRef): Vec3 | null {
-        const chart = this.findChart(ref.chartId);
-        if (!chart) return null;
-        const view = this.views.find(item => item.id === chart.sourceViewId);
-        if (!view) return null;
-        return chartPointToWorldFromView(chart, view, ref.uv);
-    }
+    surfaceRefWorldPoint(ref: SurfaceRef): Vec3 | null { return paintSurfaceRefWorldPoint(this.objects, this.views, ref); }
 
     projectSurfaceRef(ref: SurfaceRef, view: PaintView | null = this.activeView): Vec2 | null {
-        if (!view) return null;
-        const world = this.surfaceRefWorldPoint(ref);
-        if (!world) return null;
-        return projectVisiblePoint(view.viewProjMat, world);
+        return projectPaintSurfaceRef(this.objects, this.views, ref, view);
     }
 
     buildRenderSegments(options: boolean | PaintRenderOptions = true): RenderPrimitive[] {
-        const renderOptions = normalizeRenderOptions(options);
-        const segments: RenderPrimitive[] = [];
-        const objectById = new Map(this.objects.map(object => [object.id, object]));
-        const viewById = new Map(this.views.map(view => [view.id, view]));
-        const chartById = new Map<string, PaintChart>();
-        for (const object of this.objects) {
-            for (const chart of object.charts) {
-                chartById.set(chart.id, chart);
-            }
-        }
+        return buildPaintRenderSegments(this.renderAssemblyContext(), options);
+    }
 
-        if (renderOptions.showChartWireframe) {
-            for (const object of this.objects) {
-                if (!object.visible) continue;
-                for (const chart of object.charts) {
-                    const sourceView = viewById.get(chart.sourceViewId);
-                    if (!sourceView) continue;
-                    const worldAt = (point: Vec2) => chartPointToWorldFromView(chart, sourceView, point);
-                    appendChartSegments(segments, chart, worldAt);
-                }
-            }
-        }
+    buildDraftRenderSegments(): RenderPrimitive[] { return buildDraftPaintRenderSegments(this.renderAssemblyContext()); }
 
-        if (renderOptions.showSurfaceField) {
-            for (const object of this.objects) {
-                if (!object.visible) continue;
-                for (const chart of object.charts) {
-                    const sourceView = viewById.get(chart.sourceViewId);
-                    if (!sourceView) continue;
-                    const worldAt = (point: Vec2) => chartPointToWorldFromView(chart, sourceView, point);
-                    appendChartSurfaceFieldSegments(segments, chart, sourceView, worldAt);
-                }
-            }
-        }
-
-        const worldPointForRef = (ref: SurfaceRef): Vec3 | null => {
-            const chart = chartById.get(ref.chartId);
-            if (!chart) return null;
-            const view = viewById.get(chart.sourceViewId);
-            if (!view) return null;
-            return chartPointToWorldFromView(chart, view, ref.uv);
+    private renderAssemblyContext(): RenderAssemblyContext {
+        return {
+            objects: this.objects,
+            views: this.views,
+            strokes: this.strokes,
+            activeObject: this.activeObject,
+            activeView: this.activeView,
+            draftStroke: this.draftStroke,
+            brushMode: this.brushMode,
+            placementMode: this.placementMode,
+            chartProjectionMode: this.chartProjectionMode,
+            brush: this.brush,
+            defaultDepthForView: view => this.defaultDepthForView(view),
+            raycastObjectSurface: (object, view, point, excludeChartId) =>
+                this.raycastObjectSurface(object, view, point, excludeChartId),
         };
-
-        for (const stroke of this.sortedStrokesForRender(objectById)) {
-            appendStrokeRenderSegments(segments, stroke, worldPointForRef);
-        }
-
-        if (renderOptions.showDraftStroke) {
-            this.appendDraftStrokePreviewSegments(segments);
-        }
-
-        return segments;
-    }
-
-    buildDraftRenderSegments(): RenderPrimitive[] {
-        const segments: RenderPrimitive[] = [];
-        this.appendDraftStrokePreviewSegments(segments);
-        return segments;
-    }
-
-    private sortedStrokesForRender(objectById: Map<string, PaintObject>): PaintStroke[] {
-        const strokes = this.strokes.filter(stroke => {
-            const object = objectById.get(stroke.objectId);
-            return !!object?.visible;
-        });
-
-        return strokes.slice().sort((a, b) =>
-            (objectById.get(a.objectId)?.layerIndex ?? 0) - (objectById.get(b.objectId)?.layerIndex ?? 0)
-            || a.paintOrder - b.paintOrder
-        );
-    }
-
-    private appendDraftStrokePreviewSegments(segments: RenderPrimitive[]) {
-        const object = this.activeObject;
-        const view = this.activeView;
-        if (!this.draftStroke || this.draftStroke.length < 2 || !object?.visible || object.locked || !view) return;
-
-        const color = this.brushMode === "surface"
-            ? [0.44, 0.92, 0.82, 0.68] as Vec4
-            : parseColor(this.brush.color, this.brush.opacity);
-        const points = samplePaintStrokeSpline(this.draftStroke);
-        const previewDepth = this.draftStrokePreviewDepth(object, view);
-        appendWorldStrokeRun(
-            segments,
-            points.map(point => this.draftStrokePreviewWorldPoint(object, view, point, previewDepth)),
-            color,
-            this.brush.width,
-        );
-    }
-
-    private draftStrokePreviewDepth(object: PaintObject, view: PaintView): number {
-        if (
-            this.brushMode === "surface"
-            || this.placementMode !== "snap"
-            || !this.draftStroke
-            || this.draftStroke.length === 0
-        ) {
-            return this.defaultDepthForView(view);
-        }
-        const cursor = this.draftStroke.at(-1)!;
-        const hit = this.raycastObjectSurface(object, view, cursor);
-        return hit
-            ? depthForProjectionAtPoint(view, cursor, hit.viewDepth, this.chartProjectionMode)
-            : this.defaultDepthForView(view);
-    }
-
-    private draftStrokePreviewWorldPoint(
-        object: PaintObject,
-        view: PaintView,
-        point: Vec2,
-        previewDepth: number,
-    ): Vec3 | null {
-        if (this.brushMode === "surface") {
-            return viewPointToWorldAtProjectionDepth(view, point, previewDepth, "view-plane");
-        }
-        if (this.placementMode === "snap") {
-            return viewPointToWorldAtProjectionDepth(view, point, previewDepth, this.chartProjectionMode);
-        }
-        return this.draftStrokeWorldPoint(object, view, point);
-    }
-
-    private draftStrokeWorldPoint(object: PaintObject, view: PaintView, point: Vec2): Vec3 | null {
-        if (this.placementMode === "snap") {
-            const hit = this.raycastObjectSurface(object, view, point);
-            if (hit) return hit.world;
-        }
-
-        if (this.placementMode === "paint-behind") {
-            const hit = this.raycastObjectSurface(object, view, point);
-            if (hit) {
-                const depth = depthForProjectionAtPoint(
-                    view,
-                    point,
-                    hit.viewDepth + OCCLUSION_GAP,
-                    this.chartProjectionMode,
-                );
-                return viewPointToWorldAtProjectionDepth(view, point, depth, this.chartProjectionMode);
-            }
-            return viewPointToWorldAtProjectionDepth(
-                view,
-                point,
-                this.defaultDepthForView(view) * 1.12,
-                this.chartProjectionMode,
-            );
-        }
-
-        if (this.placementMode === "occluding-surface") {
-            const hit = this.raycastObjectSurface(object, view, point);
-            if (hit) {
-                const depth = depthForProjectionAtPoint(
-                    view,
-                    point,
-                    Math.max(MIN_DEPTH, hit.viewDepth - OCCLUSION_GAP),
-                    this.chartProjectionMode,
-                );
-                return viewPointToWorldAtProjectionDepth(view, point, depth, this.chartProjectionMode);
-            }
-            return viewPointToWorldAtProjectionDepth(
-                view,
-                point,
-                this.defaultDepthForView(view) * 0.82,
-                this.chartProjectionMode,
-            );
-        }
-
-        return viewPointToWorldAtProjectionDepth(
-            view,
-            point,
-            this.defaultDepthForView(view),
-            this.chartProjectionMode,
-        );
     }
 
     private currentEffectView(): PaintView {
@@ -665,318 +432,49 @@ export class PaintModelingState {
     }
 
     private captureCurrentView(name: string, width: number, height: number): PaintView {
-        const offset = Array.from(this.orbit.offset).slice(0, 3) as Vec3;
+        return capturePaintView(name, width, height, this.orbit, this.camera);
+    }
+
+    private strokePlacementContext(): StrokePlacementContext {
         return {
-            id: makeId("view"),
-            name,
-            long: this.orbit.long,
-            lat: this.orbit.lat,
-            radius: this.orbit.radius,
-            offset,
-            width,
-            height,
-            viewProjMat: Array.from(this.camera.viewProjMat),
-            viewProjInvMat: Array.from(this.camera.viewProjInvMat),
-            viewMat: Array.from(this.camera.viewMat),
-            viewInvMat: Array.from(this.camera.viewInvMat),
-            createdAt: Date.now(),
+            getOrCreateChart: (object, view, role, projectionMode) =>
+                this.getOrCreateChart(object, view, role, projectionMode),
+            defaultDepthForView: view => this.defaultDepthForView(view),
+            paintDepthRadiusForView: view => this.paintDepthRadiusForView(view),
+            raycastObjectSurface: (object, view, point, excludeChartId) =>
+                this.raycastObjectSurface(object, view, point, excludeChartId),
+            raycastObjectSurfaceBatch: (object, view, points, excludeChartId) =>
+                this.raycastObjectSurfaceBatch(object, view, points, excludeChartId),
+            raycastObjectSurfaces: (object, view, point) =>
+                this.raycastObjectSurfaces(object, view, point),
         };
     }
 
-    private placeSurfaceBrushMask(
-        object: PaintObject,
-        view: PaintView,
-        points: Vec2[],
-    ): Set<string> {
-        const chart = this.getOrCreateChart(object, view, "surface", "view-plane");
-        const depth = this.defaultDepthForView(view);
-        const changed = applyStrokeToChartGeometry(
-            chart,
-            points.map(point => ({ point, depth })),
-            this.paintDepthRadiusForView(view),
-            {
-                updateDepth: true,
-                requireCoverage: false,
-            },
-        );
+    private defaultDepthForView(view: PaintView): number { return defaultDepthForPaintView(view); }
 
-        return changed ? new Set([chart.id]) : new Set();
+    private paintDepthRadiusForView(view: PaintView): number { return paintDepthRadiusForView(view, this.brush.width); }
+
+    private getOrCreateChart(object: PaintObject, view: PaintView, role: ChartRole, projectionMode = this.chartProjectionMode): PaintChart {
+        return getOrCreatePaintChart(object, view, role, projectionMode);
     }
 
-    private placeStrokeSamples(
-        object: PaintObject,
-        view: PaintView,
-        points: Vec2[],
-        placement: PlacementMode,
-    ): { samples: PaintSample[]; occlusionClaim?: OcclusionClaim; touchedChartIds: Set<string> } {
-        if (placement === "occluding-surface") {
-            return this.placeOccludingSamples(object, view, points);
-        }
-
-        const samples: PaintSample[] = [];
-        const touchedChartIds = new Set<string>();
-        const paintRuns: ChartPaintRun[] = [];
-        let fallbackChart: PaintChart | null = null;
-        const fallbackDepth = this.defaultDepthForView(view);
-        const paintDepthRadius = this.paintDepthRadiusForView(view);
-        const snapPlacementPlan = placement === "snap"
-            ? this.planSnapPlacement(object, view, points)
-            : null;
-
-        for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
-            const point = points[pointIndex];
-            if (placement === "snap") {
-                const hit = snapPlacementPlan?.hits[pointIndex] ?? null;
-                if (hit) {
-                    const chart = this.findChart(hit.chartId);
-                    if (chart) {
-                        appendPaintRun(paintRuns, chart, {
-                            point: hit.surfaceRef.uv,
-                            depth: sampleChartDepth(chart, hit.surfaceRef.uv),
-                        }, false, true);
-                    }
-                    samples.push({
-                        sourcePoint: point,
-                        surfaceRef: hit.surfaceRef,
-                        placement,
-                    });
-                    continue;
-                }
-            }
-
-            let depth = fallbackDepth;
-            let depthIsViewRayDistance = false;
-            if (placement === "paint-behind") {
-                const hits = this.raycastObjectSurfaces(object, view, point);
-                const firstHit = hits[0] ?? null;
-                const backHit = firstHit
-                    ? hits.find(hit => hit.viewDepth > firstHit.viewDepth + OCCLUSION_GAP * 0.5) ?? null
-                    : null;
-                if (backHit) {
-                    const chart = this.findChart(backHit.chartId);
-                    if (chart) {
-                        appendPaintRun(paintRuns, chart, {
-                            point: backHit.surfaceRef.uv,
-                            depth: sampleChartDepth(chart, backHit.surfaceRef.uv),
-                        }, false, true);
-                    }
-                    samples.push({
-                        sourcePoint: point,
-                        surfaceRef: backHit.surfaceRef,
-                        placement,
-                    });
-                    continue;
-                }
-                if (firstHit) {
-                    depth = firstHit.viewDepth + OCCLUSION_GAP;
-                    depthIsViewRayDistance = true;
-                }
-            }
-
-            const role: ChartRole = placement === "paint-behind" ? "behind" : "surface";
-            fallbackChart ??= this.getOrCreateChart(object, view, role);
-            const carriedDepth = placement === "snap"
-                ? depthForCarriedSnapAtPoint(
-                    view,
-                    point,
-                    snapPlacementPlan?.carriedDepths[pointIndex] ?? null,
-                    fallbackChart.projectionMode,
-                )
-                : null;
-            appendPaintRun(paintRuns, fallbackChart, {
-                point,
-                depth: carriedDepth
-                    ?? (depthIsViewRayDistance
-                        ? depthForProjectionAtPoint(view, point, depth, fallbackChart.projectionMode)
-                        : depth),
-            }, true, false, placement === "snap" ? "replace" : "blend");
-            samples.push({
-                sourcePoint: point,
-                surfaceRef: { chartId: fallbackChart.id, uv: { ...point } },
-                placement,
-            });
-        }
-
-        for (const run of paintRuns) {
-            if (applyStrokeToChartGeometry(run.chart, run.samples, paintDepthRadius, {
-                updateDepth: run.updateDepth,
-                requireCoverage: run.requireCoverage,
-                depthWriteMode: run.depthWriteMode,
-            })) {
-                touchedChartIds.add(run.chart.id);
-            }
-        }
-
-        return { samples, touchedChartIds };
-    }
-
-    private placeOccludingSamples(
-        object: PaintObject,
-        view: PaintView,
-        points: Vec2[],
-    ): { samples: PaintSample[]; occlusionClaim?: OcclusionClaim; touchedChartIds: Set<string> } {
-        const chart = this.getOrCreateChart(object, view, "occluder");
-        const touchedChartIds = new Set([chart.id]);
-        const paintDepthRadius = this.paintDepthRadiusForView(view);
-        const claim: OcclusionClaim = {
-            id: makeId("occlusion"),
-            objectId: object.id,
-            viewId: view.id,
-            frontChartId: chart.id,
-            backRefs: [],
-            mask: [],
-            createdAt: Date.now(),
-        };
-        const samples: PaintSample[] = [];
-        const paintSamples: ChartPaintSample[] = [];
-
-        for (const point of points) {
-            const backHit = this.raycastObjectSurface(object, view, point, chart.id);
-            const depth = backHit
-                ? depthForProjectionAtPoint(view, point, Math.max(MIN_DEPTH, backHit.viewDepth - OCCLUSION_GAP), chart.projectionMode)
-                : this.defaultDepthForView(view) * 0.82;
-            paintSamples.push({ point, depth });
-            claim.mask.push({ ...point });
-            if (backHit) claim.backRefs.push(backHit.surfaceRef);
-            samples.push({
-                sourcePoint: point,
-                surfaceRef: { chartId: chart.id, uv: { ...point } },
-                placement: "occluding-surface",
-            });
-        }
-
-        applyStrokeToChartGeometry(chart, paintSamples, paintDepthRadius, {
-            updateDepth: true,
-            requireCoverage: false,
-        });
-        markChartSeamAlongPolyline(chart, points, SEAM_BRUSH_RADIUS);
-        return { samples, occlusionClaim: claim, touchedChartIds };
-    }
-
-    private planSnapPlacement(
-        object: PaintObject,
-        view: PaintView,
-        points: Vec2[],
-    ): SnapPlacementPlan {
-        const hits = points.map(point => this.raycastObjectSurface(object, view, point));
-        const directDepths = hits.map(hit => hit
-            ? snapCarryDepthAtPoint(hit.viewDepth)
-            : null);
-
-        return {
-            hits,
-            carriedDepths: carryStrokeDepths(directDepths, points),
-        };
-    }
-
-    private defaultDepthForView(view: PaintView): number {
-        const camera = cameraCenter(view);
-        return Math.max(MIN_DEPTH, distance3(camera, [0, 0, 0]));
-    }
-
-    private paintDepthRadiusForView(view: PaintView): number {
-        const minDimension = Math.max(1, Math.min(view.width, view.height));
-        return clamp(this.brush.width / minDimension * 1.55, 0.035, 0.28);
-    }
-
-    private collectHitRuns(
-        object: PaintObject,
-        view: PaintView,
-        points: Vec2[],
-        maxSamples: number,
-    ): ChartUvRun[] {
-        const runs: ChartUvRun[] = [];
-        for (const point of resamplePaintPolyline(points, maxSamples)) {
-            const hit = this.raycastObjectSurface(object, view, point);
-            if (!hit) continue;
-            const chart = this.findChart(hit.chartId);
-            if (!chart) continue;
-            appendUvRun(runs, chart, hit.surfaceRef.uv);
-        }
-        return runs;
-    }
-
-    private viewHasAuthoredContent(viewId: string): boolean {
-        return this.strokes.some(stroke => stroke.sourceViewId === viewId)
-            || this.occlusionClaims.some(claim => claim.viewId === viewId)
-            || this.objects.some(object => object.charts.some(chart => chart.sourceViewId === viewId));
-    }
-
-    private getOrCreateChart(
-        object: PaintObject,
-        view: PaintView,
-        role: ChartRole,
-        projectionMode: ChartProjectionMode = this.chartProjectionMode,
-    ): PaintChart {
-        const existing = object.charts.find(chart =>
-            chart.sourceViewId === view.id
-            && chart.role === role
-            && chart.projectionMode === projectionMode
-        );
-        if (existing) return existing;
-        const chart = createChart({
-            objectId: object.id,
-            sourceViewId: view.id,
-            role,
-            projectionMode,
-            depth: role === "occluder" ? this.defaultDepthForView(view) * 0.82 : this.defaultDepthForView(view),
-        });
-        object.charts.push(chart);
-        return chart;
-    }
-
-    private raycastObjectSurface(
-        object: PaintObject,
-        view: PaintView,
-        point: Vec2,
-        excludeChartId?: string,
-    ): SurfaceHit | null {
-        return this.raycastObjectSurfaces(object, view, point, excludeChartId)[0] ?? null;
-    }
-
-    private raycastObjectSurfaces(
-        object: PaintObject,
-        view: PaintView,
-        point: Vec2,
-        excludeChartId?: string,
-    ): SurfaceHit[] {
-        if (!object.visible) return [];
+    private raycastObjectSurface(object: PaintObject, view: PaintView, point: Vec2, excludeChartId?: string): SurfaceHit | null {
         this.raycastCountForDiagnostics += 1;
-        const ray = makeViewRay(view, point);
-        if (!ray) return [];
-
-        const hits: SurfaceHit[] = [];
-        for (const chart of object.charts) {
-            if (chart.id === excludeChartId) continue;
-            if (!chartHasCoverage(chart)) continue;
-            const sourceView = this.views.find(item => item.id === chart.sourceViewId);
-            if (!sourceView) continue;
-            const chartHits = raycastChart(chart, ray, uv => chartPointToWorldFromView(chart, sourceView, uv));
-            for (const hit of chartHits) {
-                hits.push({
-                    objectId: object.id,
-                    chartId: chart.id,
-                    surfaceRef: { chartId: chart.id, uv: hit.uv },
-                    world: hit.world,
-                    viewDepth: hit.t,
-                });
-            }
-        }
-
-        return hits.sort((a, b) => a.viewDepth - b.viewDepth);
+        return raycastPaintObjectSurfaceWithViews(object, this.views, view, point, excludeChartId, this.surfaceRaycastCache);
     }
 
-    private findChart(chartId: string): PaintChart | null {
-        for (const object of this.objects) {
-            const chart = object.charts.find(item => item.id === chartId);
-            if (chart) return chart;
-        }
-        return null;
+    private raycastObjectSurfaceBatch(object: PaintObject, view: PaintView, points: Vec2[], excludeChartId?: string): Array<SurfaceHit | null> {
+        if (points.length > 0) this.raycastCountForDiagnostics += 1;
+        return raycastPaintObjectSurfaceBatchWithViews(object, this.views, view, points, excludeChartId, this.surfaceRaycastCache);
     }
 
-    private nextLayerIndex(): number {
-        return this.objects.reduce((max, object) => Math.max(max, object.layerIndex), -1) + 1;
+    private raycastObjectSurfaces(object: PaintObject, view: PaintView, point: Vec2, excludeChartId?: string): SurfaceHit[] {
+        this.raycastCountForDiagnostics += 1;
+        return raycastPaintObjectSurfacesWithViews(object, this.views, view, point, excludeChartId, this.surfaceRaycastCache);
     }
+
+
+    private nextLayerIndex(): number { return this.objects.reduce((max, object) => Math.max(max, object.layerIndex), -1) + 1; }
 
     private nextPaintOrder(objectId: string): number {
         return this.strokes
@@ -992,1037 +490,21 @@ export class PaintModelingState {
         this.pushUndoSnapshot(this.captureSceneSnapshot());
     }
 
-    private pushUndoSnapshot(snapshot: PaintSceneSnapshot) {
-        this.undoStack = [...this.undoStack, snapshot];
-    }
+    private pushUndoSnapshot(snapshot: PaintSceneSnapshot) { this.undoStack = [...this.undoStack, snapshot]; }
 
-    private captureSceneSnapshot(): PaintSceneSnapshot {
-        return {
-            viewportWidth: this.viewportWidth,
-            viewportHeight: this.viewportHeight,
-            views: this.views.map(cloneView),
-            objects: this.objects.map(cloneObject),
-            strokes: this.strokes.map(cloneStroke),
-            occlusionClaims: this.occlusionClaims.map(cloneOcclusionClaim),
-            activeObjectId: this.activeObjectId,
-            activeViewId: this.activeViewId,
-            chartProjectionMode: this.chartProjectionMode,
-        };
-    }
+    private captureSceneSnapshot(): PaintSceneSnapshot { return capturePaintSceneSnapshot(this); }
 
     private restoreSceneSnapshot(snapshot: PaintSceneSnapshot) {
-        this.viewportWidth = snapshot.viewportWidth;
-        this.viewportHeight = snapshot.viewportHeight;
-        this.views = snapshot.views.map(cloneView);
-        this.objects = snapshot.objects.map(cloneObject);
-        this.strokes = snapshot.strokes.map(cloneStroke);
-        this.occlusionClaims = snapshot.occlusionClaims.map(cloneOcclusionClaim);
-        this.activeObjectId = snapshot.activeObjectId;
-        this.activeViewId = snapshot.activeViewId;
-        this.chartProjectionMode = snapshot.chartProjectionMode;
+        Object.assign(this, restorePaintSceneSnapshot(snapshot));
         this.draftStroke = null;
         this.pendingStrokeUndoSnapshot = null;
+        this.pendingGpuChartPaintRuns = [];
         this.undoGroup = null;
 
         const activeView = this.activeView;
-        if (activeView) {
-            this.orbit.long = activeView.long;
-            this.orbit.lat = activeView.lat;
-            this.orbit.radius = activeView.radius;
-            this.orbit.offset = vec3.fromValues(activeView.offset[0], activeView.offset[1], activeView.offset[2]);
-        }
-
+        if (activeView) selectPaintView(this.views, this.orbit, activeView.id);
         this.meshVersion += 1;
     }
 
-    private touchCharts(chartIds: Set<string>) {
-        if (chartIds.size === 0) return;
-        this.objects = this.objects.map(object => ({
-            ...object,
-            charts: object.charts.map(chart => chartIds.has(chart.id)
-                ? {
-                    ...chart,
-                    depths: [...chart.depths],
-                    coverage: [...chart.coverage],
-                    paint: [...chart.paint],
-                    seams: [...chart.seams],
-                }
-                : chart),
-        }));
-    }
-}
-
-function normalizeRenderOptions(options: boolean | PaintRenderOptions): Required<PaintRenderOptions> {
-    if (typeof options === "boolean") {
-        return {
-            showChartWireframe: options,
-            showSurfaceField: false,
-            showDraftStroke: true,
-        };
-    }
-    return {
-        showChartWireframe: options.showChartWireframe ?? true,
-        showSurfaceField: options.showSurfaceField ?? false,
-        showDraftStroke: options.showDraftStroke ?? true,
-    };
-}
-
-function createChart({
-    objectId,
-    sourceViewId,
-    role,
-    projectionMode,
-    depth,
-}: {
-    objectId: string;
-    sourceViewId: string;
-    role: ChartRole;
-    projectionMode: ChartProjectionMode;
-    depth: number;
-}): PaintChart {
-    return {
-        id: makeId("chart"),
-        objectId,
-        sourceViewId,
-        role,
-        projectionMode,
-        width: CHART_RESOLUTION,
-        height: CHART_RESOLUTION,
-        depths: Array.from({ length: CHART_RESOLUTION * CHART_RESOLUTION }, () => depth),
-        coverage: Array.from({ length: CHART_RESOLUTION * CHART_RESOLUTION }, () => 0),
-        paint: Array.from({ length: CHART_RESOLUTION * CHART_RESOLUTION * 4 }, () => 0),
-        seams: Array.from({ length: CHART_RESOLUTION * CHART_RESOLUTION }, () => false),
-        createdAt: Date.now(),
-    };
-}
-
-function cloneView(view: PaintView): PaintView {
-    return {
-        ...view,
-        offset: [...view.offset] as Vec3,
-        viewProjMat: [...view.viewProjMat],
-        viewProjInvMat: [...view.viewProjInvMat],
-        viewMat: [...view.viewMat],
-        viewInvMat: [...view.viewInvMat],
-    };
-}
-
-function cloneObject(object: PaintObject): PaintObject {
-    return {
-        ...object,
-        charts: object.charts.map(cloneChart),
-    };
-}
-
-function cloneChart(chart: PaintChart): PaintChart {
-    return {
-        ...chart,
-        depths: [...chart.depths],
-        coverage: [...chart.coverage],
-        paint: [...chart.paint],
-        seams: [...chart.seams],
-    };
-}
-
-function cloneStroke(stroke: PaintStroke): PaintStroke {
-    return {
-        ...stroke,
-        samples: stroke.samples.map(sample => ({
-            ...sample,
-            sourcePoint: { ...sample.sourcePoint },
-            surfaceRef: {
-                chartId: sample.surfaceRef.chartId,
-                uv: { ...sample.surfaceRef.uv },
-            },
-        })),
-        style: { ...stroke.style },
-    };
-}
-
-function cloneOcclusionClaim(claim: OcclusionClaim): OcclusionClaim {
-    return {
-        ...claim,
-        backRefs: claim.backRefs.map(ref => ({
-            chartId: ref.chartId,
-            uv: { ...ref.uv },
-        })),
-        mask: claim.mask.map(point => ({ ...point })),
-    };
-}
-
-function resamplePaintPolyline(points: Vec2[], maxSamples: number): Vec2[] {
-    if (points.length <= 1) return points.slice();
-    const length = polylineLength(points);
-    if (length <= 1e-6) return [points[0]];
-
-    const sampleCount = Math.max(2, Math.min(maxSamples, Math.ceil(length / 0.015)));
-    const spacing = length / (sampleCount - 1);
-    const out: Vec2[] = [points[0]];
-
-    let segmentStart = points[0];
-    let segmentEndIndex = 1;
-    let segmentEnd = points[segmentEndIndex];
-    let segmentLength = distance2d(segmentStart, segmentEnd);
-    let distanceIntoSegment = 0;
-
-    for (let sampleIndex = 1; sampleIndex < sampleCount - 1; sampleIndex++) {
-        const targetDistance = sampleIndex * spacing;
-
-        while (distanceIntoSegment + segmentLength < targetDistance && segmentEndIndex < points.length - 1) {
-            distanceIntoSegment += segmentLength;
-            segmentStart = segmentEnd;
-            segmentEndIndex += 1;
-            segmentEnd = points[segmentEndIndex];
-            segmentLength = distance2d(segmentStart, segmentEnd);
-        }
-
-        const local = segmentLength <= 1e-6
-            ? 0
-            : (targetDistance - distanceIntoSegment) / segmentLength;
-        out.push({
-            x: segmentStart.x + (segmentEnd.x - segmentStart.x) * local,
-            y: segmentStart.y + (segmentEnd.y - segmentStart.y) * local,
-        });
-    }
-
-    out.push(points[points.length - 1]);
-    return out;
-}
-
-function samplePaintStrokeSpline(points: Vec2[]): Vec2[] {
-    const length = polylineLength(points);
-
-    if (points.length < MIN_STROKE_SPLINE_CONTROL_POINTS) {
-        return resamplePaintPolyline(points, paintStrokePolylineSampleCount(length));
-    }
-
-    if (length <= 1e-6) return [points[0]];
-    return sampleClampedCubicBSpline(points);
-}
-
-function paintStrokePolylineSampleCount(length: number): number {
-    if (length <= 1e-6) return 1;
-    return Math.max(2, Math.ceil(length / STROKE_SPLINE_SAMPLE_SPACING) + 1);
-}
-
-function sampleClampedCubicBSpline(controls: Vec2[]): Vec2[] {
-    if (controls.length < MIN_STROKE_SPLINE_CONTROL_POINTS) {
-        return resamplePaintPolyline(controls, paintStrokePolylineSampleCount(polylineLength(controls)));
-    }
-
-    const padded = [
-        controls[0],
-        controls[0],
-        ...controls,
-        controls[controls.length - 1],
-        controls[controls.length - 1],
-    ];
-    const spanCount = Math.max(1, padded.length - 3);
-    const samples: Vec2[] = [];
-
-    for (let span = 0; span < spanCount; span++) {
-        const p0 = padded[span];
-        const p1 = padded[span + 1];
-        const p2 = padded[span + 2];
-        const p3 = padded[span + 3];
-        const segmentCount = Math.max(
-            1,
-            Math.ceil(cubicBSplineSpanLength(p0, p1, p2, p3) / STROKE_SPLINE_SAMPLE_SPACING),
-        );
-
-        if (span === 0) {
-            samples.push(cubicBSplinePoint(p0, p1, p2, p3, 0));
-        }
-        for (let i = 1; i <= segmentCount; i++) {
-            samples.push(cubicBSplinePoint(p0, p1, p2, p3, i / segmentCount));
-        }
-    }
-
-    samples[0] = controls[0];
-    samples[samples.length - 1] = controls[controls.length - 1];
-    return samples;
-}
-
-function cubicBSplineSpanLength(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2): number {
-    const steps = 4;
-    let length = 0;
-    let previous = cubicBSplinePoint(p0, p1, p2, p3, 0);
-    for (let i = 1; i <= steps; i++) {
-        const current = cubicBSplinePoint(p0, p1, p2, p3, i / steps);
-        length += distance2d(previous, current);
-        previous = current;
-    }
-    return length;
-}
-
-function cubicBSplinePoint(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: number): Vec2 {
-    const t2 = t * t;
-    const t3 = t2 * t;
-    const b0 = (-t3 + 3 * t2 - 3 * t + 1) / 6;
-    const b1 = (3 * t3 - 6 * t2 + 4) / 6;
-    const b2 = (-3 * t3 + 3 * t2 + 3 * t + 1) / 6;
-    const b3 = t3 / 6;
-
-    return {
-        x: p0.x * b0 + p1.x * b1 + p2.x * b2 + p3.x * b3,
-        y: p0.y * b0 + p1.y * b1 + p2.y * b2 + p3.y * b3,
-    };
-}
-
-function polylineLength(points: Vec2[]): number {
-    let length = 0;
-    for (let i = 1; i < points.length; i++) {
-        length += distance2d(points[i - 1], points[i]);
-    }
-    return length;
-}
-
-function distance2d(a: Vec2, b: Vec2): number {
-    return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-function appendPaintRun(
-    runs: ChartPaintRun[],
-    chart: PaintChart,
-    sample: ChartPaintSample,
-    updateDepth: boolean,
-    requireCoverage: boolean,
-    depthWriteMode: DepthWriteMode = "blend",
-) {
-    const previous = runs.at(-1);
-    if (
-        previous
-        && previous.chart.id === chart.id
-        && previous.updateDepth === updateDepth
-        && previous.requireCoverage === requireCoverage
-        && previous.depthWriteMode === depthWriteMode
-    ) {
-        previous.samples.push(sample);
-        return;
-    }
-    runs.push({ chart, samples: [sample], updateDepth, requireCoverage, depthWriteMode });
-}
-
-function appendUvRun(runs: ChartUvRun[], chart: PaintChart, point: Vec2) {
-    const previous = runs.at(-1);
-    if (previous?.chart.id === chart.id) {
-        previous.points.push(point);
-        return;
-    }
-    runs.push({ chart, points: [point] });
-}
-
-function applyStrokeToChartGeometry(
-    chart: PaintChart,
-    samples: ChartPaintSample[],
-    radius: number,
-    {
-        updateDepth,
-        requireCoverage,
-        depthWriteMode = "blend",
-    }: {
-        updateDepth: boolean;
-        requireCoverage: boolean;
-        depthWriteMode?: DepthWriteMode;
-    },
-): boolean {
-    if (samples.length === 0) return false;
-    let changed = false;
-
-    // Paint color stays in vector stroke samples. The chart grid stores only geometry coverage
-    // and depth so brushstrokes do not get baked into a low-resolution color raster.
-    forEachGridPoint(chart, (index, uv) => {
-        if (requireCoverage && !isGridPointCovered(chart, index)) return;
-        const nearest = nearestPaintSampleOnPolyline(samples, uv);
-        if (!nearest || nearest.distance > radius) return;
-        const t = nearest.distance / Math.max(radius, 1e-5);
-        const influence = (1 - t * t) ** 2;
-
-        if (updateDepth) {
-            const depth = Math.max(MIN_DEPTH, nearest.depth);
-            chart.depths[index] = depthWriteMode === "replace"
-                ? depth
-                : lerp(chart.depths[index], depth, influence);
-            chart.coverage[index] = Math.max(chart.coverage[index] ?? 0, influence);
-            changed = true;
-        }
-    });
-    return changed;
-}
-
-function markChartSeamAlongPolyline(chart: PaintChart, points: Vec2[], radius: number): boolean {
-    let changed = false;
-    forEachGridPoint(chart, (index, uv) => {
-        if (!isGridPointCovered(chart, index)) return;
-        const nearest = nearestUvOnPolyline(points, uv);
-        if (nearest && nearest.distance <= radius && !chart.seams[index]) {
-            chart.seams[index] = true;
-            changed = true;
-        }
-    });
-    return changed;
-}
-
-function nearestUvOnPolyline(points: Vec2[], uv: Vec2): { distance: number } | null {
-    if (points.length === 0) return null;
-    if (points.length === 1) {
-        return { distance: distance2d(points[0], uv) };
-    }
-
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (let i = 1; i < points.length; i++) {
-        const nearest = nearestPointOnSegment(uv, points[i - 1], points[i]);
-        if (nearest.distance < bestDistance) {
-            bestDistance = nearest.distance;
-        }
-    }
-    return { distance: bestDistance };
-}
-
-function nearestPaintSampleOnPolyline(
-    samples: ChartPaintSample[],
-    uv: Vec2,
-): { distance: number; depth: number } | null {
-    if (samples.length === 0) return null;
-    if (samples.length === 1) {
-        return {
-            distance: distance2d(samples[0].point, uv),
-            depth: samples[0].depth,
-        };
-    }
-
-    let bestDistance = Number.POSITIVE_INFINITY;
-    let bestDepth = samples[0].depth;
-    for (let i = 1; i < samples.length; i++) {
-        const previous = samples[i - 1];
-        const current = samples[i];
-        const nearest = nearestPointOnSegment(uv, previous.point, current.point);
-        if (nearest.distance < bestDistance) {
-            bestDistance = nearest.distance;
-            bestDepth = lerp(previous.depth, current.depth, nearest.t);
-        }
-    }
-    return { distance: bestDistance, depth: bestDepth };
-}
-
-function nearestPointOnSegment(point: Vec2, a: Vec2, b: Vec2): { distance: number; t: number } {
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const lengthSquared = dx * dx + dy * dy;
-    const t = lengthSquared <= 1e-10
-        ? 0
-        : clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared, 0, 1);
-    return {
-        t,
-        distance: Math.hypot(point.x - (a.x + dx * t), point.y - (a.y + dy * t)),
-    };
-}
-
-function sampleChartDepth(chart: PaintChart, uv: Vec2): number {
-    const x = clamp((uv.x * 0.5 + 0.5) * (chart.width - 1), 0, chart.width - 1);
-    const y = clamp((uv.y * 0.5 + 0.5) * (chart.height - 1), 0, chart.height - 1);
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const x1 = Math.min(chart.width - 1, x0 + 1);
-    const y1 = Math.min(chart.height - 1, y0 + 1);
-    const fx = x - x0;
-    const fy = y - y0;
-    const a = chart.depths[y0 * chart.width + x0];
-    const b = chart.depths[y0 * chart.width + x1];
-    const c = chart.depths[y1 * chart.width + x0];
-    const d = chart.depths[y1 * chart.width + x1];
-    return lerp(lerp(a, b, fx), lerp(c, d, fx), fy);
-}
-
-function chartPointToWorldFromView(chart: PaintChart, view: PaintView, uv: Vec2): Vec3 | null {
-    const ray = makeViewRay(view, uv);
-    if (!ray) return null;
-    const depth = sampleChartDepth(chart, uv);
-    if ((chart.projectionMode ?? "ray-depth") === "ray-depth") {
-        return add3(ray.origin, scale3(ray.direction, depth));
-    }
-    const normal = viewForward(view);
-    const denominator = dot3(ray.direction, normal);
-    if (Math.abs(denominator) <= 1e-6) return null;
-    const rayDistance = depth / denominator;
-    if (!Number.isFinite(rayDistance) || rayDistance <= MIN_DEPTH) return null;
-    return add3(ray.origin, scale3(ray.direction, rayDistance));
-}
-
-function viewPointToWorldAtProjectionDepth(
-    view: PaintView,
-    point: Vec2,
-    depth: number,
-    projectionMode: ChartProjectionMode,
-): Vec3 | null {
-    const ray = makeViewRay(view, point);
-    if (!ray) return null;
-    if (projectionMode === "ray-depth") {
-        return add3(ray.origin, scale3(ray.direction, Math.max(MIN_DEPTH, depth)));
-    }
-    const denominator = dot3(ray.direction, viewForward(view));
-    if (Math.abs(denominator) <= 1e-6) return null;
-    const rayDistance = Math.max(MIN_DEPTH, depth) / denominator;
-    if (!Number.isFinite(rayDistance) || rayDistance <= MIN_DEPTH) return null;
-    return add3(ray.origin, scale3(ray.direction, rayDistance));
-}
-
-function depthForProjectionAtPoint(
-    view: PaintView,
-    point: Vec2,
-    rayDistance: number,
-    projectionMode: ChartProjectionMode,
-): number {
-    if (projectionMode === "ray-depth") return rayDistance;
-    const ray = makeViewRay(view, point);
-    if (!ray) return rayDistance;
-    return Math.max(MIN_DEPTH, rayDistance * dot3(ray.direction, viewForward(view)));
-}
-
-function snapCarryDepthAtPoint(rayDistance: number): SnapCarryDepth {
-    return {
-        rayDepth: Math.max(MIN_DEPTH, rayDistance),
-    };
-}
-
-function carryStrokeDepths(
-    directDepths: Array<SnapCarryDepth | null>,
-    points: Vec2[],
-): Array<SnapCarryDepth | null> {
-    const carriedDepths = new Array<SnapCarryDepth | null>(directDepths.length).fill(null);
-    let previousHitIndex: number | null = null;
-
-    for (let index = 0; index < directDepths.length; index++) {
-        const directDepth = directDepths[index];
-        if (!directDepth) continue;
-
-        if (previousHitIndex === null) {
-            for (let fillIndex = 0; fillIndex <= index; fillIndex++) {
-                carriedDepths[fillIndex] = directDepth;
-            }
-        } else {
-            const previousDepth = directDepths[previousHitIndex]!;
-            for (let fillIndex = previousHitIndex + 1; fillIndex < index; fillIndex++) {
-                carriedDepths[fillIndex] = mixSnapCarryDepths(
-                    previousDepth,
-                    directDepth,
-                    exitEntryDepthMix(points[fillIndex], points[previousHitIndex], points[index]),
-                );
-            }
-            carriedDepths[index] = directDepth;
-        }
-
-        previousHitIndex = index;
-    }
-
-    if (previousHitIndex !== null) {
-        const finalDepth = directDepths[previousHitIndex]!;
-        for (let index = previousHitIndex; index < directDepths.length; index++) {
-            carriedDepths[index] ??= finalDepth;
-        }
-    }
-
-    return carriedDepths;
-}
-
-function mixSnapCarryDepths(a: SnapCarryDepth, b: SnapCarryDepth, t: number): SnapCarryDepth {
-    return {
-        rayDepth: lerp(a.rayDepth, b.rayDepth, t),
-    };
-}
-
-function exitEntryDepthMix(point: Vec2, exitPoint: Vec2, entryPoint: Vec2): number {
-    // extended distance/fac function;
-    //  1. 0 at the exit point
-    //  2. 1 at the entry point
-    //  3. naturally tends to 0.5 when far away from both
-    // https://www.desmos.com/calculator/fndo5xyztv
-    // https://www.desmos.com/3d/ksz46dpbr8
-    
-    const exitDistance = distance2d(point, exitPoint);
-    const entryDistance = distance2d(point, entryPoint);
-    const denominator = exitDistance + entryDistance;
-    if (denominator <= 1e-8) return 0.5;
-    // Equivalent to 1 - 1 / (1 + exitDistance / entryDistance), without a zero-entry divide.
-    return exitDistance / denominator;
-}
-
-function depthForCarriedSnapAtPoint(
-    view: PaintView,
-    point: Vec2,
-    depth: SnapCarryDepth | null,
-    projectionMode: ChartProjectionMode,
-): number | null {
-    if (!depth) return null;
-    // Carry ray distance, then convert at the fallback point. Reusing the hit point's
-    // view-plane scalar changes the actual ray depth as the cursor moves.
-    return depthForProjectionAtPoint(view, point, depth.rayDepth, projectionMode);
-}
-
-function chartHasCoverage(chart: PaintChart): boolean {
-    return chart.coverage.some(value => value > COVERAGE_EPSILON);
-}
-
-function isGridPointCovered(chart: PaintChart, index: number): boolean {
-    return (chart.coverage[index] ?? 0) > COVERAGE_EPSILON;
-}
-
-function isGridEdgeCovered(chart: PaintChart, a: number, b: number): boolean {
-    return isGridPointCovered(chart, a) && isGridPointCovered(chart, b);
-}
-
-function isGridTriangleCovered(chart: PaintChart, a: number, b: number, c: number): boolean {
-    return isGridPointCovered(chart, a) && isGridPointCovered(chart, b) && isGridPointCovered(chart, c);
-}
-
-function forEachGridPoint(chart: PaintChart, fn: (index: number, uv: Vec2) => void) {
-    for (let y = 0; y < chart.height; y++) {
-        for (let x = 0; x < chart.width; x++) {
-            fn(y * chart.width + x, gridUv(chart, x, y));
-        }
-    }
-}
-
-function gridUv(chart: PaintChart, x: number, y: number): Vec2 {
-    return {
-        x: chart.width <= 1 ? 0 : x / (chart.width - 1) * 2 - 1,
-        y: chart.height <= 1 ? 0 : y / (chart.height - 1) * 2 - 1,
-    };
-}
-
-function appendChartSegments(
-    segments: RenderPrimitive[],
-    chart: PaintChart,
-    worldAt: (uv: Vec2) => Vec3 | null,
-) {
-    if (!chartHasCoverage(chart)) return;
-
-    const gridWorldAt = cachedChartGridWorld(chart, worldAt);
-    const color = chart.role === "occluder"
-        ? [1, 0.48, 0.32, 0.38] as Vec4
-        : chart.role === "behind"
-            ? [0.46, 0.55, 1, 0.24] as Vec4
-            : [0.44, 0.92, 0.82, 0.18] as Vec4;
-    const fillColor = chart.role === "occluder"
-        ? [1, 0.44, 0.28, 0.1] as Vec4
-        : chart.role === "behind"
-            ? [0.42, 0.5, 1, 0.08] as Vec4
-            : [0.34, 0.82, 0.72, 0.085] as Vec4;
-    const stride = 4;
-
-    for (let y = 1; y < chart.height; y++) {
-        for (let x = 1; x < chart.width; x++) {
-            const i00 = (y - 1) * chart.width + x - 1;
-            const i10 = (y - 1) * chart.width + x;
-            const i01 = y * chart.width + x - 1;
-            const i11 = y * chart.width + x;
-
-            if (isGridTriangleCovered(chart, i00, i10, i11)) {
-                appendWorldTriangle(
-                    segments,
-                    gridWorldAt(x - 1, y - 1),
-                    gridWorldAt(x, y - 1),
-                    gridWorldAt(x, y),
-                    fillColor,
-                );
-            }
-            if (isGridTriangleCovered(chart, i00, i11, i01)) {
-                appendWorldTriangle(
-                    segments,
-                    gridWorldAt(x - 1, y - 1),
-                    gridWorldAt(x, y),
-                    gridWorldAt(x - 1, y),
-                    fillColor,
-                );
-            }
-        }
-    }
-
-    for (let y = 0; y < chart.height; y += stride) {
-        for (let x = 1; x < chart.width; x++) {
-            const aIndex = y * chart.width + x - 1;
-            const bIndex = y * chart.width + x;
-            if (!isGridEdgeCovered(chart, aIndex, bIndex)) continue;
-            appendWorldSegment(segments, gridWorldAt(x - 1, y), gridWorldAt(x, y), color, 1.15);
-        }
-    }
-    for (let x = 0; x < chart.width; x += stride) {
-        for (let y = 1; y < chart.height; y++) {
-            const aIndex = (y - 1) * chart.width + x;
-            const bIndex = y * chart.width + x;
-            if (!isGridEdgeCovered(chart, aIndex, bIndex)) continue;
-            appendWorldSegment(segments, gridWorldAt(x, y - 1), gridWorldAt(x, y), color, 1.15);
-        }
-    }
-
-    forEachGridPoint(chart, (index, uv) => {
-        if (!chart.seams[index]) return;
-        const a = worldAt({ x: uv.x - 0.018, y: uv.y - 0.018 });
-        const b = worldAt({ x: uv.x + 0.018, y: uv.y + 0.018 });
-        const c = worldAt({ x: uv.x - 0.018, y: uv.y + 0.018 });
-        const d = worldAt({ x: uv.x + 0.018, y: uv.y - 0.018 });
-        appendWorldSegment(segments, a, b, [1, 0.16, 0.16, 0.95], 2.4);
-        appendWorldSegment(segments, c, d, [1, 0.16, 0.16, 0.95], 2.4);
-    });
-}
-
-function cachedChartGridWorld(
-    chart: PaintChart,
-    worldAt: (uv: Vec2) => Vec3 | null,
-): (x: number, y: number) => Vec3 | null {
-    const worlds = new Array<Vec3 | null | undefined>(chart.width * chart.height);
-    return (x: number, y: number): Vec3 | null => {
-        const index = y * chart.width + x;
-        if (worlds[index] !== undefined) return worlds[index];
-        const world = worldAt(gridUv(chart, x, y));
-        worlds[index] = world;
-        return world;
-    };
-}
-
-function appendChartSurfaceFieldSegments(
-    segments: RenderPrimitive[],
-    chart: PaintChart,
-    sourceView: PaintView,
-    worldAt: (uv: Vec2) => Vec3 | null,
-) {
-    if (!chartHasCoverage(chart)) return;
-
-    for (let y = 0; y < chart.height; y += SURFACE_FIELD_STRIDE) {
-        for (let x = 0; x < chart.width; x += SURFACE_FIELD_STRIDE) {
-            const index = y * chart.width + x;
-            if (!isGridPointCovered(chart, index)) continue;
-            if (chart.seams[index]) continue;
-
-            const world = worldAt(gridUv(chart, x, y));
-            if (!world) continue;
-
-            const normal = chartSurfaceNormal(chart, sourceView, worldAt, x, y, world);
-            if (!normal) continue;
-
-            const length = clamp(
-                distance3(cameraCenter(sourceView), world) * SURFACE_FIELD_NORMAL_LENGTH,
-                0.035,
-                0.18,
-            );
-            appendWorldSegment(
-                segments,
-                world,
-                add3(world, scale3(normal, length)),
-                surfaceFieldColor(chart.role),
-                SURFACE_FIELD_NORMAL_WIDTH,
-            );
-        }
-    }
-}
-
-function chartSurfaceNormal(
-    chart: PaintChart,
-    sourceView: PaintView,
-    worldAt: (uv: Vec2) => Vec3 | null,
-    x: number,
-    y: number,
-    world: Vec3,
-): Vec3 | null {
-    const x0 = Math.max(0, x - 1);
-    const x1 = Math.min(chart.width - 1, x + 1);
-    const y0 = Math.max(0, y - 1);
-    const y1 = Math.min(chart.height - 1, y + 1);
-    if (x0 === x1 || y0 === y1) return null;
-
-    const left = worldAt(gridUv(chart, x0, y));
-    const right = worldAt(gridUv(chart, x1, y));
-    const bottom = worldAt(gridUv(chart, x, y0));
-    const top = worldAt(gridUv(chart, x, y1));
-    if (!left || !right || !bottom || !top) return null;
-
-    const horizontal = sub3(right, left);
-    const vertical = sub3(top, bottom);
-    let normal = normalize3(cross3(horizontal, vertical), viewForward(sourceView));
-    const towardCamera = sub3(cameraCenter(sourceView), world);
-    if (dot3(normal, towardCamera) < 0) normal = scale3(normal, -1);
-    return normal;
-}
-
-function surfaceFieldColor(role: ChartRole): Vec4 {
-    if (role === "occluder") return [1, 0.62, 0.42, 0.7];
-    if (role === "behind") return [0.58, 0.66, 1, 0.58];
-    return [0.74, 1, 0.9, 0.64];
-}
-
-function appendStrokeRenderSegments(
-    segments: RenderPrimitive[],
-    stroke: PaintStroke,
-    worldPointForRef: (ref: SurfaceRef) => Vec3 | null,
-) {
-    const color = parseColor(stroke.style.color, stroke.style.opacity);
-    appendWorldStrokeRun(
-        segments,
-        stroke.samples.map(sample => worldPointForRef(sample.surfaceRef)),
-        color,
-        stroke.style.width,
-    );
-}
-
-function appendWorldStrokeRun(
-    segments: RenderPrimitive[],
-    points: Array<Vec3 | null>,
-    color: Vec4,
-    width: number,
-) {
-    let run: Vec3[] = [];
-    const flushRun = () => {
-        if (run.length >= 2) {
-            segments.push({
-                kind: "stroke",
-                points: run,
-                color,
-                width,
-            });
-        }
-        run = [];
-    };
-
-    for (const point of points) {
-        if (point) {
-            run.push(point);
-        } else {
-            flushRun();
-        }
-    }
-    flushRun();
-}
-
-function appendWorldSegment(
-    segments: RenderPrimitive[],
-    a: Vec3 | null,
-    b: Vec3 | null,
-    color: Vec4,
-    width?: number,
-    caps?: { capStart: boolean; capEnd: boolean },
-) {
-    if (!a || !b) return;
-    segments.push({
-        a,
-        b,
-        color,
-        width,
-        ...caps,
-    });
-}
-
-function appendWorldTriangle(
-    segments: RenderPrimitive[],
-    a: Vec3 | null,
-    b: Vec3 | null,
-    c: Vec3 | null,
-    color: Vec4,
-) {
-    if (!a || !b || !c) return;
-    segments.push({
-        kind: "triangle",
-        a,
-        b,
-        c,
-        color,
-    });
-}
-
-function raycastChart(
-    chart: PaintChart,
-    ray: { origin: Vec3; direction: Vec3 },
-    worldAt: (uv: Vec2) => Vec3 | null,
-): Array<{ uv: Vec2; world: Vec3; t: number }> {
-    const hits: Array<{ uv: Vec2; world: Vec3; t: number }> = [];
-    const uvs = new Array<Vec2>(chart.width * chart.height);
-    const worlds = new Array<Vec3 | null | undefined>(chart.width * chart.height);
-
-    for (let y = 0; y < chart.height; y++) {
-        for (let x = 0; x < chart.width; x++) {
-            const index = y * chart.width + x;
-            uvs[index] = gridUv(chart, x, y);
-        }
-    }
-
-    const worldAtIndex = (index: number): Vec3 | null => {
-        if (worlds[index] !== undefined) return worlds[index];
-        const world = worldAt(uvs[index]);
-        worlds[index] = world;
-        return world;
-    };
-
-    for (let y = 1; y < chart.height; y++) {
-        for (let x = 1; x < chart.width; x++) {
-            const i00 = (y - 1) * chart.width + x - 1;
-            const i10 = (y - 1) * chart.width + x;
-            const i01 = y * chart.width + x - 1;
-            const i11 = y * chart.width + x;
-            const uv00 = uvs[i00];
-            const uv10 = uvs[i10];
-            const uv01 = uvs[i01];
-            const uv11 = uvs[i11];
-            if (isGridTriangleCovered(chart, i00, i10, i11)) {
-                const p00 = worldAtIndex(i00);
-                const p10 = worldAtIndex(i10);
-                const p11 = worldAtIndex(i11);
-                if (p00 && p10 && p11) {
-                    appendTriangleHit(hits, ray, p00, p10, p11, uv00, uv10, uv11);
-                }
-            }
-            if (isGridTriangleCovered(chart, i00, i11, i01)) {
-                const p00 = worldAtIndex(i00);
-                const p11 = worldAtIndex(i11);
-                const p01 = worldAtIndex(i01);
-                if (p00 && p11 && p01) {
-                    appendTriangleHit(hits, ray, p00, p11, p01, uv00, uv11, uv01);
-                }
-            }
-        }
-    }
-    return hits.sort((a, b) => a.t - b.t);
-}
-
-function appendTriangleHit(
-    hits: Array<{ uv: Vec2; world: Vec3; t: number }>,
-    ray: { origin: Vec3; direction: Vec3 },
-    p0: Vec3,
-    p1: Vec3,
-    p2: Vec3,
-    uv0: Vec2,
-    uv1: Vec2,
-    uv2: Vec2,
-) {
-    const hit = intersectRayTriangle(ray.origin, ray.direction, p0, p1, p2);
-    if (!hit) return;
-    const w0 = 1 - hit.u - hit.v;
-    hits.push({
-        t: hit.t,
-        world: add3(ray.origin, scale3(ray.direction, hit.t)),
-        uv: {
-            x: uv0.x * w0 + uv1.x * hit.u + uv2.x * hit.v,
-            y: uv0.y * w0 + uv1.y * hit.u + uv2.y * hit.v,
-        },
-    });
-}
-
-function intersectRayTriangle(
-    origin: Vec3,
-    direction: Vec3,
-    p0: Vec3,
-    p1: Vec3,
-    p2: Vec3,
-): { t: number; u: number; v: number } | null {
-    const edge1 = sub3(p1, p0);
-    const edge2 = sub3(p2, p0);
-    const h = cross3(direction, edge2);
-    const a = dot3(edge1, h);
-    if (Math.abs(a) < 1e-7) return null;
-    const f = 1 / a;
-    const s = sub3(origin, p0);
-    const u = f * dot3(s, h);
-    if (u < 0 || u > 1) return null;
-    const q = cross3(s, edge1);
-    const v = f * dot3(direction, q);
-    if (v < 0 || u + v > 1) return null;
-    const t = f * dot3(edge2, q);
-    if (!Number.isFinite(t) || t <= 1e-5) return null;
-    return { t, u, v };
-}
-
-function makeViewRay(view: PaintView, point: Vec2): { origin: Vec3; direction: Vec3 } | null {
-    const near = unprojectNdc(view.viewProjInvMat, point.x, point.y, 0.02);
-    const far = unprojectNdc(view.viewProjInvMat, point.x, point.y, 0.98);
-    if (!near || !far) return null;
-    return {
-        origin: cameraCenter(view),
-        direction: normalize3(sub3(far, near), [0, 0, -1]),
-    };
-}
-
-function cameraCenter(view: PaintView): Vec3 {
-    return [view.viewInvMat[12], view.viewInvMat[13], view.viewInvMat[14]];
-}
-
-function viewForward(view: PaintView): Vec3 {
-    return makeViewRay(view, { x: 0, y: 0 })?.direction ?? [0, 0, -1];
-}
-
-function unprojectNdc(invViewProjMat: number[], x: number, y: number, z: number): Vec3 | null {
-    const worldX = invViewProjMat[0] * x + invViewProjMat[4] * y + invViewProjMat[8] * z + invViewProjMat[12];
-    const worldY = invViewProjMat[1] * x + invViewProjMat[5] * y + invViewProjMat[9] * z + invViewProjMat[13];
-    const worldZ = invViewProjMat[2] * x + invViewProjMat[6] * y + invViewProjMat[10] * z + invViewProjMat[14];
-    const worldW = invViewProjMat[3] * x + invViewProjMat[7] * y + invViewProjMat[11] * z + invViewProjMat[15];
-    if (!Number.isFinite(worldW) || Math.abs(worldW) <= 1e-6) return null;
-    return [worldX / worldW, worldY / worldW, worldZ / worldW];
-}
-
-function projectVisiblePoint(viewProjMat: number[] | Float32Array, p: Vec3): Vec2 | null {
-    const clipX = viewProjMat[0] * p[0] + viewProjMat[4] * p[1] + viewProjMat[8] * p[2] + viewProjMat[12];
-    const clipY = viewProjMat[1] * p[0] + viewProjMat[5] * p[1] + viewProjMat[9] * p[2] + viewProjMat[13];
-    const clipZ = viewProjMat[2] * p[0] + viewProjMat[6] * p[1] + viewProjMat[10] * p[2] + viewProjMat[14];
-    const clipW = viewProjMat[3] * p[0] + viewProjMat[7] * p[1] + viewProjMat[11] * p[2] + viewProjMat[15];
-    if (!Number.isFinite(clipW) || clipW <= 1e-5) return null;
-    const x = clipX / clipW;
-    const y = clipY / clipW;
-    const z = clipZ / clipW;
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
-    if (z < -0.02 || z > 1.02) return null;
-    return { x, y };
-}
-
-function parseColor(color: string, opacity: number): Vec4 {
-    const hex = color.startsWith("#") ? color.slice(1) : color;
-    if (hex.length === 6) {
-        const r = Number.parseInt(hex.slice(0, 2), 16) / 255;
-        const g = Number.parseInt(hex.slice(2, 4), 16) / 255;
-        const b = Number.parseInt(hex.slice(4, 6), 16) / 255;
-        if ([r, g, b].every(Number.isFinite)) return [r, g, b, opacity];
-    }
-    return [1, 1, 1, opacity];
-}
-
-function add3(a: Vec3, b: Vec3): Vec3 {
-    return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-}
-
-function sub3(a: Vec3, b: Vec3): Vec3 {
-    return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-}
-
-function scale3(v: Vec3, scale: number): Vec3 {
-    return [v[0] * scale, v[1] * scale, v[2] * scale];
-}
-
-function dot3(a: Vec3, b: Vec3): number {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-function cross3(a: Vec3, b: Vec3): Vec3 {
-    return [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ];
-}
-
-function distance3(a: Vec3, b: Vec3): number {
-    return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-}
-
-function normalize3(v: Vec3, fallback: Vec3): Vec3 {
-    const length = Math.hypot(v[0], v[1], v[2]);
-    if (!Number.isFinite(length) || length <= 1e-8) return [...fallback] as Vec3;
-    return [v[0] / length, v[1] / length, v[2] / length];
-}
-
-function lerp(a: number, b: number, t: number): number {
-    return a + (b - a) * t;
-}
-
-function clamp(value: number, min: number, max: number): number {
-    return Math.max(min, Math.min(max, value));
-}
-
-function makeId(prefix: string): string {
-    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    private touchCharts(chartIds: Set<string>) { this.objects = touchPaintCharts(this.objects, chartIds); }
 }
