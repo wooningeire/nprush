@@ -865,7 +865,7 @@ export class PaintModelingState {
 
         return {
             hits,
-            carriedDepths: carryStrokeDepths(directDepths),
+            carriedDepths: carryStrokeDepths(directDepths, points),
         };
     }
 
@@ -1485,21 +1485,59 @@ function snapCarryDepthAtPoint(rayDistance: number): SnapCarryDepth {
     };
 }
 
-function carryStrokeDepths(directDepths: Array<SnapCarryDepth | null>): Array<SnapCarryDepth | null> {
+function carryStrokeDepths(
+    directDepths: Array<SnapCarryDepth | null>,
+    points: Vec2[],
+): Array<SnapCarryDepth | null> {
     const carriedDepths = new Array<SnapCarryDepth | null>(directDepths.length).fill(null);
-    let lastDepth: SnapCarryDepth | null = null;
+    let previousHitIndex: number | null = null;
+
     for (let index = 0; index < directDepths.length; index++) {
-        lastDepth = directDepths[index] ?? lastDepth;
-        carriedDepths[index] = lastDepth;
+        const directDepth = directDepths[index];
+        if (!directDepth) continue;
+
+        if (previousHitIndex === null) {
+            for (let fillIndex = 0; fillIndex <= index; fillIndex++) {
+                carriedDepths[fillIndex] = directDepth;
+            }
+        } else {
+            const previousDepth = directDepths[previousHitIndex]!;
+            for (let fillIndex = previousHitIndex + 1; fillIndex < index; fillIndex++) {
+                carriedDepths[fillIndex] = mixSnapCarryDepths(
+                    previousDepth,
+                    directDepth,
+                    exitEntryDepthMix(points[fillIndex], points[previousHitIndex], points[index]),
+                );
+            }
+            carriedDepths[index] = directDepth;
+        }
+
+        previousHitIndex = index;
     }
 
-    let firstDepthAhead: SnapCarryDepth | null = null;
-    for (let index = directDepths.length - 1; index >= 0; index--) {
-        firstDepthAhead = directDepths[index] ?? firstDepthAhead;
-        carriedDepths[index] ??= firstDepthAhead;
+    if (previousHitIndex !== null) {
+        const finalDepth = directDepths[previousHitIndex]!;
+        for (let index = previousHitIndex; index < directDepths.length; index++) {
+            carriedDepths[index] ??= finalDepth;
+        }
     }
 
     return carriedDepths;
+}
+
+function mixSnapCarryDepths(a: SnapCarryDepth, b: SnapCarryDepth, t: number): SnapCarryDepth {
+    return {
+        rayDepth: lerp(a.rayDepth, b.rayDepth, t),
+    };
+}
+
+function exitEntryDepthMix(point: Vec2, exitPoint: Vec2, entryPoint: Vec2): number {
+    const exitDistance = distance2d(point, exitPoint);
+    const entryDistance = distance2d(point, entryPoint);
+    const denominator = exitDistance + entryDistance;
+    if (denominator <= 1e-8) return 0.5;
+    // Equivalent to 1 - 1 / (1 + exitDistance / entryDistance), without a zero-entry divide.
+    return exitDistance / denominator;
 }
 
 function depthForCarriedSnapAtPoint(

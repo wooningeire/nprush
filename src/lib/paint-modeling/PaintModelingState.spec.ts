@@ -128,6 +128,61 @@ describe("PaintModelingState prototype", () => {
         expect(Math.max(...depthSteps)).toBeLessThan(0.025);
     });
 
+    it("mixes snap fallback depth between exit and reentry hits", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setBrushWidth(42);
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.74, y: 0.16 }, { x: -0.48, y: 0.16 });
+        drawStroke(state, { x: 0.22, y: -0.12 }, { x: 0.5, y: -0.12 });
+
+        const sourceChart = state.activeObject!.charts[0];
+        const exitRef = state.strokes[0].samples[Math.floor(state.strokes[0].samples.length / 2)].surfaceRef;
+        const entryRef = state.strokes[1].samples[Math.floor(state.strokes[1].samples.length / 2)].surfaceRef;
+
+        state.orbit.turn({ x: 62, y: 16 });
+        state.ensureActiveView(800, 600);
+        const laterView = state.activeView!;
+        const exitPoint = state.projectSurfaceRef(exitRef, laterView)!;
+        const entryPoint = state.projectSurfaceRef(entryRef, laterView)!;
+
+        state.setBrushWidth(18);
+        state.setPlacementMode("snap");
+        drawStroke(state, exitPoint, entryPoint);
+
+        const laterStroke = state.strokes.at(-1)!;
+        const gapStart = laterStroke.samples.findIndex((sample, index) =>
+            index > 0
+            && sample.surfaceRef.chartId !== sourceChart.id
+            && laterStroke.samples[index - 1].surfaceRef.chartId === sourceChart.id
+        );
+        const gapEnd = laterStroke.samples.findIndex((sample, index) =>
+            gapStart >= 0
+            && index > gapStart
+            && sample.surfaceRef.chartId === sourceChart.id
+        );
+
+        expect(gapStart).toBeGreaterThan(0);
+        expect(gapEnd).toBeGreaterThan(gapStart + 6);
+
+        const exitSample = laterStroke.samples[gapStart - 1];
+        const entrySample = laterStroke.samples[gapEnd];
+        const exitDepth = strokeSampleRayDepthInView(state, laterView, exitSample);
+        const entryDepth = strokeSampleRayDepthInView(state, laterView, entrySample);
+        const gapSamples = laterStroke.samples.slice(gapStart, gapEnd);
+        const depthErrors = gapSamples.map(sample => {
+            const expectedDepth = lerpNumber(
+                exitDepth,
+                entryDepth,
+                depthMixFactor(sample.sourcePoint, exitSample.sourcePoint, entrySample.sourcePoint),
+            );
+            return Math.abs(strokeSampleRayDepthInView(state, laterView, sample) - expectedDepth);
+        });
+
+        expect(Math.abs(entryDepth - exitDepth)).toBeGreaterThan(0.08);
+        expect(Math.max(...depthErrors)).toBeLessThan(0.04);
+    });
+
     it("backfills leading snap misses from the first surface depth", () => {
         const state = new PaintModelingState();
         state.addObject();
@@ -888,6 +943,22 @@ function viewRay(view: PaintView, point: Vec2): { origin: Vec3; direction: Vec3 
         origin: cameraCenter(view.viewInvMat),
         direction: normalize3(sub3(far, near)),
     };
+}
+
+function lerpNumber(a: number, b: number, t: number): number {
+    return a + (b - a) * t;
+}
+
+function depthMixFactor(point: Vec2, exitPoint: Vec2, entryPoint: Vec2): number {
+    const exitDistance = distance2d(point, exitPoint);
+    const entryDistance = distance2d(point, entryPoint);
+    const denominator = exitDistance + entryDistance;
+    if (denominator <= 1e-8) return 0.5;
+    return exitDistance / denominator;
+}
+
+function distance2d(a: Vec2, b: Vec2): number {
+    return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
 function sub3(a: Vec3, b: Vec3): Vec3 {
