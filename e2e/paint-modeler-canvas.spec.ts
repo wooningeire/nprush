@@ -29,6 +29,11 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await expect(page.getByLabel("Brush lattice")).toHaveCount(0);
     await expect(page.getByLabel("Seam size")).toHaveCount(0);
     await expect(page.getByLabel("Surface field")).not.toBeChecked();
+    await expect(page.getByRole("group", { name: "Brush mode" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Surface" }).click();
+    await expect(page.getByRole("button", { name: "Surface" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Color")).toBeDisabled();
 
     await page.getByLabel("Width").evaluate(element => {
         const input = element as HTMLInputElement;
@@ -51,20 +56,38 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await page.mouse.up();
 
     await expect(page.getByText("Charts 1")).toBeVisible();
+    await expect(page.getByText("1c 0s")).toBeVisible();
 
-    const withoutSurfaceField = await page.locator("canvas").screenshot();
-    await page.getByLabel("Surface field").check();
-    await expect(page.getByLabel("Surface field")).toBeChecked();
+    await page.mouse.move(cx, cy);
+    await page.mouse.down({ button: "middle" });
+    await page.mouse.move(cx + 90, cy + 24, { steps: 6 });
+    await page.mouse.up({ button: "middle" });
     await waitForAnimationFrame(page);
-    const withSurfaceField = await page.locator("canvas").screenshot();
-    expect(withSurfaceField.equals(withoutSurfaceField)).toBe(false);
+
+    const rendererUnavailable = await page.getByText("WebGPU unavailable").isVisible().catch(() => false);
+    if (rendererUnavailable) {
+        await expect(page.getByText("WebGPU unavailable")).toBeVisible();
+        await page.getByLabel("Surface field").check();
+        await expect(page.getByLabel("Surface field")).toBeChecked();
+    } else {
+        const withoutSurfaceField = await page.locator("canvas").screenshot();
+        await page.getByLabel("Surface field").check();
+        await expect(page.getByLabel("Surface field")).toBeChecked();
+        await waitForAnimationFrame(page);
+        const withSurfaceField = await page.locator("canvas").screenshot();
+        expect(withSurfaceField.equals(withoutSurfaceField)).toBe(false);
+    }
     await page.getByLabel("Surface field").uncheck();
+    await page.getByRole("button", { name: "Color" }).click();
+    await expect(page.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Color")).toBeEnabled();
 
     await page.mouse.move(cx - 130, cy + 74);
     await page.mouse.down();
     await page.mouse.move(cx + 42, cy + 84, { steps: 6 });
     await expect(page.locator(".draft")).toHaveCount(0);
     await page.mouse.up();
+    await expect(page.getByText(/\d+c 1s/)).toBeVisible();
 
     expect(consoleProblems).toEqual([]);
 });

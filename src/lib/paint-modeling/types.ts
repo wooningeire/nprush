@@ -7,6 +7,7 @@ export type Vec3 = [number, number, number];
 export type Vec4 = [number, number, number, number];
 
 export type PlacementMode = "snap" | "new-surface" | "occluding-surface" | "paint-behind";
+export type BrushMode = "color" | "surface";
 export type ChartRole = "surface" | "occluder" | "behind";
 export type ChartProjectionMode = "view-plane" | "ray-depth";
 

@@ -45,6 +45,8 @@ $effect(() => {
     modelerState.activeObjectId;
     modelerState.draftStroke;
     modelerState.brush;
+    modelerState.brushMode;
+    modelerState.placementMode;
     showChartWireframe;
     showSurfaceField;
     requestRender();
@@ -197,6 +199,8 @@ function draftRenderKey(): string {
     return [
         "draft",
         draft.length,
+        modelerState.brushMode,
+        modelerState.placementMode,
         last.x.toFixed(4),
         last.y.toFixed(4),
         modelerState.brush.color,
@@ -230,11 +234,32 @@ function draftRenderKey(): string {
 
         <section>
             <div class="section-title">Brush</div>
+            <div class="mode-row" role="group" aria-label="Brush mode">
+                <button
+                    type="button"
+                    class:active={modelerState.brushMode === "color"}
+                    aria-pressed={modelerState.brushMode === "color"}
+                    onclick={() => {
+                        modelerState.setBrushMode("color");
+                        requestRender();
+                    }}
+                >Color</button>
+                <button
+                    type="button"
+                    class:active={modelerState.brushMode === "surface"}
+                    aria-pressed={modelerState.brushMode === "surface"}
+                    onclick={() => {
+                        modelerState.setBrushMode("surface");
+                        requestRender();
+                    }}
+                >Surface</button>
+            </div>
             <label class="color-row">
                 <span>Color</span>
                 <input
                     type="color"
                     value={modelerState.brush.color}
+                    disabled={modelerState.brushMode === "surface"}
                     oninput={(event) => modelerState.setBrushColor((event.currentTarget as HTMLInputElement).value)}
                 />
             </label>
@@ -443,6 +468,23 @@ button {
     gap: 0.45rem;
 }
 
+.mode-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.35rem;
+
+    button {
+        min-width: 0;
+        padding: 0.35rem 0.5rem;
+
+        &.active {
+            border-color: oklch(78% 0.08 185 / 0.65);
+            background: oklch(56% 0.07 190 / 0.28);
+            color: oklch(94% 0.03 185);
+        }
+    }
+}
+
 .color-row,
 .range-row,
 .toggle-row {
@@ -462,6 +504,11 @@ button {
         padding: 0;
         border: 0;
         background: transparent;
+
+        &:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
     }
 }
 

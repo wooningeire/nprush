@@ -3,6 +3,7 @@ import { Camera } from "../viewer/Camera.svelte.ts";
 import { CameraOrbit } from "../viewer/CameraOrbit.svelte.ts";
 import type {
     BrushStyle,
+    BrushMode,
     ChartRole,
     ChartProjectionMode,
     OcclusionClaim,
@@ -79,8 +80,9 @@ export class PaintModelingState {
     occlusionClaims = $state<OcclusionClaim[]>([]);
     activeObjectId = $state<string | null>(null);
     activeViewId = $state<string | null>(null);
-    placementMode = $state<PlacementMode>("new-surface");
+    placementMode = $state<PlacementMode>("snap");
     chartProjectionMode = $state<ChartProjectionMode>("view-plane");
+    brushMode = $state<BrushMode>("color");
     brush = $state<BrushStyle>({ ...DEFAULT_BRUSH });
     draftStroke = $state<Vec2[] | null>(null);
     undoStack = $state<PaintSceneSnapshot[]>([]);
@@ -162,6 +164,10 @@ export class PaintModelingState {
         this.placementMode = mode;
     }
 
+    setBrushMode(mode: BrushMode) {
+        this.brushMode = mode;
+    }
+
     setChartProjectionMode(mode: ChartProjectionMode) {
         this.chartProjectionMode = mode;
     }
@@ -240,6 +246,23 @@ export class PaintModelingState {
         }
 
         const sourcePoints = samplePaintStrokeSpline(this.draftStroke);
+        if (this.brushMode === "surface") {
+            const touchedChartIds = this.placeSurfaceBrushMask(object, view, sourcePoints);
+            if (touchedChartIds.size === 0) {
+                this.draftStroke = null;
+                this.restoreSceneSnapshot(undoSnapshot);
+                this.pendingStrokeUndoSnapshot = null;
+                return;
+            }
+
+            this.pushUndoSnapshot(undoSnapshot);
+            this.touchCharts(touchedChartIds);
+            this.draftStroke = null;
+            this.pendingStrokeUndoSnapshot = null;
+            this.meshVersion += 1;
+            return;
+        }
+
         const strokeSamples = this.placeStrokeSamples(object, view, sourcePoints, this.placementMode);
         if (strokeSamples.samples.length < 2) {
             this.draftStroke = null;
@@ -511,7 +534,9 @@ export class PaintModelingState {
         const view = this.activeView;
         if (!this.draftStroke || this.draftStroke.length < 2 || !object?.visible || object.locked || !view) return;
 
-        const color = parseColor(this.brush.color, this.brush.opacity);
+        const color = this.brushMode === "surface"
+            ? [0.44, 0.92, 0.82, 0.68] as Vec4
+            : parseColor(this.brush.color, this.brush.opacity);
         const points = samplePaintStrokeSpline(this.draftStroke);
         const previewDepth = this.draftStrokePreviewDepth(object, view);
         appendWorldStrokeRun(
@@ -523,7 +548,12 @@ export class PaintModelingState {
     }
 
     private draftStrokePreviewDepth(object: PaintObject, view: PaintView): number {
-        if (this.placementMode !== "snap" || !this.draftStroke || this.draftStroke.length === 0) {
+        if (
+            this.brushMode === "surface"
+            || this.placementMode !== "snap"
+            || !this.draftStroke
+            || this.draftStroke.length === 0
+        ) {
             return this.defaultDepthForView(view);
         }
         const cursor = this.draftStroke.at(-1)!;
@@ -539,6 +569,9 @@ export class PaintModelingState {
         point: Vec2,
         previewDepth: number,
     ): Vec3 | null {
+        if (this.brushMode === "surface") {
+            return viewPointToWorldAtProjectionDepth(view, point, previewDepth, "view-plane");
+        }
         if (this.placementMode === "snap") {
             return viewPointToWorldAtProjectionDepth(view, point, previewDepth, this.chartProjectionMode);
         }
@@ -624,6 +657,26 @@ export class PaintModelingState {
             viewInvMat: Array.from(this.camera.viewInvMat),
             createdAt: Date.now(),
         };
+    }
+
+    private placeSurfaceBrushMask(
+        object: PaintObject,
+        view: PaintView,
+        points: Vec2[],
+    ): Set<string> {
+        const chart = this.getOrCreateChart(object, view, "surface", "view-plane");
+        const depth = this.defaultDepthForView(view);
+        const changed = applyStrokeToChartGeometry(
+            chart,
+            points.map(point => ({ point, depth })),
+            this.paintDepthRadiusForView(view),
+            {
+                updateDepth: true,
+                requireCoverage: false,
+            },
+        );
+
+        return changed ? new Set([chart.id]) : new Set();
     }
 
     private placeStrokeSamples(
@@ -795,8 +848,12 @@ export class PaintModelingState {
             || this.objects.some(object => object.charts.some(chart => chart.sourceViewId === viewId));
     }
 
-    private getOrCreateChart(object: PaintObject, view: PaintView, role: ChartRole): PaintChart {
-        const projectionMode = this.chartProjectionMode;
+    private getOrCreateChart(
+        object: PaintObject,
+        view: PaintView,
+        role: ChartRole,
+        projectionMode: ChartProjectionMode = this.chartProjectionMode,
+    ): PaintChart {
         const existing = object.charts.find(chart =>
             chart.sourceViewId === view.id
             && chart.role === role

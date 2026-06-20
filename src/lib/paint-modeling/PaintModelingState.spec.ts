@@ -52,6 +52,100 @@ describe("PaintModelingState prototype", () => {
         expect(state.activeObject?.charts.length).toBe(1);
     });
 
+    it("creates surface-only brush masks without visible paint strokes", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setBrushMode("surface");
+        state.setBrushWidth(36);
+        drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
+
+        const chart = state.activeObject!.charts[0];
+        const noWirePrimitives = state.buildRenderSegments({ showChartWireframe: false });
+        const wirePrimitives = state.buildRenderSegments({ showChartWireframe: true });
+
+        expect(state.strokes).toHaveLength(0);
+        expect(state.occlusionClaims).toHaveLength(0);
+        expect(chart.role).toBe("surface");
+        expect(chart.projectionMode).toBe("view-plane");
+        expect(coveredTexelCount(state)).toBeGreaterThan(0);
+        expect(noWirePrimitives.filter(isRenderStroke)).toHaveLength(0);
+        expect(wirePrimitives.filter(isRenderSegment).length).toBeGreaterThan(0);
+    });
+
+    it("undoes a surface brush mask together with auto-created object and view", () => {
+        const state = new PaintModelingState();
+        state.setBrushMode("surface");
+        drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
+
+        expect(state.objects).toHaveLength(1);
+        expect(state.views).toHaveLength(1);
+        expect(state.chartCount).toBe(1);
+        expect(state.strokes).toHaveLength(0);
+
+        expect(state.undo()).toBe(true);
+
+        expect(state.objects).toHaveLength(0);
+        expect(state.views).toHaveLength(0);
+        expect(state.chartCount).toBe(0);
+        expect(state.activeObjectId).toBeNull();
+        expect(state.activeViewId).toBeNull();
+    });
+
+    it("snaps later-view color strokes to surface-only masks", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setBrushMode("surface");
+        drawStroke(state, { x: -0.22, y: 0 }, { x: 0.22, y: 0 });
+
+        const surfaceChart = state.activeObject!.charts[0];
+        const surfaceRef = { chartId: surfaceChart.id, uv: { x: 0, y: 0 } };
+
+        state.orbit.turn({ x: 42, y: 0 });
+        state.ensureActiveView(800, 600);
+        const laterPoint = state.projectSurfaceRef(surfaceRef, state.activeView)!;
+
+        state.setBrushMode("color");
+        drawStroke(state, { x: laterPoint.x - 0.025, y: laterPoint.y }, { x: laterPoint.x + 0.025, y: laterPoint.y });
+
+        const snappedStroke = state.strokes.at(-1)!;
+        expect(snappedStroke.placement).toBe("snap");
+        expect(snappedStroke.samples.some(sample => sample.surfaceRef.chartId === surfaceChart.id)).toBe(true);
+        expect(state.activeObject?.charts.length).toBe(1);
+    });
+
+    it("keeps color brush fallback geometry when no surface exists", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        drawStroke(state, { x: -0.16, y: 0 }, { x: 0.16, y: 0 });
+
+        const primitives = state.buildRenderSegments({ showChartWireframe: false });
+        const brushStrokes = strokeRunsForWidth(primitives, 18);
+
+        expect(state.placementMode).toBe("snap");
+        expect(state.strokes).toHaveLength(1);
+        expect(state.activeObject?.charts.length).toBe(1);
+        expect(coveredTexelCount(state)).toBeGreaterThan(0);
+        expect(strokeSegmentCount(brushStrokes)).toBeGreaterThan(0);
+    });
+
+    it("forces surface brush masks onto a flat view-plane chart", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setChartProjectionMode("ray-depth");
+        state.setBrushMode("surface");
+        drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
+
+        const chart = state.activeObject!.charts[0];
+        const coveredDepths = chart.depths.filter((_, index) => chart.coverage[index] > 0.015);
+        const firstDepth = coveredDepths[0];
+
+        expect(chart.projectionMode).toBe("view-plane");
+        expect(coveredDepths.length).toBeGreaterThan(0);
+        for (const depth of coveredDepths) {
+            expect(depth).toBeCloseTo(firstDepth, 10);
+        }
+    });
+
     it("creates a foreground chart and view-local ordering claim in occlude mode", () => {
         const state = new PaintModelingState();
         state.addObject();
