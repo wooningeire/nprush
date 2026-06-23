@@ -8,12 +8,6 @@ import { carryStrokeDepths, snapCarryDepthAtPoint } from "./state/snapDepthCarry
 import type { SnapPlacementPlan } from "./state/strokePlacement.ts";
 import type { Vec2 } from "./types.ts";
 
-let {
-    active,
-}: {
-    active: boolean,
-} = $props();
-
 const modelerState = new PaintModelingState();
 
 let canvas = $state<HTMLCanvasElement | null>(null);
@@ -57,11 +51,7 @@ $effect(() => {
 });
 
 $effect(() => {
-    if (active) {
         requestRender();
-    } else {
-        cancelRender();
-    }
 });
 
 onDestroy(() => {
@@ -96,7 +86,7 @@ async function ensureRenderer() {
 }
 
 function requestRender() {
-    if (!active || renderFrameId !== null) return;
+    if (renderFrameId !== null) return;
     renderFrameId = requestAnimationFrame(() => {
         renderFrameId = null;
         void render();
@@ -114,7 +104,6 @@ function setShowSurfaceField(value: boolean) {
 }
 
 async function render() {
-    if (!active) return;
     await ensureRenderer();
     if (!renderer) return;
 
@@ -153,7 +142,7 @@ function cancelRender() {
 }
 
 function onPointerDown(event: PointerEvent) {
-    if (!active || finishingStroke) return;
+    if (finishingStroke) return;
     const target = event.currentTarget as HTMLElement;
     target.setPointerCapture(event.pointerId);
     const point = pointerNdc(event, target);
@@ -170,7 +159,6 @@ function onPointerDown(event: PointerEvent) {
 }
 
 function onPointerMove(event: PointerEvent) {
-    if (!active) return;
     const target = event.currentTarget as HTMLElement;
     const point = pointerNdc(event, target);
 

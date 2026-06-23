@@ -2,4 +2,4 @@
 import BrushstrokeOptimizer from "$/viewer/BrushstrokeOptimizer.svelte";
 </script>
 
-<BrushstrokeOptimizer active />
+<BrushstrokeOptimizer />

@@ -1,15 +1,9 @@
 <script lang="ts">
-import { onMount, untrack } from "svelte";
+import { onDestroy, onMount, untrack } from "svelte";
 
 import ViewPanelGrid from "./ViewPanelGrid.svelte";
 import ControlPanel from "./ControlPanel.svelte";
 import { ViewerState } from "./ViewerState.svelte.ts";
-
-let {
-    active,
-}: {
-    active: boolean,
-} = $props();
 
 let canvases = $state<Record<string, HTMLCanvasElement>>({});
 let canvasesPromise = Promise.withResolvers<Record<string, HTMLCanvasElement>>();
@@ -31,17 +25,14 @@ $effect(() => {
         return;
     }
 
-    if (active) {
-        untrack(() => {
-            lastStopLoop = viewerState.runner?.loop() ?? null;
-        });
-    } else {
-        untrack(() => {
-            lastStopLoop?.();
-            lastStopLoop = null;
-        });
-    }
+    untrack(() => {
+        lastStopLoop = viewerState.runner?.loop() ?? null;
+    });
 })
+
+onDestroy(() => {
+    lastStopLoop?.();
+});
 </script>
 
 <brushstroke-optimizer-content>
