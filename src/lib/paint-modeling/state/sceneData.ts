@@ -4,6 +4,7 @@ import type {
     ChartRole,
     OcclusionClaim,
     PaintChart,
+    PaintLayer,
     PaintObject,
     PaintStroke,
     PaintView,
@@ -64,6 +65,8 @@ export const cloneChart = (chart: PaintChart): PaintChart => {
         seams: [...chart.seams],
     };
 };
+
+export const clonePaintLayer = (layer: PaintLayer): PaintLayer => ({ ...layer });
 
 export const cloneStroke = (stroke: PaintStroke): PaintStroke => {
     return {

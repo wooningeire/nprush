@@ -17,6 +17,19 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await dismissStartupAlerts(page, 700);
     await expect(page.locator("paint-viewport")).toBeVisible();
     await page.getByRole("button", { name: "Add Object" }).click();
+    const paintLayers = page.locator("section").filter({ hasText: "Paint Layers" });
+    await expect(paintLayers.getByRole("button", { name: /Layer 1\s+0s/ })).toHaveClass(/active/);
+    await paintLayers.getByRole("button", { name: "Add" }).click();
+    await expect(paintLayers.getByRole("button", { name: /Layer 2\s+0s/ })).toHaveClass(/active/);
+    await paintLayers.getByRole("button", { name: /Layer 1\s+0s/ }).click();
+    await expect(paintLayers.getByRole("button", { name: /Layer 1\s+0s/ })).toHaveClass(/active/);
+
+    const layerBox = await paintLayers.boundingBox();
+    const controlPanelBox = await page.locator(".control-panel").boundingBox();
+    if (!layerBox || !controlPanelBox) throw new Error("paint layer controls missing");
+    expect(layerBox.x).toBeGreaterThanOrEqual(controlPanelBox.x - 1);
+    expect(layerBox.x + layerBox.width).toBeLessThanOrEqual(controlPanelBox.x + controlPanelBox.width + 1);
+
     await expect(page.getByRole("button", { name: "Depth Brush" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Depth Pull" })).toHaveCount(0);
     await expect(page.getByText("Placement", { exact: true })).toHaveCount(0);
@@ -117,6 +130,7 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await expect(page.locator(".draft")).toHaveCount(0);
     await page.mouse.up();
     await expect(page.getByText(/\d+c 1s/)).toBeVisible();
+    await expect(paintLayers.getByRole("button", { name: /Layer 1\s+1s/ })).toBeVisible();
 
     expect(consoleProblems).toEqual([]);
 });

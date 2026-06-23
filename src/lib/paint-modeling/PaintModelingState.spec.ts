@@ -369,6 +369,20 @@ describe("PaintModelingState prototype", () => {
         expect(state.buildRenderSegments(true).filter(isRenderSegment).length).toBe(sceneSegmentCount);
     });
 
+    it("undoes paint layer creation", () => {
+        const state = new PaintModelingState();
+        const baseLayerId = state.activePaintLayerId;
+        const layer = state.addPaintLayer();
+
+        expect(state.paintLayers.map(item => item.id)).toEqual([baseLayerId, layer.id]);
+        expect(state.activePaintLayerId).toBe(layer.id);
+
+        expect(state.undo()).toBe(true);
+
+        expect(state.paintLayers.map(item => item.id)).toEqual([baseLayerId]);
+        expect(state.activePaintLayerId).toBe(baseLayerId);
+    });
+
     it("undoes a paint stroke together with auto-created object and view", () => {
         const state = new PaintModelingState();
         state.setPlacementMode("new-surface");
@@ -901,6 +915,60 @@ describe("PaintModelingState prototype", () => {
     });
 
 
+    it("renders same-layer strokes by camera depth instead of paint order", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        state.setBrushColor("#ff0000");
+        drawStroke(state, { x: -0.26, y: -0.08 }, { x: 0.26, y: -0.08 });
+
+        const nearChart = state.activeObject!.charts.find(chart => chart.role === "surface")!;
+
+        state.setPlacementMode("occluding-surface");
+        state.setBrushColor("#0000ff");
+        drawStroke(state, { x: -0.24, y: 0.08 }, { x: 0.24, y: 0.08 });
+
+        const farChart = state.activeObject!.charts.find(chart => chart.role === "occluder")!;
+        setChartDepth(nearChart, 1);
+        setChartDepth(farChart, 2);
+
+        const brushStrokes = state.buildRenderSegments({ showChartWireframe: false }).filter(isRenderStroke);
+
+        expect(state.strokes.map(stroke => stroke.style.color)).toEqual(["#ff0000", "#0000ff"]);
+        expect(brushStrokes.map(stroke => stroke.color.slice(0, 3))).toEqual([
+            [0, 0, 1],
+            [1, 0, 0],
+        ]);
+    });
+
+    it("renders higher paint layers above lower layers even when farther away", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        state.setBrushColor("#ff0000");
+        drawStroke(state, { x: -0.26, y: -0.08 }, { x: 0.26, y: -0.08 });
+
+        const baseChart = state.activeObject!.charts.find(chart => chart.role === "surface")!;
+        const topLayer = state.addPaintLayer();
+
+        state.setPlacementMode("occluding-surface");
+        state.setBrushColor("#0000ff");
+        drawStroke(state, { x: -0.24, y: 0.08 }, { x: 0.24, y: 0.08 });
+
+        const topChart = state.activeObject!.charts.find(chart => chart.role === "occluder")!;
+        setChartDepth(baseChart, 1);
+        setChartDepth(topChart, 2);
+
+        const brushStrokes = state.buildRenderSegments({ showChartWireframe: false }).filter(isRenderStroke);
+
+        expect(state.paintLayers).toHaveLength(2);
+        expect(state.strokes[1].layerId).toBe(topLayer.id);
+        expect(brushStrokes.map(stroke => stroke.color.slice(0, 3))).toEqual([
+            [1, 0, 0],
+            [0, 0, 1],
+        ]);
+    });
+
     it("renders ribbon brush paths as source-view mesh lines on the snapped centerline", () => {
         const state = new PaintModelingState();
         state.addObject();
@@ -1106,6 +1174,10 @@ function strokeRunsForWidth(primitives: RenderPrimitive[], width: number): Rende
 
 function strokeSegmentCount(strokes: RenderStroke[]): number {
     return strokes.reduce((count, stroke) => count + Math.max(0, stroke.points.length - 1), 0);
+}
+
+function setChartDepth(chart: PaintChart, depth: number) {
+    chart.depths.fill(depth);
 }
 
 function bendChartDepths(chart: PaintChart) {

@@ -1,4 +1,5 @@
 import {
+    clonePaintLayer,
     cloneObject,
     cloneOcclusionClaim,
     cloneStroke,
@@ -7,6 +8,7 @@ import {
 import type {
     ChartProjectionMode,
     OcclusionClaim,
+    PaintLayer,
     PaintObject,
     PaintStroke,
     PaintView,
@@ -17,10 +19,12 @@ export type PaintSceneSnapshot = {
     viewportHeight: number,
     views: PaintView[],
     objects: PaintObject[],
+    paintLayers: PaintLayer[],
     strokes: PaintStroke[],
     occlusionClaims: OcclusionClaim[],
     activeObjectId: string | null,
     activeViewId: string | null,
+    activePaintLayerId: string,
     chartProjectionMode: ChartProjectionMode,
 };
 
@@ -29,10 +33,12 @@ export type PaintSceneSnapshotSource = {
     viewportHeight: number,
     views: PaintView[],
     objects: PaintObject[],
+    paintLayers: PaintLayer[],
     strokes: PaintStroke[],
     occlusionClaims: OcclusionClaim[],
     activeObjectId: string | null,
     activeViewId: string | null,
+    activePaintLayerId: string,
     chartProjectionMode: ChartProjectionMode,
 };
 
@@ -45,10 +51,12 @@ export const capturePaintSceneSnapshot = (
     viewportHeight: source.viewportHeight,
     views: source.views.map(cloneView),
     objects: source.objects.map(cloneObject),
+    paintLayers: source.paintLayers.map(clonePaintLayer),
     strokes: source.strokes.map(cloneStroke),
     occlusionClaims: source.occlusionClaims.map(cloneOcclusionClaim),
     activeObjectId: source.activeObjectId,
     activeViewId: source.activeViewId,
+    activePaintLayerId: source.activePaintLayerId,
     chartProjectionMode: source.chartProjectionMode,
 });
 
@@ -59,9 +67,11 @@ export const restorePaintSceneSnapshot = (
     viewportHeight: snapshot.viewportHeight,
     views: snapshot.views.map(cloneView),
     objects: snapshot.objects.map(cloneObject),
+    paintLayers: snapshot.paintLayers.map(clonePaintLayer),
     strokes: snapshot.strokes.map(cloneStroke),
     occlusionClaims: snapshot.occlusionClaims.map(cloneOcclusionClaim),
     activeObjectId: snapshot.activeObjectId,
     activeViewId: snapshot.activeViewId,
+    activePaintLayerId: snapshot.activePaintLayerId,
     chartProjectionMode: snapshot.chartProjectionMode,
 });

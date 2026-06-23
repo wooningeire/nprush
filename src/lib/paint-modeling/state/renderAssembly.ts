@@ -1,8 +1,10 @@
 import { chartHasCoverage } from "./chartPainting.ts";
 import {
+    cameraCenter,
     chartPointToWorldFromView,
     depthForProjectionAtPoint,
     projectVisiblePoint,
+    viewForward,
     viewPointToWorldAtProjectionDepth,
 } from "./projection.ts";
 import {
@@ -13,12 +15,15 @@ import {
     parseColor,
 } from "./renderGeometry.ts";
 import { MIN_DEPTH, OCCLUSION_GAP } from "./constants.ts";
+import { BASE_PAINT_LAYER_ID } from "./paintLayers.ts";
 import { samplePaintStrokeSpline } from "./strokeSampling.ts";
+import { dot3, sub3 } from "./vectorMath.ts";
 import type {
     BrushMode,
     BrushStyle,
     ChartProjectionMode,
     PaintChart,
+    PaintLayer,
     PaintObject,
     PaintRenderOptions,
     PaintStroke,
@@ -35,6 +40,8 @@ export type RenderAssemblyContext = {
     objects: PaintObject[],
     views: PaintView[],
     strokes: PaintStroke[],
+    paintLayers: PaintLayer[],
+    renderView: PaintView | null,
     activeObject: PaintObject | null,
     activeView: PaintView | null,
     draftStroke: Vec2[] | null,
@@ -95,7 +102,13 @@ export const buildPaintRenderSegments = (
         return { world };
     };
 
-    for (const stroke of sortedStrokesForRender(context.strokes, objectById)) {
+    for (const stroke of sortedStrokesForRender(
+        context.strokes,
+        objectById,
+        context.paintLayers,
+        context.renderView,
+        surfacePointForRef,
+    )) {
         appendStrokeRenderSegments(
             segments,
             stroke,
@@ -168,16 +181,60 @@ const buildChartMap = (objects: PaintObject[]): Map<string, PaintChart> => {
 const sortedStrokesForRender = (
     strokes: PaintStroke[],
     objectById: Map<string, PaintObject>,
+    paintLayers: PaintLayer[],
+    renderView: PaintView | null,
+    surfacePointForRef: (ref: SurfaceRef) => { world: Vec3 } | null,
 ): PaintStroke[] => {
-    const visibleStrokes = strokes.filter(stroke => {
-        const object = objectById.get(stroke.objectId);
-        return !!object?.visible;
-    });
+    const layerById = new Map(paintLayers.map(layer => [layer.id, layer]));
+    const layerOrderForStroke = (stroke: PaintStroke): number => {
+        const layer = layerById.get(stroke.layerId ?? BASE_PAINT_LAYER_ID);
+        return layer?.order ?? 0;
+    };
+    const isLayerVisible = (stroke: PaintStroke): boolean => {
+        const layer = layerById.get(stroke.layerId ?? BASE_PAINT_LAYER_ID);
+        return layer?.visible ?? true;
+    };
 
-    return visibleStrokes.slice().sort((a, b) =>
-        (objectById.get(a.objectId)?.layerIndex ?? 0) - (objectById.get(b.objectId)?.layerIndex ?? 0)
-        || a.paintOrder - b.paintOrder
-    );
+    return strokes
+        .filter(stroke => {
+            const object = objectById.get(stroke.objectId);
+            return !!object?.visible && isLayerVisible(stroke);
+        })
+        .map(stroke => ({
+            stroke,
+            depth: strokeDepthForRender(stroke, renderView, surfacePointForRef),
+        }))
+        .sort((a, b) =>
+            layerOrderForStroke(a.stroke) - layerOrderForStroke(b.stroke)
+            || b.depth - a.depth
+            || (objectById.get(a.stroke.objectId)?.layerIndex ?? 0)
+                - (objectById.get(b.stroke.objectId)?.layerIndex ?? 0)
+            || a.stroke.paintOrder - b.stroke.paintOrder
+        )
+        .map(item => item.stroke);
+};
+
+const strokeDepthForRender = (
+    stroke: PaintStroke,
+    renderView: PaintView | null,
+    surfacePointForRef: (ref: SurfaceRef) => { world: Vec3 } | null,
+): number => {
+    if (!renderView) return 0;
+    const origin = cameraCenter(renderView);
+    const forward = viewForward(renderView);
+    let total = 0;
+    let count = 0;
+
+    for (const sample of stroke.samples) {
+        const point = surfacePointForRef(sample.surfaceRef)?.world;
+        if (!point) continue;
+        const depth = dot3(sub3(point, origin), forward);
+        if (!Number.isFinite(depth)) continue;
+        total += depth;
+        count += 1;
+    }
+
+    return count === 0 ? 0 : total / count;
 };
 
 const appendDraftStrokePreviewSegments = (

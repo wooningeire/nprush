@@ -12,6 +12,13 @@ export type ChartRole = "surface" | "occluder" | "behind";
 export type ChartProjectionMode = "view-plane" | "ray-depth";
 export type StrokeGeometryMode = "billboard" | "ribbon";
 
+export type PaintLayer = {
+    id: string,
+    name: string,
+    order: number,
+    visible: boolean,
+};
+
 export interface PaintView {
     id: string;
     name: string;
@@ -49,6 +56,7 @@ export interface PaintSample {
 export interface PaintStroke {
     id: string;
     objectId: string;
+    layerId?: string;
     sourceViewId: string;
     placement: PlacementMode;
     samples: PaintSample[];

@@ -14,6 +14,11 @@ import {
     MAX_BRUSH_WIDTH,
     MIN_BRUSH_WIDTH,
 } from "./state/constants.ts";
+import {
+    BASE_PAINT_LAYER_ID,
+    createBasePaintLayer,
+    createPaintLayer,
+} from "./state/paintLayers.ts";
 import { makeId } from "./state/sceneData.ts";
 import {
     cameraMovedFromPaintView,
@@ -51,6 +56,7 @@ import type {
     ChartProjectionMode,
     OcclusionClaim,
     PaintChart,
+    PaintLayer,
     PaintObject,
     PaintStroke,
     PaintView,
@@ -83,10 +89,12 @@ export class PaintModelingState {
 
     views = $state<PaintView[]>([]);
     objects = $state<PaintObject[]>([]);
+    paintLayers = $state<PaintLayer[]>([createBasePaintLayer()]);
     strokes = $state<PaintStroke[]>([]);
     occlusionClaims = $state<OcclusionClaim[]>([]);
     activeObjectId = $state<string | null>(null);
     activeViewId = $state<string | null>(null);
+    activePaintLayerId = $state(BASE_PAINT_LAYER_ID);
     placementMode = $state<PlacementMode>("snap");
     chartProjectionMode = $state<ChartProjectionMode>("view-plane");
     brushMode = $state<BrushMode>("color");
@@ -118,6 +126,24 @@ export class PaintModelingState {
     get activeObject(): PaintObject | null { return this.objects.find(object => object.id === this.activeObjectId) ?? null; }
 
     get activeView(): PaintView | null { return this.views.find(view => view.id === this.activeViewId) ?? null; }
+
+    get activePaintLayer(): PaintLayer | null {
+        return this.paintLayers.find(layer => layer.id === this.activePaintLayerId)
+            ?? this.paintLayers[0]
+            ?? null;
+    }
+
+    get renderDepthSortKey(): string {
+        const offset = Array.from(this.orbit.offset).slice(0, 3);
+        return [
+            this.viewportWidth,
+            this.viewportHeight,
+            this.orbit.long.toFixed(4),
+            this.orbit.lat.toFixed(4),
+            this.orbit.radius.toFixed(4),
+            offset.map(value => value.toFixed(4)).join(","),
+        ].join(":");
+    }
 
     get isCameraAtActiveView(): boolean {
         const view = this.activeView;
@@ -162,6 +188,18 @@ export class PaintModelingState {
 
     selectObject(objectId: string) {
         if (this.objects.some(object => object.id === objectId)) this.activeObjectId = objectId;
+    }
+
+    addPaintLayer(recordHistory = true): PaintLayer {
+        if (recordHistory) this.recordUndoSnapshot();
+        const layer = createPaintLayer(this.nextPaintLayerOrder());
+        this.paintLayers = [...this.paintLayers, layer];
+        this.activePaintLayerId = layer.id;
+        return layer;
+    }
+
+    selectPaintLayer(layerId: string) {
+        if (this.paintLayers.some(layer => layer.id === layerId)) this.activePaintLayerId = layerId;
     }
 
     setPlacementMode(mode: PlacementMode) { this.placementMode = mode; }
@@ -266,6 +304,7 @@ export class PaintModelingState {
             brush: this.brush,
             placementContext: this.strokePlacementContext(),
             nextPaintOrder: objectId => this.nextPaintOrder(objectId),
+            paintLayerId: this.activePaintLayer?.id ?? BASE_PAINT_LAYER_ID,
             snapPlacementPlan: options.snapPlacementPlan,
         });
 
@@ -424,6 +463,8 @@ export class PaintModelingState {
             objects: this.objects,
             views: this.views,
             strokes: this.strokes,
+            paintLayers: this.paintLayers,
+            renderView: this.currentEffectView(),
             activeObject: this.activeObject,
             activeView: this.pendingStrokeView ?? this.activeView,
             draftStroke: this.draftStroke,
@@ -492,6 +533,8 @@ export class PaintModelingState {
 
 
     private nextLayerIndex(): number { return this.objects.reduce((max, object) => Math.max(max, object.layerIndex), -1) + 1; }
+
+    private nextPaintLayerOrder(): number { return this.paintLayers.reduce((max, layer) => Math.max(max, layer.order), -1) + 1; }
 
     private nextPaintOrder(objectId: string): number {
         return this.strokes

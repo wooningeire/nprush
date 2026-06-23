@@ -19,8 +19,14 @@ let {
     setShowSurfaceField: (value: boolean) => void,
 } = $props();
 
+let sortedPaintLayers = $derived([...modelerState.paintLayers].sort((a, b) => a.order - b.order));
 let sortedObjects = $derived([...modelerState.objects].sort((a, b) => a.layerIndex - b.layerIndex));
 let sortedViews = $derived([...modelerState.views].sort((a, b) => a.createdAt - b.createdAt));
+
+const layerStrokeCount = (layerId: string, layerOrder: number): number =>
+    modelerState.strokes.filter(stroke =>
+        stroke.layerId === layerId || (!stroke.layerId && layerOrder === 0)
+    ).length;
 </script>
 
 <aside class="control-panel">
@@ -139,6 +145,38 @@ let sortedViews = $derived([...modelerState.views].sort((a, b) => a.createdAt - 
     <div class="separator"></div>
 
     <section>
+        <div class="section-header-row">
+            <div class="section-title">Paint Layers</div>
+            <button
+                type="button"
+                class="mini-button"
+                onclick={() => {
+                    modelerState.addPaintLayer();
+                    requestRender();
+                }}
+            >Add</button>
+        </div>
+        <div class="list">
+            {#each sortedPaintLayers as layer (layer.id)}
+                <button
+                    type="button"
+                    class="select-row layer-row"
+                    class:active={layer.id === modelerState.activePaintLayerId}
+                    onclick={() => {
+                        modelerState.selectPaintLayer(layer.id);
+                        requestRender();
+                    }}
+                >
+                    <span>{layer.name}</span>
+                    <small>{layerStrokeCount(layer.id, layer.order)}s</small>
+                </button>
+            {/each}
+        </div>
+    </section>
+
+    <div class="separator"></div>
+
+    <section>
         <div class="section-title">Objects</div>
         {#if sortedObjects.length === 0}
             <div class="subtle">No objects</div>
@@ -238,6 +276,13 @@ let sortedViews = $derived([...modelerState.views].sort((a, b) => a.createdAt - 
     }
 }
 
+.section-header-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .section-title {
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -284,6 +329,12 @@ button {
     display: grid !important;
     grid-template-columns: 1fr 1fr;
     gap: 0.45rem;
+}
+
+.mini-button {
+    min-height: 1.7rem;
+    padding: 0 0.55rem;
+    font-size: 0.72rem;
 }
 
 .mode-row {
@@ -360,6 +411,27 @@ button {
     gap: 0.35rem;
 }
 
+.layer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 0;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    text-align: left;
+
+    span,
+    small {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    &.active {
+        background: rgba(93, 139, 179, 0.28);
+        border-color: rgba(128, 179, 221, 0.48);
+    }
+}
 .list-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 4.2rem;

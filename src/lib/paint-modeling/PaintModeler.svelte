@@ -45,6 +45,8 @@ $effect(() => {
     modelerState.brush.geometryMode;
     modelerState.brushMode;
     modelerState.placementMode;
+    modelerState.activePaintLayerId;
+    modelerState.paintLayers.length;
     showChartWireframe;
     showSurfaceField;
     requestRender();
@@ -109,6 +111,7 @@ async function render() {
 
     const staticSceneKey = [
         modelerState.meshVersion,
+        modelerState.renderDepthSortKey,
         showChartWireframe ? "wire" : "no-wire",
         showSurfaceField ? "field" : "no-field",
     ].join(":");
@@ -267,6 +270,7 @@ function draftRenderKey(): string {
         modelerState.brush.color,
         modelerState.brush.width.toFixed(1),
         modelerState.brush.geometryMode,
+        modelerState.activePaintLayerId,
     ].join(":");
 }
 

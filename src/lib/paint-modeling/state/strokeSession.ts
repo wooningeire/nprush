@@ -31,6 +31,7 @@ export type FinishStrokeInput = {
     brush: BrushStyle,
     placementContext: StrokePlacementContext,
     nextPaintOrder: (objectId: string) => number,
+    paintLayerId: string,
     snapPlacementPlan?: SnapPlacementPlan,
 };
 
@@ -71,6 +72,7 @@ export const planFinishedStroke = ({
     brush,
     placementContext,
     nextPaintOrder,
+    paintLayerId,
     snapPlacementPlan,
 }: FinishStrokeInput): FinishStrokeResult => {
     if (!draftStroke || draftStroke.length < 2 || !object || !view) {
@@ -146,6 +148,7 @@ export const planFinishedStroke = ({
         stroke: {
             id: makeId("stroke"),
             objectId: object.id,
+            layerId: paintLayerId,
             sourceViewId: view.id,
             placement: placementMode,
             samples: strokeSamples.samples,
