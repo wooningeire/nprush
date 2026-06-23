@@ -65,13 +65,22 @@ let sortedViews = $derived([...modelerState.views].sort((a, b) => a.createdAt - 
                     requestRender();
                 }}
             >Surface</button>
+            <button
+                type="button"
+                class:active={modelerState.brushMode === "depth"}
+                aria-pressed={modelerState.brushMode === "depth"}
+                onclick={() => {
+                    modelerState.setBrushMode("depth");
+                    requestRender();
+                }}
+            >Depth</button>
         </div>
         <label class="color-row">
             <span>Color</span>
             <input
                 type="color"
                 value={modelerState.brush.color}
-                disabled={modelerState.brushMode === "surface"}
+                disabled={modelerState.brushMode !== "color"}
                 oninput={(event) => modelerState.setBrushColor((event.currentTarget as HTMLInputElement).value)}
             />
         </label>
@@ -257,7 +266,7 @@ button {
 
 .mode-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.35rem;
 
     button {

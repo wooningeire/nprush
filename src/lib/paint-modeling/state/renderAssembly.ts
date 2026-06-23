@@ -184,7 +184,9 @@ const appendDraftStrokePreviewSegments = (
 
     const color = context.brushMode === "surface"
         ? [0.44, 0.92, 0.82, 0.68] as [number, number, number, number]
-        : parseColor(context.brush.color, context.brush.opacity);
+        : context.brushMode === "depth"
+            ? [0.72, 0.62, 1, 0.72] as [number, number, number, number]
+            : parseColor(context.brush.color, context.brush.opacity);
     const points = samplePaintStrokeSpline(context.draftStroke);
     const previewDepth = draftStrokePreviewDepth(context, object, view);
     appendWorldStrokeRun(

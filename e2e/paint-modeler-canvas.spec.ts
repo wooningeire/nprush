@@ -44,6 +44,14 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     });
     await expect(page.getByLabel("Width")).toHaveValue("66");
 
+    await page.getByRole("button", { name: "Depth" }).click();
+    await expect(page.getByRole("button", { name: "Depth" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Width")).toHaveValue("36");
+    await expect(page.getByLabel("Color")).toBeDisabled();
+    await page.getByRole("button", { name: "Surface" }).click();
+    await expect(page.getByRole("button", { name: "Surface" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Width")).toHaveValue("66");
+
     const viewport = page.locator("paint-viewport");
     await expect(viewport).toBeVisible();
     const box = await viewport.boundingBox();

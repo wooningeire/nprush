@@ -2,6 +2,7 @@ import type { ChartPaintRun } from "./chartPainting.ts";
 import { makeId } from "./sceneData.ts";
 import { samplePaintStrokeSpline } from "./strokeSampling.ts";
 import {
+    placeDepthBrushSculpt,
     placeStrokeSamples,
     placeSurfaceBrushMask,
     type SnapPlacementPlan,
@@ -40,6 +41,12 @@ export type FinishStrokeResult =
     }
     | {
         kind: "surface",
+        undoSnapshot: PaintSceneSnapshot,
+        touchedChartIds: Set<string>,
+        gpuChartPaintRuns: ChartPaintRun[],
+    }
+    | {
+        kind: "depth",
         undoSnapshot: PaintSceneSnapshot,
         touchedChartIds: Set<string>,
         gpuChartPaintRuns: ChartPaintRun[],
@@ -93,6 +100,28 @@ export const planFinishedStroke = ({
             undoSnapshot,
             touchedChartIds: surfacePlacement.touchedChartIds,
             gpuChartPaintRuns: surfacePlacement.gpuChartPaintRuns,
+        };
+    }
+
+    if (brushMode === "depth") {
+        const depthPlacement = placeDepthBrushSculpt(
+            placementContext,
+            object,
+            view,
+            sourcePoints,
+        );
+        if (depthPlacement.touchedChartIds.size === 0) {
+            return {
+                kind: "discard",
+                restoreSnapshot: undoSnapshot,
+            };
+        }
+
+        return {
+            kind: "depth",
+            undoSnapshot,
+            touchedChartIds: depthPlacement.touchedChartIds,
+            gpuChartPaintRuns: depthPlacement.gpuChartPaintRuns,
         };
     }
 

@@ -1,11 +1,13 @@
-import type { ChartPaintRun, ChartPaintSample } from "./chartPainting.ts";
+import type { ChartDepthSculptSample, ChartPaintRun, ChartPaintSample } from "./chartPainting.ts";
 import {
+    applyDepthSculptToChartGeometry,
     applyStrokeToChartGeometry,
     appendPaintRun,
     markChartSeamAlongPolyline,
+    sampleChartDepth,
 } from "./chartPainting.ts";
-import { MIN_DEPTH, OCCLUSION_GAP, SEAM_BRUSH_RADIUS } from "./constants.ts";
-import { depthForProjectionAtPoint } from "./projection.ts";
+import { DEPTH_BRUSH_STEP, MIN_DEPTH, OCCLUSION_GAP, SEAM_BRUSH_RADIUS } from "./constants.ts";
+import { depthForProjectionAtPoint, makeViewRay } from "./projection.ts";
 import { makeId } from "./sceneData.ts";
 import {
     carryStrokeDepths,
@@ -13,6 +15,7 @@ import {
     snapCarryDepthAtPoint,
     type SnapCarryDepth,
 } from "./snapDepthCarry.ts";
+import { add3, dot3, scale3, sub3 } from "./vectorMath.ts";
 import type {
     ChartProjectionMode,
     ChartRole,
@@ -31,6 +34,11 @@ export type SurfaceBrushPlacement = {
     gpuChartPaintRuns: ChartPaintRun[],
 };
 
+export type DepthBrushPlacement = {
+    touchedChartIds: Set<string>,
+    gpuChartPaintRuns: ChartPaintRun[],
+};
+
 export type StrokePlacementResult = {
     samples: PaintSample[],
     occlusionClaim?: OcclusionClaim,
@@ -45,6 +53,7 @@ export type StrokePlacementContext = {
         role: ChartRole,
         projectionMode?: ChartProjectionMode,
     ) => PaintChart,
+    findView: (viewId: string) => PaintView | null,
     defaultDepthForView: (view: PaintView) => number,
     paintDepthRadiusForView: (view: PaintView) => number,
     raycastObjectSurface: (
@@ -97,6 +106,77 @@ export function placeSurfaceBrushMask(
                 depthWriteMode: "blend",
             }]
             : [],
+    };
+}
+
+export function placeDepthBrushSculpt(
+    context: StrokePlacementContext,
+    object: PaintObject,
+    view: PaintView,
+    points: Vec2[],
+): DepthBrushPlacement {
+    const hits = context.raycastObjectSurfaceBatch(object, view, points);
+    const chartById = new Map(object.charts.map(chart => [chart.id, chart]));
+    const runs: Array<{
+        chart: PaintChart,
+        samples: ChartDepthSculptSample[],
+        radius: number,
+    }> = [];
+    const runByChartId = new Map<string, (typeof runs)[number]>();
+
+    for (let pointIndex = 0; pointIndex < points.length; pointIndex++) {
+        const point = points[pointIndex];
+        const hit = hits[pointIndex];
+        if (!hit) continue;
+
+        const chart = chartById.get(hit.chartId);
+        if (!chart) continue;
+
+        const sourceView = context.findView(chart.sourceViewId);
+        if (!sourceView) continue;
+
+        const activeRay = makeViewRay(view, point);
+        if (!activeRay) continue;
+
+        const desiredWorld = add3(hit.world, scale3(activeRay.direction, -DEPTH_BRUSH_STEP));
+        const nextDepth = projectionDepthForWorldAtChartPoint(
+            chart,
+            sourceView,
+            hit.surfaceRef.uv,
+            desiredWorld,
+        );
+        if (nextDepth === null) continue;
+
+        const currentDepth = sampleChartDepth(chart, hit.surfaceRef.uv);
+        const depthDelta = nextDepth - currentDepth;
+        if (Math.abs(depthDelta) <= 1e-8) continue;
+
+        let run = runByChartId.get(chart.id);
+        if (!run) {
+            run = {
+                chart,
+                samples: [],
+                radius: context.paintDepthRadiusForView(sourceView),
+            };
+            runByChartId.set(chart.id, run);
+            runs.push(run);
+        }
+        run.samples.push({
+            point: { ...hit.surfaceRef.uv },
+            depthDelta,
+        });
+    }
+
+    const touchedChartIds = new Set<string>();
+    for (const run of runs) {
+        if (applyDepthSculptToChartGeometry(run.chart, run.samples, run.radius)) {
+            touchedChartIds.add(run.chart.id);
+        }
+    }
+
+    return {
+        touchedChartIds,
+        gpuChartPaintRuns: [],
     };
 }
 
@@ -194,6 +274,26 @@ export function placeStrokeSamples(
     }
 
     return { samples, touchedChartIds, gpuChartPaintRuns };
+}
+
+function projectionDepthForWorldAtChartPoint(
+    chart: PaintChart,
+    sourceView: PaintView,
+    uv: Vec2,
+    world: [number, number, number],
+): number | null {
+    const sourceRay = makeViewRay(sourceView, uv);
+    if (!sourceRay) return null;
+
+    const rayDistance = dot3(sub3(world, sourceRay.origin), sourceRay.direction);
+    if (!Number.isFinite(rayDistance)) return null;
+
+    return depthForProjectionAtPoint(
+        sourceView,
+        uv,
+        Math.max(MIN_DEPTH, rayDistance),
+        chart.projectionMode,
+    );
 }
 
 function placeOccludingSamples(

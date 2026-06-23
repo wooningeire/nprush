@@ -8,6 +8,11 @@ export type ChartPaintSample = {
     depth: number,
 };
 
+export type ChartDepthSculptSample = {
+    point: Vec2,
+    depthDelta: number,
+};
+
 export type DepthWriteMode = "blend" | "replace";
 
 export type ChartPaintRun = {
@@ -69,6 +74,29 @@ export function applyStrokeToChartGeometry(
             ? depth
             : lerp(chart.depths[index], depth, influence);
         chart.coverage[index] = Math.max(chart.coverage[index] ?? 0, influence);
+        changed = true;
+    });
+    return changed;
+}
+
+export function applyDepthSculptToChartGeometry(
+    chart: PaintChart,
+    samples: ChartDepthSculptSample[],
+    radius: number,
+): boolean {
+    if (samples.length === 0) return false;
+    let changed = false;
+
+    forEachGridPoint(chart, (index, uv) => {
+        if (!isGridPointCovered(chart, index)) return;
+        const nearest = nearestDepthSculptSampleOnPolyline(samples, uv);
+        if (!nearest || nearest.distance > radius) return;
+        const t = nearest.distance / Math.max(radius, 1e-5);
+        const influence = (1 - t * t) ** 2;
+        const nextDepth = Math.max(MIN_DEPTH, chart.depths[index] + nearest.depthDelta * influence);
+
+        if (Math.abs(nextDepth - chart.depths[index]) <= 1e-8) return;
+        chart.depths[index] = nextDepth;
         changed = true;
     });
     return changed;
@@ -174,6 +202,32 @@ function nearestPaintSampleOnPolyline(
         }
     }
     return { distance: bestDistance, depth: bestDepth };
+}
+
+function nearestDepthSculptSampleOnPolyline(
+    samples: ChartDepthSculptSample[],
+    uv: Vec2,
+): { distance: number; depthDelta: number } | null {
+    if (samples.length === 0) return null;
+    if (samples.length === 1) {
+        return {
+            distance: distance2d(samples[0].point, uv),
+            depthDelta: samples[0].depthDelta,
+        };
+    }
+
+    let bestDistance = Number.POSITIVE_INFINITY;
+    let bestDepthDelta = samples[0].depthDelta;
+    for (let i = 1; i < samples.length; i++) {
+        const previous = samples[i - 1];
+        const current = samples[i];
+        const nearest = nearestPointOnSegment(uv, previous.point, current.point);
+        if (nearest.distance < bestDistance) {
+            bestDistance = nearest.distance;
+            bestDepthDelta = lerp(previous.depthDelta, current.depthDelta, nearest.t);
+        }
+    }
+    return { distance: bestDistance, depthDelta: bestDepthDelta };
 }
 
 function nearestPointOnSegment(point: Vec2, a: Vec2, b: Vec2): { distance: number; t: number } {

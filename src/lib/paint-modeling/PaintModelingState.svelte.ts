@@ -72,6 +72,7 @@ const DEFAULT_COLOR_BRUSH: BrushStyle = {
 const DEFAULT_BRUSH_WIDTH_BY_MODE: Record<BrushMode, number> = {
     color: DEFAULT_COLOR_BRUSH.width,
     surface: Math.min(MAX_BRUSH_WIDTH, DEFAULT_COLOR_BRUSH.width * 4),
+    depth: Math.min(MAX_BRUSH_WIDTH, DEFAULT_COLOR_BRUSH.width * 2),
 };
 
 export class PaintModelingState {
@@ -439,6 +440,7 @@ export class PaintModelingState {
         return {
             getOrCreateChart: (object, view, role, projectionMode) =>
                 this.getOrCreateChart(object, view, role, projectionMode),
+            findView: viewId => this.views.find(view => view.id === viewId) ?? null,
             defaultDepthForView: view => this.defaultDepthForView(view),
             paintDepthRadiusForView: view => this.paintDepthRadiusForView(view),
             raycastObjectSurface: (object, view, point, excludeChartId) =>

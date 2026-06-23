@@ -6,6 +6,7 @@ export const MIN_DEPTH = 0.06;
 export const COVERAGE_EPSILON = 0.015;
 export const MAX_EFFECT_SAMPLES = 96;
 export const SEAM_BRUSH_RADIUS = 0.055;
+export const DEPTH_BRUSH_STEP = 0.045;
 export const SURFACE_FIELD_STRIDE = 8;
 export const SURFACE_FIELD_NORMAL_LENGTH = 0.035;
 export const SURFACE_FIELD_NORMAL_WIDTH = 1.6;
