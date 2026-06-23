@@ -117,6 +117,44 @@ describe("PaintModelingState depth brush", () => {
         expect(state.strokes).toHaveLength(1);
         expect(Math.abs(depthAfter - depthBefore)).toBeGreaterThan(0.001);
     });
+
+    it("sculpts from a moved camera without saving an interaction view", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
+
+        const sourceChart = state.activeObject!.charts[0];
+        const surfaceRef: SurfaceRef = { chartId: sourceChart.id, uv: { x: 0, y: 0 } };
+        const depthBefore = sampleChartDepth(sourceChart, surfaceRef.uv);
+        const viewCount = state.views.length;
+
+        state.orbit.turn({ x: 42, y: 0 });
+        expect(state.isCameraAtActiveView).toBe(false);
+
+        state.setBrushMode("depth");
+        drawStroke(state, { x: -0.025, y: 0 }, { x: 0.025, y: 0 });
+
+        const sculptedChart = state.activeObject!.charts.find(chart => chart.id === sourceChart.id)!;
+        const depthAfter = sampleChartDepth(sculptedChart, surfaceRef.uv);
+
+        expect(state.views).toHaveLength(viewCount);
+        expect(state.chartCount).toBe(1);
+        expect(state.strokes).toHaveLength(1);
+        expect(Math.abs(depthAfter - depthBefore)).toBeGreaterThan(0.001);
+    });
+
+    it("does not create an object or view when depth starts on an empty scene", () => {
+        const state = new PaintModelingState();
+
+        state.setBrushMode("depth");
+        drawStroke(state, { x: -0.025, y: 0 }, { x: 0.025, y: 0 });
+
+        expect(state.objects).toHaveLength(0);
+        expect(state.views).toHaveLength(0);
+        expect(state.chartCount).toBe(0);
+        expect(state.strokes).toHaveLength(0);
+    });
 });
 
 const middleSample = <T>(samples: T[]): T => samples[Math.floor(samples.length / 2)];

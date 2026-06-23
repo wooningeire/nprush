@@ -99,6 +99,7 @@ export class PaintModelingState {
     });
     private brushWidthByMode: Record<BrushMode, number> = { ...DEFAULT_BRUSH_WIDTH_BY_MODE };
     private pendingStrokeUndoSnapshot: PaintSceneSnapshot | null = null;
+    private pendingStrokeView: PaintView | null = null;
     private pendingGpuChartPaintRuns: ChartPaintRun[] = [];
     private undoGroup: { snapshot: PaintSceneSnapshot; dirty: boolean } | null = null;
 
@@ -214,13 +215,20 @@ export class PaintModelingState {
         const undoSnapshot = this.captureSceneSnapshot();
         this.viewportWidth = Math.max(1, width);
         this.viewportHeight = Math.max(1, height);
-        if (!this.activeObjectId) this.addObject(undefined, false);
+        if (!this.activeObjectId && this.brushMode !== "depth") this.addObject(undefined, false);
         const object = this.activeObject;
         if (!object || object.locked || !object.visible) {
             this.pendingStrokeUndoSnapshot = null;
+            this.pendingStrokeView = null;
             return;
         }
-        this.ensureActiveView(width, height, false);
+
+        if (this.brushMode === "depth") {
+            this.pendingStrokeView = this.currentEffectView();
+        } else {
+            this.ensureActiveView(width, height, false);
+            this.pendingStrokeView = this.activeView;
+        }
         this.draftStroke = [point];
         this.pendingStrokeUndoSnapshot = undoSnapshot;
     }
@@ -248,7 +256,7 @@ export class PaintModelingState {
             pendingStrokeUndoSnapshot: this.pendingStrokeUndoSnapshot,
             undoSnapshot: this.pendingStrokeUndoSnapshot ?? this.captureSceneSnapshot(),
             object: this.activeObject,
-            view: this.activeView,
+            view: this.pendingStrokeView ?? this.activeView,
             brushMode: this.brushMode,
             placementMode: this.placementMode,
             brush: this.brush,
@@ -259,6 +267,7 @@ export class PaintModelingState {
 
         this.draftStroke = null;
         this.pendingStrokeUndoSnapshot = null;
+        this.pendingStrokeView = null;
         if (result.kind === "discard") {
             if (result.restoreSnapshot) this.restoreSceneSnapshot(result.restoreSnapshot);
             return;
@@ -304,6 +313,7 @@ export class PaintModelingState {
         this.occlusionClaims = deletion.occlusionClaims;
         this.activeObjectId = deletion.activeObjectId;
         this.draftStroke = null;
+        this.pendingStrokeView = null;
         this.meshVersion += 1;
         return true;
     }
@@ -331,6 +341,7 @@ export class PaintModelingState {
             this.selectView(deletion.selectViewId);
         }
         this.draftStroke = null;
+        this.pendingStrokeView = null;
         this.meshVersion += 1;
         return true;
     }
@@ -410,7 +421,7 @@ export class PaintModelingState {
             views: this.views,
             strokes: this.strokes,
             activeObject: this.activeObject,
-            activeView: this.activeView,
+            activeView: this.pendingStrokeView ?? this.activeView,
             draftStroke: this.draftStroke,
             brushMode: this.brushMode,
             placementMode: this.placementMode,
@@ -500,6 +511,7 @@ export class PaintModelingState {
         Object.assign(this, restorePaintSceneSnapshot(snapshot));
         this.draftStroke = null;
         this.pendingStrokeUndoSnapshot = null;
+        this.pendingStrokeView = null;
         this.pendingGpuChartPaintRuns = [];
         this.undoGroup = null;
 
