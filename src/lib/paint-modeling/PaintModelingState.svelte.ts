@@ -56,6 +56,7 @@ import type {
     PaintView,
     PaintRenderOptions,
     PlacementMode,
+    StrokeGeometryMode,
     RenderPrimitive,
     SurfaceHit,
     SurfaceRef,
@@ -68,6 +69,7 @@ const DEFAULT_COLOR_BRUSH: BrushStyle = {
     color: "#ffd27a",
     width: 18,
     opacity: 1,
+    geometryMode: "billboard",
 };
 const DEFAULT_BRUSH_WIDTH_BY_MODE: Record<BrushMode, number> = {
     color: DEFAULT_COLOR_BRUSH.width,
@@ -173,6 +175,8 @@ export class PaintModelingState {
     setChartProjectionMode(mode: ChartProjectionMode) { this.chartProjectionMode = mode; }
 
     setBrushColor(color: string) { this.brush.color = color; }
+
+    setBrushGeometryMode(mode: StrokeGeometryMode) { this.brush.geometryMode = mode; }
 
     setBrushWidth(width: number) {
         const clampedWidth = clamp(width, MIN_BRUSH_WIDTH, MAX_BRUSH_WIDTH);

@@ -30,12 +30,16 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await expect(page.getByLabel("Seam size")).toHaveCount(0);
     await expect(page.getByLabel("Surface field")).not.toBeChecked();
     await expect(page.getByRole("group", { name: "Brush mode" })).toBeVisible();
+    await expect(page.getByRole("group", { name: "Stroke geometry" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "Billboard" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "Ribbon" })).toBeEnabled();
     await expect(page.getByLabel("Width")).toHaveValue("18");
     await page.getByRole("button", { name: "Surface" }).click();
     await expect(page.getByRole("button", { name: "Surface" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Width")).toHaveValue("72");
     await expect(page.getByLabel("Color")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Ribbon" })).toBeDisabled();
 
     await page.getByLabel("Width").evaluate(element => {
         const input = element as HTMLInputElement;
@@ -103,6 +107,9 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await expect(page.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Width")).toHaveValue("18");
     await expect(page.getByLabel("Color")).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Ribbon" })).toBeEnabled();
+    await page.getByRole("button", { name: "Ribbon" }).click();
+    await expect(page.getByRole("button", { name: "Ribbon" })).toHaveAttribute("aria-pressed", "true");
 
     await page.mouse.move(cx - 130, cy + 74);
     await page.mouse.down();

@@ -46,7 +46,7 @@ let sortedViews = $derived([...modelerState.views].sort((a, b) => a.createdAt - 
 
     <section>
         <div class="section-title">Brush</div>
-        <div class="mode-row" role="group" aria-label="Brush mode">
+        <div class="mode-row brush-mode-row" role="group" aria-label="Brush mode">
             <button
                 type="button"
                 class:active={modelerState.brushMode === "color"}
@@ -74,6 +74,28 @@ let sortedViews = $derived([...modelerState.views].sort((a, b) => a.createdAt - 
                     requestRender();
                 }}
             >Depth</button>
+        </div>
+        <div class="mode-row stroke-geometry-row" role="group" aria-label="Stroke geometry">
+            <button
+                type="button"
+                class:active={modelerState.brush.geometryMode === "billboard"}
+                aria-pressed={modelerState.brush.geometryMode === "billboard"}
+                disabled={modelerState.brushMode !== "color"}
+                onclick={() => {
+                    modelerState.setBrushGeometryMode("billboard");
+                    requestRender();
+                }}
+            >Billboard</button>
+            <button
+                type="button"
+                class:active={modelerState.brush.geometryMode === "ribbon"}
+                aria-pressed={modelerState.brush.geometryMode === "ribbon"}
+                disabled={modelerState.brushMode !== "color"}
+                onclick={() => {
+                    modelerState.setBrushGeometryMode("ribbon");
+                    requestRender();
+                }}
+            >Ribbon</button>
         </div>
         <label class="color-row">
             <span>Color</span>
@@ -266,7 +288,6 @@ button {
 
 .mode-row {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.35rem;
 
     button {
@@ -279,6 +300,14 @@ button {
             color: oklch(94% 0.03 185);
         }
     }
+}
+
+.brush-mode-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.stroke-geometry-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .color-row,

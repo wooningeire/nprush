@@ -48,6 +48,7 @@ $effect(() => {
     modelerState.activeObjectId;
     modelerState.draftStroke;
     modelerState.brush;
+    modelerState.brush.geometryMode;
     modelerState.brushMode;
     modelerState.placementMode;
     showChartWireframe;
@@ -277,6 +278,7 @@ function draftRenderKey(): string {
         last.y.toFixed(4),
         modelerState.brush.color,
         modelerState.brush.width.toFixed(1),
+        modelerState.brush.geometryMode,
     ].join(":");
 }
 

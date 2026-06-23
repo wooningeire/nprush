@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
 import type {
+    PaintChart,
     PaintSample,
     PaintView,
     RenderPrimitive,
@@ -899,6 +900,35 @@ describe("PaintModelingState prototype", () => {
         expect(brushStrokes[0].color[3]).toBe(1);
     });
 
+
+    it("renders ribbon brush paths as source-view mesh lines on the snapped centerline", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("ribbon");
+        state.setBrushWidth(36);
+        drawStroke(state, { x: -0.28, y: -0.08 }, { x: 0.28, y: 0.12 });
+
+        const stroke = state.strokes[0];
+        const sourceView = state.views.find(view => view.id === stroke.sourceViewId)!;
+        bendChartDepths(state.activeObject!.charts[0]);
+
+        const primitives = state.buildRenderSegments({ showChartWireframe: false });
+        const ribbonTriangles = primitives.filter(isRenderTriangle);
+        const firstSampleCenter = state.surfaceRefWorldPoint(stroke.samples[0].surfaceRef)!;
+        const firstRibbonCenter = midpoint3(ribbonTriangles[0].a, ribbonTriangles[0].b);
+        const firstRibbonWidthPx = projectedPixelDistance(sourceView, ribbonTriangles[0].a, ribbonTriangles[0].b);
+
+        expect(stroke.style.geometryMode).toBe("ribbon");
+        expect(primitives.filter(isRenderStroke)).toHaveLength(0);
+        expect(ribbonTriangles.length).toBeGreaterThan(0);
+        expect(Math.max(...ribbonTriangles.map(triangleArea))).toBeGreaterThan(0.0001);
+        expect(distance3(firstRibbonCenter, firstSampleCenter)).toBeLessThan(1e-6);
+        expect(firstRibbonWidthPx).toBeGreaterThan(35.5);
+        expect(firstRibbonWidthPx).toBeLessThan(36.5);
+        expect(ribbonTriangles.every(triangle => triangle.color[3] === 1)).toBe(true);
+    });
+
     it("keeps thin committed strokes visible even when chart fill triangles are sparse", () => {
         const state = new PaintModelingState();
         state.addObject();
@@ -1078,8 +1108,56 @@ function strokeSegmentCount(strokes: RenderStroke[]): number {
     return strokes.reduce((count, stroke) => count + Math.max(0, stroke.points.length - 1), 0);
 }
 
+function bendChartDepths(chart: PaintChart) {
+    const baseDepth = chart.depths[0];
+    for (let y = 0; y < chart.height; y++) {
+        for (let x = 0; x < chart.width; x++) {
+            const uvX = chart.width <= 1 ? 0 : x / (chart.width - 1) * 2 - 1;
+            const uvY = chart.height <= 1 ? 0 : y / (chart.height - 1) * 2 - 1;
+            chart.depths[y * chart.width + x] = baseDepth + uvY * uvY * 0.18 + uvX * uvY * 0.08;
+        }
+    }
+}
+
+function midpoint3(a: Vec3, b: Vec3): Vec3 {
+    return [
+        (a[0] + b[0]) * 0.5,
+        (a[1] + b[1]) * 0.5,
+        (a[2] + b[2]) * 0.5,
+    ];
+}
+
+function projectedPixelDistance(view: PaintView, a: Vec3, b: Vec3): number {
+    const projectedA = projectWorldPoint(view, a);
+    const projectedB = projectWorldPoint(view, b);
+    return Math.hypot(
+        (projectedA.x - projectedB.x) * view.width * 0.5,
+        (projectedA.y - projectedB.y) * view.height * 0.5,
+    );
+}
+
+function projectWorldPoint(view: PaintView, point: Vec3): Vec2 {
+    const matrix = view.viewProjMat;
+    const x = matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2] + matrix[12];
+    const y = matrix[1] * point[0] + matrix[5] * point[1] + matrix[9] * point[2] + matrix[13];
+    const w = matrix[3] * point[0] + matrix[7] * point[1] + matrix[11] * point[2] + matrix[15];
+    if (!Number.isFinite(w) || Math.abs(w) <= 1e-6) {
+        throw new Error("Cannot project world point");
+    }
+    return { x: x / w, y: y / w };
+}
 function coveredTexelCount(state: PaintModelingState): number {
     return state.activeObject!.charts[0].coverage.filter(value => value > 0.015).length;
+}
+
+function triangleArea(triangle: RenderTriangle): number {
+    const ab = sub3(triangle.b, triangle.a);
+    const ac = sub3(triangle.c, triangle.a);
+    return Math.hypot(
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ) * 0.5;
 }
 
 function distance3(a: Vec3, b: Vec3): number {

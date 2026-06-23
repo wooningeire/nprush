@@ -7,11 +7,16 @@ import {
     isGridTriangleCovered,
 } from "./chartPainting.ts";
 import {
+    MIN_DEPTH,
     SURFACE_FIELD_NORMAL_LENGTH,
     SURFACE_FIELD_NORMAL_WIDTH,
     SURFACE_FIELD_STRIDE,
 } from "./constants.ts";
-import { cameraCenter, viewForward } from "./projection.ts";
+import {
+    cameraCenter,
+    viewForward,
+    viewPointToWorldAtProjectionDepth,
+} from "./projection.ts";
 import {
     add3,
     clamp,
@@ -33,6 +38,19 @@ import type {
     Vec3,
     Vec4,
 } from "../types.ts";
+
+export type SurfaceRenderPoint = {
+    world: Vec3,
+};
+
+type RibbonPoint = {
+    left: Vec3,
+    right: Vec3,
+};
+
+type RibbonSample = {
+    point: RibbonPoint,
+};
 
 export const appendChartSegments = (
     segments: RenderPrimitive[],
@@ -149,15 +167,117 @@ export const appendChartSurfaceFieldSegments = (
 export const appendStrokeRenderSegments = (
     segments: RenderPrimitive[],
     stroke: PaintStroke,
-    worldPointForRef: (ref: SurfaceRef) => Vec3 | null,
+    strokeSourceView: PaintView | null,
+    surfacePointForRef: (ref: SurfaceRef) => SurfaceRenderPoint | null,
 ) => {
     const color = parseColor(stroke.style.color, stroke.style.opacity);
+    if ((stroke.style.geometryMode ?? "billboard") === "ribbon" && strokeSourceView) {
+        appendRibbonStrokeTriangles(segments, stroke, strokeSourceView, surfacePointForRef, color);
+        return;
+    }
+
     appendWorldStrokeRun(
         segments,
-        stroke.samples.map(sample => worldPointForRef(sample.surfaceRef)),
+        stroke.samples.map(sample => surfacePointForRef(sample.surfaceRef)?.world ?? null),
         color,
         stroke.style.width,
     );
+};
+
+const appendRibbonStrokeTriangles = (
+    segments: RenderPrimitive[],
+    stroke: PaintStroke,
+    strokeSourceView: PaintView,
+    surfacePointForRef: (ref: SurfaceRef) => SurfaceRenderPoint | null,
+    color: Vec4,
+) => {
+    let previous: RibbonSample | null = null;
+
+    for (let index = 0; index < stroke.samples.length; index++) {
+        const sample = stroke.samples[index];
+        const center = surfacePointForRef(sample.surfaceRef)?.world ?? null;
+        const point = center
+            ? ribbonPointAt(stroke.samples, index, strokeSourceView, stroke.style.width, center)
+            : null;
+        if (!point) {
+            previous = null;
+            continue;
+        }
+
+        if (previous) {
+            appendRibbonQuad(segments, previous.point, point, color);
+        }
+        previous = { point };
+    }
+};
+
+const ribbonPointAt = (
+    samples: PaintStroke["samples"],
+    index: number,
+    strokeSourceView: PaintView,
+    width: number,
+    center: Vec3,
+): RibbonPoint | null => {
+    const sample = samples[index];
+    const sideOffset = ribbonSideOffsetAt(samples, index, strokeSourceView, width);
+    if (!sideOffset) return null;
+
+    const viewDepth = dot3(sub3(center, cameraCenter(strokeSourceView)), viewForward(strokeSourceView));
+    if (!Number.isFinite(viewDepth) || viewDepth <= MIN_DEPTH) return null;
+
+    const sideWorld = viewPointToWorldAtProjectionDepth(
+        strokeSourceView,
+        {
+            x: sample.sourcePoint.x + sideOffset.x,
+            y: sample.sourcePoint.y + sideOffset.y,
+        },
+        viewDepth,
+        "view-plane",
+    );
+    if (!sideWorld) return null;
+
+    const side = sub3(sideWorld, center);
+    if (Math.hypot(side[0], side[1], side[2]) <= 1e-8) return null;
+
+    return {
+        left: sub3(center, side),
+        right: add3(center, side),
+    };
+};
+
+const ribbonSideOffsetAt = (
+    samples: PaintStroke["samples"],
+    index: number,
+    strokeSourceView: PaintView,
+    width: number,
+): Vec2 | null => {
+    const current = samples[index];
+    const previous = index > 0 ? samples[index - 1] : null;
+    const next = index < samples.length - 1 ? samples[index + 1] : null;
+    if (!previous && !next) return null;
+
+    const start = previous?.sourcePoint ?? current.sourcePoint;
+    const end = next?.sourcePoint ?? current.sourcePoint;
+    const dxPx = (end.x - start.x) * strokeSourceView.width * 0.5;
+    const dyPx = (end.y - start.y) * strokeSourceView.height * 0.5;
+    const lengthPx = Math.hypot(dxPx, dyPx);
+    if (lengthPx <= 1e-6) return null;
+
+    const halfWidthPx = Math.max(width, 1) * 0.5;
+    return {
+        x: -dyPx / lengthPx * halfWidthPx * 2 / strokeSourceView.width,
+        y: dxPx / lengthPx * halfWidthPx * 2 / strokeSourceView.height,
+    };
+};
+
+const appendRibbonQuad = (
+    segments: RenderPrimitive[],
+    a: RibbonPoint,
+    b: RibbonPoint,
+    color: Vec4,
+) => {
+    appendWorldTriangle(segments, a.left, a.right, b.right, color);
+    appendWorldTriangle(segments, a.left, b.right, b.left, color);
 };
 
 export const appendWorldStrokeRun = (

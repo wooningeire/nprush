@@ -10,6 +10,7 @@ export type PlacementMode = "snap" | "new-surface" | "occluding-surface" | "pain
 export type BrushMode = "color" | "surface" | "depth";
 export type ChartRole = "surface" | "occluder" | "behind";
 export type ChartProjectionMode = "view-plane" | "ray-depth";
+export type StrokeGeometryMode = "billboard" | "ribbon";
 
 export interface PaintView {
     id: string;
@@ -31,6 +32,7 @@ export interface BrushStyle {
     color: string;
     width: number;
     opacity: number;
+    geometryMode: StrokeGeometryMode;
 }
 
 export interface SurfaceRef {

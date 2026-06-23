@@ -85,18 +85,24 @@ export const buildPaintRenderSegments = (
         }
     }
 
-    const worldPointForRef = (ref: SurfaceRef): Vec3 | null => {
+    const surfacePointForRef = (ref: SurfaceRef) => {
         const chart = chartById.get(ref.chartId);
         if (!chart) return null;
         const view = viewById.get(chart.sourceViewId);
         if (!view) return null;
-        return chartPointToWorldFromView(chart, view, ref.uv);
+        const world = chartPointToWorldFromView(chart, view, ref.uv);
+        if (!world) return null;
+        return { world };
     };
 
     for (const stroke of sortedStrokesForRender(context.strokes, objectById)) {
-        appendStrokeRenderSegments(segments, stroke, worldPointForRef);
+        appendStrokeRenderSegments(
+            segments,
+            stroke,
+            viewById.get(stroke.sourceViewId) ?? null,
+            surfacePointForRef,
+        );
     }
-
     if (renderOptions.showDraftStroke) {
         appendDraftStrokePreviewSegments(segments, context);
     }
