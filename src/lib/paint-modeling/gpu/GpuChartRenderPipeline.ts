@@ -84,7 +84,6 @@ export class GpuChartRenderPipeline {
         data.set(viewProjMat, 0);
         data.set(sourceView.viewProjInvMat, 16);
         data.set(cameraCenter(sourceView), 32);
-        data[35] = chart.projectionMode === "ray-depth" ? 1 : 0;
         data.set(viewForward(sourceView), 36);
         data[39] = COVERAGE_EPSILON;
         data[40] = chart.width;

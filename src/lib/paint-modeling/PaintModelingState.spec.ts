@@ -116,11 +116,11 @@ describe("PaintModelingState prototype", () => {
 
         const fallbackSample = laterStroke.samples[fallbackSampleIndex];
         const fallbackChart = state.activeObject!.charts.find(chart => chart.id === fallbackSample.surfaceRef.chartId);
-        const carriedDepth = strokeSampleRayDepthInView(state, laterView, lastHitBeforeFallback);
+        const carriedDepth = strokeSampleViewDepthInView(state, laterView, lastHitBeforeFallback);
         const fallbackDepths = laterStroke.samples
             .slice(fallbackSampleIndex)
             .filter(sample => sample.surfaceRef.chartId !== sourceChart.id)
-            .map(sample => strokeSampleRayDepthInView(state, laterView, sample));
+            .map(sample => strokeSampleViewDepthInView(state, laterView, sample));
         const depthErrors = fallbackDepths.map(depth => Math.abs(depth - carriedDepth));
         const depthSteps = fallbackDepths.slice(1).map((depth, index) => Math.abs(depth - fallbackDepths[index]));
 
@@ -169,8 +169,8 @@ describe("PaintModelingState prototype", () => {
 
         const exitSample = laterStroke.samples[gapStart - 1];
         const entrySample = laterStroke.samples[gapEnd];
-        const exitDepth = strokeSampleRayDepthInView(state, laterView, exitSample);
-        const entryDepth = strokeSampleRayDepthInView(state, laterView, entrySample);
+        const exitDepth = strokeSampleViewDepthInView(state, laterView, exitSample);
+        const entryDepth = strokeSampleViewDepthInView(state, laterView, entrySample);
         const gapSamples = laterStroke.samples.slice(gapStart, gapEnd);
         const depthErrors = gapSamples.map(sample => {
             const expectedDepth = lerpNumber(
@@ -178,7 +178,7 @@ describe("PaintModelingState prototype", () => {
                 entryDepth,
                 depthMixFactor(sample.sourcePoint, exitSample.sourcePoint, entrySample.sourcePoint),
             );
-            return Math.abs(strokeSampleRayDepthInView(state, laterView, sample) - expectedDepth);
+            return Math.abs(strokeSampleViewDepthInView(state, laterView, sample) - expectedDepth);
         });
 
         expect(Math.abs(entryDepth - exitDepth)).toBeGreaterThan(0.08);
@@ -211,11 +211,11 @@ describe("PaintModelingState prototype", () => {
         const firstHitIndex = laterStroke.samples.findIndex(sample => sample.surfaceRef.chartId === sourceChart.id);
         expect(firstHitIndex).toBeGreaterThan(0);
 
-        const firstHitDepth = strokeSampleRayDepthInView(state, laterView, laterStroke.samples[firstHitIndex]);
+        const firstHitDepth = strokeSampleViewDepthInView(state, laterView, laterStroke.samples[firstHitIndex]);
         const leadingDepths = laterStroke.samples
             .slice(0, firstHitIndex)
             .filter(sample => sample.surfaceRef.chartId !== sourceChart.id)
-            .map(sample => strokeSampleRayDepthInView(state, laterView, sample));
+            .map(sample => strokeSampleViewDepthInView(state, laterView, sample));
 
         const leadingDepthErrors = leadingDepths.map(depth => Math.abs(depth - firstHitDepth));
 
@@ -304,10 +304,9 @@ describe("PaintModelingState prototype", () => {
         expect(strokeSegmentCount(brushStrokes)).toBeGreaterThan(0);
     });
 
-    it("forces surface brush masks onto a flat view-plane chart", () => {
+    it("keeps surface brush masks on a flat view-plane chart", () => {
         const state = new PaintModelingState();
         state.addObject();
-        state.setChartProjectionMode("ray-depth");
         state.setBrushMode("surface");
         drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
 
@@ -335,13 +334,12 @@ describe("PaintModelingState prototype", () => {
         const frontRef = state.strokes.at(-1)!.samples[Math.floor(state.strokes.at(-1)!.samples.length / 2)].surfaceRef;
         const backRef = claim.backRefs[Math.floor(claim.backRefs.length / 2)];
         const view = state.views.find(item => item.id === claim.viewId)!;
-        const camera = cameraCenter(view.viewInvMat);
         const front = state.surfaceRefWorldPoint(frontRef)!;
         const back = state.surfaceRefWorldPoint(backRef)!;
 
         expect(claim.frontChartId).toBe(frontRef.chartId);
         expect(claim.backRefs.length).toBeGreaterThan(0);
-        expect(distance3(camera, front)).toBeLessThan(distance3(camera, back));
+        expect(viewDepthForWorldPoint(view, front)).toBeLessThan(viewDepthForWorldPoint(view, back));
         expect(state.activeObject?.charts.length).toBe(2);
     });
 
@@ -715,7 +713,7 @@ describe("PaintModelingState prototype", () => {
         state.appendStrokePoint({ x: laterPoint.x + 0.025, y: laterPoint.y });
         const points = state.draftStrokeSourcePoints()!;
         const hits: Array<SurfaceHit | null> = points.map(point => {
-            const viewDepth = rayDepthAtPoint(view, sourceWorld, point);
+            const viewDepth = viewDepthForWorldPoint(view, sourceWorld);
             return {
                 objectId: state.activeObject!.id,
                 chartId: sourceRef.chartId,
@@ -729,7 +727,7 @@ describe("PaintModelingState prototype", () => {
         state.finishStroke({
             snapPlacementPlan: {
                 hits,
-                carriedDepths: hits.map(hit => hit ? { rayDepth: hit.viewDepth } : null),
+                carriedDepths: hits.map(hit => hit ? { viewDepth: hit.viewDepth } : null),
             },
         });
 
@@ -826,39 +824,24 @@ describe("PaintModelingState prototype", () => {
         expect(surfaceCharts.every(chart => chart.coverage.some(value => value > 0))).toBe(true);
     });
 
-    it("can create view-plane or ray-depth charts for new paint surfaces", () => {
-        const plane = new PaintModelingState();
-        plane.addObject();
-        plane.setPlacementMode("new-surface");
-        plane.setChartProjectionMode("view-plane");
-        drawStroke(plane, { x: -0.34, y: 0 }, { x: 0.34, y: 0 });
+    it("stores new paint surfaces as source-view depth charts", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        drawStroke(state, { x: -0.34, y: 0 }, { x: 0.34, y: 0 });
 
-        const planeChart = plane.activeObject!.charts[0];
-        const planeView = plane.views.find(view => view.id === planeChart.sourceViewId)!;
-        const planeCamera = cameraCenter(planeView.viewInvMat);
-        const planeCenter = plane.surfaceRefWorldPoint({ chartId: planeChart.id, uv: { x: 0, y: 0 } })!;
-        const planeNormal = normalize3(sub3(planeCenter, planeCamera));
-        const planeLeft = plane.surfaceRefWorldPoint({ chartId: planeChart.id, uv: { x: -0.34, y: 0 } })!;
-        const planeRight = plane.surfaceRefWorldPoint({ chartId: planeChart.id, uv: { x: 0.34, y: 0 } })!;
-        const planeDepth = dot3(sub3(planeCenter, planeCamera), planeNormal);
+        const chart = state.activeObject!.charts[0];
+        const view = state.views.find(item => item.id === chart.sourceViewId)!;
+        const camera = cameraCenter(view.viewInvMat);
+        const forward = viewForward(view);
+        const center = state.surfaceRefWorldPoint({ chartId: chart.id, uv: { x: 0, y: 0 } })!;
+        const left = state.surfaceRefWorldPoint({ chartId: chart.id, uv: { x: -0.34, y: 0 } })!;
+        const right = state.surfaceRefWorldPoint({ chartId: chart.id, uv: { x: 0.34, y: 0 } })!;
+        const centerDepth = dot3(sub3(center, camera), forward);
 
-        const ray = new PaintModelingState();
-        ray.addObject();
-        ray.setPlacementMode("new-surface");
-        ray.setChartProjectionMode("ray-depth");
-        drawStroke(ray, { x: -0.34, y: 0 }, { x: 0.34, y: 0 });
-
-        const rayChart = ray.activeObject!.charts[0];
-        const rayView = ray.views.find(view => view.id === rayChart.sourceViewId)!;
-        const rayCamera = cameraCenter(rayView.viewInvMat);
-        const rayLeft = ray.surfaceRefWorldPoint({ chartId: rayChart.id, uv: { x: -0.34, y: 0 } })!;
-        const rayRight = ray.surfaceRefWorldPoint({ chartId: rayChart.id, uv: { x: 0.34, y: 0 } })!;
-
-        expect(planeChart.projectionMode).toBe("view-plane");
-        expect(dot3(sub3(planeLeft, planeCamera), planeNormal)).toBeCloseTo(planeDepth, 5);
-        expect(dot3(sub3(planeRight, planeCamera), planeNormal)).toBeCloseTo(planeDepth, 5);
-        expect(rayChart.projectionMode).toBe("ray-depth");
-        expect(distance3(rayLeft, rayCamera)).toBeCloseTo(distance3(rayRight, rayCamera), 5);
+        expect(chart.projectionMode).toBe("view-plane");
+        expect(dot3(sub3(left, camera), forward)).toBeCloseTo(centerDepth, 5);
+        expect(dot3(sub3(right, camera), forward)).toBeCloseTo(centerDepth, 5);
     });
 
     it("keeps painterly brush width and fixed opacity in vector strokes", () => {
@@ -1101,30 +1084,22 @@ function cameraCenter(viewInvMat: number[]): Vec3 {
     return [viewInvMat[12], viewInvMat[13], viewInvMat[14]];
 }
 
-function rayDepthAtPoint(view: PaintView, world: Vec3, point: Vec2): number {
-    const ray = viewRay(view, point);
-    return dot3(sub3(world, ray.origin), ray.direction);
+function viewDepthForWorldPoint(view: PaintView, world: Vec3): number {
+    return dot3(sub3(world, cameraCenter(view.viewInvMat)), viewForward(view));
 }
 
-function strokeSampleRayDepthInView(
+function strokeSampleViewDepthInView(
     state: PaintModelingState,
     view: PaintView,
     sample: PaintSample,
 ): number {
-    return rayDepthAtPoint(
-        view,
-        state.surfaceRefWorldPoint(sample.surfaceRef)!,
-        sample.sourcePoint,
-    );
+    return viewDepthForWorldPoint(view, state.surfaceRefWorldPoint(sample.surfaceRef)!);
 }
 
-function viewRay(view: PaintView, point: Vec2): { origin: Vec3; direction: Vec3 } {
-    const near = unprojectNdc(view.viewProjInvMat, point.x, point.y, 0.02);
-    const far = unprojectNdc(view.viewProjInvMat, point.x, point.y, 0.98);
-    return {
-        origin: cameraCenter(view.viewInvMat),
-        direction: normalize3(sub3(far, near)),
-    };
+function viewForward(view: PaintView): Vec3 {
+    const near = unprojectNdc(view.viewProjInvMat, 0, 0, 0.02);
+    const far = unprojectNdc(view.viewProjInvMat, 0, 0, 0.98);
+    return normalize3(sub3(far, near));
 }
 
 function lerpNumber(a: number, b: number, t: number): number {

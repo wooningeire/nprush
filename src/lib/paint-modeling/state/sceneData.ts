@@ -1,6 +1,5 @@
 import { CHART_RESOLUTION } from "./constants.ts";
 import type {
-    ChartProjectionMode,
     ChartRole,
     OcclusionClaim,
     PaintChart,
@@ -15,13 +14,11 @@ export const createChart = ({
     objectId,
     sourceViewId,
     role,
-    projectionMode,
     depth,
 }: {
     objectId: string,
     sourceViewId: string,
     role: ChartRole,
-    projectionMode: ChartProjectionMode,
     depth: number,
 }): PaintChart => {
     return {
@@ -29,7 +26,7 @@ export const createChart = ({
         objectId,
         sourceViewId,
         role,
-        projectionMode,
+        projectionMode: "view-plane",
         width: CHART_RESOLUTION,
         height: CHART_RESOLUTION,
         depths: Array.from({ length: CHART_RESOLUTION * CHART_RESOLUTION }, () => depth),

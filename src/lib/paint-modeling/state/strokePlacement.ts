@@ -7,7 +7,7 @@ import {
     sampleChartDepth,
 } from "./chartPainting.ts";
 import { DEPTH_BRUSH_STEP, MIN_DEPTH, OCCLUSION_GAP, SEAM_BRUSH_RADIUS } from "./constants.ts";
-import { depthForProjectionAtPoint, makeViewRay } from "./projection.ts";
+import { makeViewRay, viewDepthForWorldPoint } from "./projection.ts";
 import { makeId } from "./sceneData.ts";
 import {
     carryStrokeDepths,
@@ -15,9 +15,8 @@ import {
     snapCarryDepthAtPoint,
     type SnapCarryDepth,
 } from "./snapDepthCarry.ts";
-import { add3, dot3, scale3, sub3 } from "./vectorMath.ts";
+import { add3, scale3 } from "./vectorMath.ts";
 import type {
-    ChartProjectionMode,
     ChartRole,
     OcclusionClaim,
     PaintChart,
@@ -51,7 +50,6 @@ export type StrokePlacementContext = {
         object: PaintObject,
         view: PaintView,
         role: ChartRole,
-        projectionMode?: ChartProjectionMode,
     ) => PaintChart,
     findView: (viewId: string) => PaintView | null,
     defaultDepthForView: (view: PaintView) => number,
@@ -82,7 +80,7 @@ export function placeSurfaceBrushMask(
     view: PaintView,
     points: Vec2[],
 ): SurfaceBrushPlacement {
-    const chart = context.getOrCreateChart(object, view, "surface", "view-plane");
+    const chart = context.getOrCreateChart(object, view, "surface");
     const depth = context.defaultDepthForView(view);
     const radius = context.paintDepthRadiusForView(view);
     const paintSamples = points.map(point => ({ point, depth }));
@@ -139,12 +137,7 @@ export function placeDepthBrushSculpt(
         if (!activeRay) continue;
 
         const desiredWorld = add3(hit.world, scale3(activeRay.direction, -DEPTH_BRUSH_STEP));
-        const nextDepth = projectionDepthForWorldAtChartPoint(
-            chart,
-            sourceView,
-            hit.surfaceRef.uv,
-            desiredWorld,
-        );
+        const nextDepth = projectionDepthForWorldAtChartPoint(sourceView, desiredWorld);
         if (nextDepth === null) continue;
 
         const currentDepth = sampleChartDepth(chart, hit.surfaceRef.uv);
@@ -218,7 +211,6 @@ export function placeStrokeSamples(
         }
 
         let depth = fallbackDepth;
-        let depthIsViewRayDistance = false;
         if (placement === "paint-behind") {
             const hits = context.raycastObjectSurfaces(object, view, point);
             const firstHit = hits[0] ?? null;
@@ -235,26 +227,17 @@ export function placeStrokeSamples(
             }
             if (firstHit) {
                 depth = firstHit.viewDepth + OCCLUSION_GAP;
-                depthIsViewRayDistance = true;
             }
         }
 
         const role: ChartRole = placement === "paint-behind" ? "behind" : "surface";
         fallbackChart ??= context.getOrCreateChart(object, view, role);
         const carriedDepth = placement === "snap"
-            ? depthForCarriedSnapAtPoint(
-                view,
-                point,
-                activeSnapPlacementPlan?.carriedDepths[pointIndex] ?? null,
-                fallbackChart.projectionMode,
-            )
+            ? depthForCarriedSnapAtPoint(activeSnapPlacementPlan?.carriedDepths[pointIndex] ?? null)
             : null;
         appendPaintRun(paintRuns, fallbackChart, {
             point,
-            depth: carriedDepth
-                ?? (depthIsViewRayDistance
-                    ? depthForProjectionAtPoint(view, point, depth, fallbackChart.projectionMode)
-                    : depth),
+            depth: carriedDepth ?? depth,
         }, paintDepthRadius, false, placement === "snap" ? "replace" : "blend");
         samples.push({
             sourcePoint: point,
@@ -277,23 +260,11 @@ export function placeStrokeSamples(
 }
 
 function projectionDepthForWorldAtChartPoint(
-    chart: PaintChart,
     sourceView: PaintView,
-    uv: Vec2,
     world: [number, number, number],
 ): number | null {
-    const sourceRay = makeViewRay(sourceView, uv);
-    if (!sourceRay) return null;
-
-    const rayDistance = dot3(sub3(world, sourceRay.origin), sourceRay.direction);
-    if (!Number.isFinite(rayDistance)) return null;
-
-    return depthForProjectionAtPoint(
-        sourceView,
-        uv,
-        Math.max(MIN_DEPTH, rayDistance),
-        chart.projectionMode,
-    );
+    const depth = viewDepthForWorldPoint(sourceView, world);
+    return Number.isFinite(depth) ? Math.max(MIN_DEPTH, depth) : null;
 }
 
 function placeOccludingSamples(
@@ -320,12 +291,7 @@ function placeOccludingSamples(
     for (const point of points) {
         const backHit = context.raycastObjectSurface(object, view, point, chart.id);
         const depth = backHit
-            ? depthForProjectionAtPoint(
-                view,
-                point,
-                Math.max(MIN_DEPTH, backHit.viewDepth - OCCLUSION_GAP),
-                chart.projectionMode,
-            )
+            ? Math.max(MIN_DEPTH, backHit.viewDepth - OCCLUSION_GAP)
             : context.defaultDepthForView(view) * 0.82;
         paintSamples.push({ point, depth });
         claim.mask.push({ ...point });

@@ -15,7 +15,7 @@ import {
 import {
     cameraCenter,
     viewForward,
-    viewPointToWorldAtProjectionDepth,
+    viewPointToWorldAtDepth,
 } from "./projection.ts";
 import {
     add3,
@@ -225,14 +225,13 @@ const ribbonPointAt = (
     const viewDepth = dot3(sub3(center, cameraCenter(strokeSourceView)), viewForward(strokeSourceView));
     if (!Number.isFinite(viewDepth) || viewDepth <= MIN_DEPTH) return null;
 
-    const sideWorld = viewPointToWorldAtProjectionDepth(
+    const sideWorld = viewPointToWorldAtDepth(
         strokeSourceView,
         {
             x: sample.sourcePoint.x + sideOffset.x,
             y: sample.sourcePoint.y + sideOffset.y,
         },
         viewDepth,
-        "view-plane",
     );
     if (!sideWorld) return null;
 

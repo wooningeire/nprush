@@ -5,7 +5,7 @@ import type { PaintChart, Vec2, Vec3 } from "../types.ts";
 export type ChartRaycastHit = {
     uv: Vec2,
     world: Vec3,
-    t: number,
+    distance: number,
 };
 
 type ChartRaycastTriangle = {
@@ -65,7 +65,7 @@ export const raycastCachedChart = (
     for (const triangle of cache.triangles) {
         appendTriangleHit(hits, ray, triangle);
     }
-    return hits.sort((a, b) => a.t - b.t);
+    return hits.sort((a, b) => a.distance - b.distance);
 };
 
 export const raycastChart = (
@@ -105,8 +105,8 @@ const appendTriangleHit = (
     if (!hit) return;
     const w0 = 1 - hit.u - hit.v;
     hits.push({
-        t: hit.t,
-        world: add3(ray.origin, scale3(ray.direction, hit.t)),
+        distance: hit.distance,
+        world: add3(ray.origin, scale3(ray.direction, hit.distance)),
         uv: {
             x: triangle.uv0.x * w0 + triangle.uv1.x * hit.u + triangle.uv2.x * hit.v,
             y: triangle.uv0.y * w0 + triangle.uv1.y * hit.u + triangle.uv2.y * hit.v,
@@ -120,7 +120,7 @@ const intersectRayTriangle = (
     p0: Vec3,
     p1: Vec3,
     p2: Vec3,
-): { t: number; u: number; v: number } | null => {
+): { distance: number; u: number; v: number } | null => {
     const epsilon = 1e-7;
     const edge1 = sub3(p1, p0);
     const edge2 = sub3(p2, p0);
@@ -134,7 +134,7 @@ const intersectRayTriangle = (
     const q = cross3(s, edge1);
     const v = f * dot3(direction, q);
     if (v < 0 || u + v > 1) return null;
-    const t = f * dot3(edge2, q);
-    if (t <= epsilon) return null;
-    return { t, u, v };
+    const distance = f * dot3(edge2, q);
+    if (distance <= epsilon) return null;
+    return { distance, u, v };
 };

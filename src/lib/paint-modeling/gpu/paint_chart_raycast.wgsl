@@ -1,9 +1,10 @@
 struct RaycastParams {
     view_proj_inv: mat4x4f,
     source_view_proj_inv: mat4x4f,
-    view_camera_projection: vec4f,
+    view_camera_padding: vec4f,
     source_camera_coverage: vec4f,
     source_forward_padding: vec4f,
+    view_forward_padding: vec4f,
     dims_chart: vec4u,
 };
 
@@ -18,14 +19,14 @@ struct WorldPoint {
 };
 
 struct TriangleHit {
-    t: f32,
+    distance: f32,
     u: f32,
     v: f32,
     hit: bool,
 };
 
 struct RaycastResult {
-    depth_bits: atomic<u32>,
+    view_depth_bits: atomic<u32>,
     chart_index: u32,
     uv: vec2f,
     world: vec4f,
@@ -88,7 +89,7 @@ fn point_ray(point_index: u32) -> Ray {
     let near_point = unproject(params.view_proj_inv, vec3f(point, -1.0));
     let far_point = unproject(params.view_proj_inv, vec3f(point, 1.0));
     return Ray(
-        params.view_camera_projection.xyz,
+        params.view_camera_padding.xyz,
         normalize(far_point - near_point),
     );
 }
@@ -100,19 +101,13 @@ fn chart_world_at(x: u32, y: u32) -> WorldPoint {
     let ray_direction = normalize(far_point - near_point);
     let depth = fields[grid_index(x, y)].x;
     let source_camera = params.source_camera_coverage.xyz;
-    let projection_mode = params.view_camera_projection.w;
-
-    if (projection_mode > 0.5) {
-        return WorldPoint(source_camera + ray_direction * depth, true);
-    }
-
     let denominator = dot(ray_direction, params.source_forward_padding.xyz);
     if (abs(denominator) <= 0.000001) {
         return WorldPoint(source_camera, false);
     }
 
-    let ray_distance = depth / denominator;
-    return WorldPoint(source_camera + ray_direction * ray_distance, ray_distance > 0.000001);
+    let distance = depth / denominator;
+    return WorldPoint(source_camera + ray_direction * distance, distance > 0.000001);
 }
 
 fn triangle_corners(cell_x: u32, cell_y: u32, triangle_in_cell: u32) -> TriangleCorners {
@@ -159,8 +154,8 @@ fn intersect_ray_triangle(ray: Ray, p0: vec3f, p1: vec3f, p2: vec3f) -> Triangle
         return TriangleHit(0.0, 0.0, 0.0, false);
     }
 
-    let t = f * dot(edge2, q);
-    return TriangleHit(t, u, v, t > epsilon);
+    let distance = f * dot(edge2, q);
+    return TriangleHit(distance, u, v, distance > epsilon);
 }
 
 @compute @workgroup_size(64)
@@ -197,9 +192,15 @@ fn chart_raycast(@builtin(global_invocation_id) id: vec3u) {
         return;
     }
 
-    let depth_bits = bitcast<u32>(hit.t);
-    let old_depth_bits = atomicMin(&results[point_index].depth_bits, depth_bits);
-    if (depth_bits >= old_depth_bits) {
+    let world = ray.origin + ray.direction * hit.distance;
+    let view_depth = dot(world - ray.origin, params.view_forward_padding.xyz);
+    if (view_depth <= 0.000001) {
+        return;
+    }
+
+    let view_depth_bits = bitcast<u32>(view_depth);
+    let old_view_depth_bits = atomicMin(&results[point_index].view_depth_bits, view_depth_bits);
+    if (view_depth_bits >= old_view_depth_bits) {
         return;
     }
 
@@ -209,5 +210,5 @@ fn chart_raycast(@builtin(global_invocation_id) id: vec3u) {
     let uv2 = grid_uv(corners.c.x, corners.c.y);
     results[point_index].chart_index = chart_index();
     results[point_index].uv = uv0 * w0 + uv1 * hit.u + uv2 * hit.v;
-    results[point_index].world = vec4f(ray.origin + ray.direction * hit.t, 1.0);
+    results[point_index].world = vec4f(world, 1.0);
 }

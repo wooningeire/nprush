@@ -75,19 +75,13 @@ fn chart_world_at(x: u32, y: u32) -> WorldPoint {
     let ray_direction = normalize(far_point - near_point);
     let depth = fields[grid_index(x, y)].x;
     let camera_center = params.camera_center_projection.xyz;
-    let projection_mode = params.camera_center_projection.w;
-
-    if (projection_mode > 0.5) {
-        return WorldPoint(camera_center + ray_direction * depth, true);
-    }
-
     let denominator = dot(ray_direction, params.source_forward_coverage.xyz);
     if (abs(denominator) <= 0.000001) {
         return WorldPoint(camera_center, false);
     }
 
-    let ray_distance = depth / denominator;
-    return WorldPoint(camera_center + ray_direction * ray_distance, ray_distance > 0.000001);
+    let distance = depth / denominator;
+    return WorldPoint(camera_center + ray_direction * distance, distance > 0.000001);
 }
 
 fn chart_normal_endpoint(x: u32, y: u32, world: vec3f) -> WorldPoint {

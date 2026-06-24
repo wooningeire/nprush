@@ -1,16 +1,15 @@
-import type { ChartProjectionMode, PaintView, Vec2 } from "../types.ts";
+import type { Vec2 } from "../types.ts";
 import { MIN_DEPTH } from "./constants.ts";
-import { depthForProjectionAtPoint } from "./projection.ts";
 import { distance2d } from "./strokeSampling.ts";
 import { lerp } from "./vectorMath.ts";
 
 export type SnapCarryDepth = {
-    rayDepth: number,
+    viewDepth: number,
 };
 
-export function snapCarryDepthAtPoint(rayDistance: number): SnapCarryDepth {
+export function snapCarryDepthAtPoint(viewDepth: number): SnapCarryDepth {
     return {
-        rayDepth: Math.max(MIN_DEPTH, rayDistance),
+        viewDepth: Math.max(MIN_DEPTH, viewDepth),
     };
 }
 
@@ -55,20 +54,15 @@ export function carryStrokeDepths(
 }
 
 export function depthForCarriedSnapAtPoint(
-    view: PaintView,
-    point: Vec2,
     depth: SnapCarryDepth | null,
-    projectionMode: ChartProjectionMode,
 ): number | null {
     if (!depth) return null;
-    // Carry ray distance, then convert at the fallback point. Reusing the hit point's
-    // view-plane scalar changes the actual ray depth as the cursor moves.
-    return depthForProjectionAtPoint(view, point, depth.rayDepth, projectionMode);
+    return depth.viewDepth;
 }
 
 function mixSnapCarryDepths(a: SnapCarryDepth, b: SnapCarryDepth, t: number): SnapCarryDepth {
     return {
-        rayDepth: lerp(a.rayDepth, b.rayDepth, t),
+        viewDepth: lerp(a.viewDepth, b.viewDepth, t),
     };
 }
 

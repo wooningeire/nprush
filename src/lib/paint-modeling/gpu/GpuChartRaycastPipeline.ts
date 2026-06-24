@@ -17,7 +17,7 @@ export type GpuChartRaycastHit = {
 };
 
 const WORKGROUP_SIZE = 64;
-const PARAM_WORDS = 48;
+const PARAM_WORDS = 52;
 const PARAM_BYTES = PARAM_WORDS * Uint32Array.BYTES_PER_ELEMENT;
 const RESULT_BYTES = 32;
 const RESULT_WORDS = RESULT_BYTES / Uint32Array.BYTES_PER_ELEMENT;
@@ -200,14 +200,14 @@ const packParams = (
     f32.set(view.viewProjInvMat, 0);
     f32.set(target.sourceView.viewProjInvMat, 16);
     f32.set(cameraCenter(view), 32);
-    f32[35] = target.chart.projectionMode === "ray-depth" ? 1 : 0;
     f32.set(cameraCenter(target.sourceView), 36);
     f32[39] = COVERAGE_EPSILON;
     f32.set(viewForward(target.sourceView), 40);
-    u32[44] = target.chart.width;
-    u32[45] = target.chart.height;
-    u32[46] = pointCount;
-    u32[47] = chartIndex;
+    f32.set(viewForward(view), 44);
+    u32[48] = target.chart.width;
+    u32[49] = target.chart.height;
+    u32[50] = pointCount;
+    u32[51] = chartIndex;
     return u32;
 };
 

@@ -6,6 +6,7 @@ import {
 import {
     chartPointToWorldFromView,
     makeViewRay,
+    viewDepthForDistanceAtPoint,
 } from "./projection.ts";
 import type {
     PaintObject,
@@ -72,12 +73,14 @@ export const raycastPaintObjectSurfacesBatch = (
         for (const target of targets) {
             const chartHits = raycastCachedChart(target.cache, ray);
             for (const hit of chartHits) {
+                const viewDepth = viewDepthForDistanceAtPoint(view, point, hit.distance);
+                if (!Number.isFinite(viewDepth)) continue;
                 hits.push({
                     objectId: object.id,
                     chartId: target.chartId,
                     surfaceRef: { chartId: target.chartId, uv: hit.uv },
                     world: hit.world,
-                    viewDepth: hit.t,
+                    viewDepth,
                 });
             }
         }

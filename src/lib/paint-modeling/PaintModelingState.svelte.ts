@@ -53,7 +53,6 @@ import type {
     BrushStyle,
     BrushMode,
     ChartRole,
-    ChartProjectionMode,
     OcclusionClaim,
     PaintChart,
     PaintLayer,
@@ -96,7 +95,6 @@ export class PaintModelingState {
     activeViewId = $state<string | null>(null);
     activePaintLayerId = $state(BASE_PAINT_LAYER_ID);
     placementMode = $state<PlacementMode>("snap");
-    chartProjectionMode = $state<ChartProjectionMode>("view-plane");
     brushMode = $state<BrushMode>("color");
     brush = $state<BrushStyle>({ ...DEFAULT_COLOR_BRUSH });
     draftStroke = $state<Vec2[] | null>(null);
@@ -209,8 +207,6 @@ export class PaintModelingState {
         this.brushMode = mode;
         this.brush.width = this.brushWidthByMode[mode];
     }
-
-    setChartProjectionMode(mode: ChartProjectionMode) { this.chartProjectionMode = mode; }
 
     setBrushColor(color: string) { this.brush.color = color; }
 
@@ -470,7 +466,6 @@ export class PaintModelingState {
             draftStroke: this.draftStroke,
             brushMode: this.brushMode,
             placementMode: this.placementMode,
-            chartProjectionMode: this.chartProjectionMode,
             brush: this.brush,
             defaultDepthForView: view => this.defaultDepthForView(view),
             raycastObjectSurface: (object, view, point, excludeChartId) =>
@@ -494,8 +489,8 @@ export class PaintModelingState {
 
     private strokePlacementContext(): StrokePlacementContext {
         return {
-            getOrCreateChart: (object, view, role, projectionMode) =>
-                this.getOrCreateChart(object, view, role, projectionMode),
+            getOrCreateChart: (object, view, role) =>
+                this.getOrCreateChart(object, view, role),
             findView: viewId => this.views.find(view => view.id === viewId) ?? null,
             defaultDepthForView: view => this.defaultDepthForView(view),
             paintDepthRadiusForView: view => this.paintDepthRadiusForView(view),
@@ -512,8 +507,8 @@ export class PaintModelingState {
 
     private paintDepthRadiusForView(view: PaintView): number { return paintDepthRadiusForView(view, this.brush.width); }
 
-    private getOrCreateChart(object: PaintObject, view: PaintView, role: ChartRole, projectionMode = this.chartProjectionMode): PaintChart {
-        return getOrCreatePaintChart(object, view, role, projectionMode);
+    private getOrCreateChart(object: PaintObject, view: PaintView, role: ChartRole): PaintChart {
+        return getOrCreatePaintChart(object, view, role);
     }
 
     private raycastObjectSurface(object: PaintObject, view: PaintView, point: Vec2, excludeChartId?: string): SurfaceHit | null {

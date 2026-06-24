@@ -6,7 +6,6 @@ import {
     cloneView,
 } from "./sceneData.ts";
 import type {
-    ChartProjectionMode,
     OcclusionClaim,
     PaintLayer,
     PaintObject,
@@ -25,7 +24,6 @@ export type PaintSceneSnapshot = {
     activeObjectId: string | null,
     activeViewId: string | null,
     activePaintLayerId: string,
-    chartProjectionMode: ChartProjectionMode,
 };
 
 export type PaintSceneSnapshotSource = {
@@ -39,7 +37,6 @@ export type PaintSceneSnapshotSource = {
     activeObjectId: string | null,
     activeViewId: string | null,
     activePaintLayerId: string,
-    chartProjectionMode: ChartProjectionMode,
 };
 
 export type RestoredPaintScene = PaintSceneSnapshotSource;
@@ -57,7 +54,6 @@ export const capturePaintSceneSnapshot = (
     activeObjectId: source.activeObjectId,
     activeViewId: source.activeViewId,
     activePaintLayerId: source.activePaintLayerId,
-    chartProjectionMode: source.chartProjectionMode,
 });
 
 export const restorePaintSceneSnapshot = (
@@ -73,5 +69,4 @@ export const restorePaintSceneSnapshot = (
     activeObjectId: snapshot.activeObjectId,
     activeViewId: snapshot.activeViewId,
     activePaintLayerId: snapshot.activePaintLayerId,
-    chartProjectionMode: snapshot.chartProjectionMode,
 });

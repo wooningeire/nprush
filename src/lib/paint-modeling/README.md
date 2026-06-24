@@ -21,6 +21,7 @@ Each saved view is a calibrated camera:
 V_i = (C_i, pi_i, ray_i)
 
 C_i        camera center in world space
+F_i        forward unit direction through the center of view i
 pi_i(X)   projection from world point X to 2D coordinates in view i
 ray_i(u)  unit world ray direction through 2D point u in view i
 R_i(u)    ray set { C_i + t ray_i(u) | t > 0 }
@@ -37,10 +38,13 @@ Chart c:
   paint: color/alpha strokes attached to chart coordinates or surface refs
 ```
 
-The chart defines world geometry by unprojecting along the source view ray:
+The chart stores view depth. World geometry is reconstructed by converting
+that depth to distance along the source view ray:
 
 ```text
-X_c(u) = C_c + d_c(u) ray_c(u)
+d_c(u) = dot(X_c(u) - C_c, F_c)
+s_c(u) = d_c(u) / dot(ray_c(u), F_c)
+X_c(u) = C_c + s_c(u) ray_c(u)
 ```
 
 The essential source-view invariant is:
@@ -173,9 +177,10 @@ For each pixel/sample `u` inside the occlusion mask, the visibility ordering is:
 depth_j(frontSurface, u) < depth_j(backSurface, u)
 ```
 
-where `depth_j` means distance along the ray from camera `V_j`. This is not the
-same as a universal object layer order; another view may see the surfaces side
-by side, reversed by topology, or not overlapping at all.
+where `depth_j` means camera-forward view depth from `V_j`. This is not the same
+as distance along an off-center ray, nor is it a universal object layer order;
+another view may see the surfaces side by side, reversed by topology, or not
+overlapping at all.
 
 Occlusion boundaries are seams. The front and back surfaces should not be
 smoothed together across that boundary:
@@ -388,7 +393,8 @@ Projection constraint:
   pi_i(X_k) = u_ik
 
 Source depth constraint:
-  X_k = C_i + d_i(u_ik) ray_i(u_ik)
+  d_i(u_ik) = dot(X_k - C_i, F_i)
+  X_k = C_i + d_i(u_ik) / dot(ray_i(u_ik), F_i) * ray_i(u_ik)
 
 Same-object later-view paint:
   pi_j(X_k) approximately u_jk
@@ -460,7 +466,7 @@ implementation step should replace plane-first stroke placement with this order:
    object surface.
 2. If the hit is reliable, attach the paint sample to that surface reference.
 3. If no reliable hit exists, create or extend a source-view chart.
-4. Store depth as distance along the chart source view ray.
+4. Store depth as camera-forward view depth in the chart source view.
 5. Add explicit placement modes for snap, new surface, occluding surface, and
    behind surface.
 6. Record occlusion claims as view-local depth ordering constraints.

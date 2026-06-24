@@ -1,51 +1,38 @@
 import { sampleChartDepth } from "./chartPainting.ts";
 import { MIN_DEPTH } from "./constants.ts";
 import { add3, dot3, normalize3, scale3, sub3 } from "./vectorMath.ts";
-import type { ChartProjectionMode, PaintChart, PaintView, Vec2, Vec3 } from "../types.ts";
+import type { PaintChart, PaintView, Vec2, Vec3 } from "../types.ts";
 
 export const chartPointToWorldFromView = (chart: PaintChart, view: PaintView, uv: Vec2): Vec3 | null => {
-    const ray = makeViewRay(view, uv);
-    if (!ray) return null;
-    const depth = sampleChartDepth(chart, uv);
-    if ((chart.projectionMode ?? "ray-depth") === "ray-depth") {
-        return add3(ray.origin, scale3(ray.direction, depth));
-    }
-    const normal = viewForward(view);
-    const denominator = dot3(ray.direction, normal);
-    if (Math.abs(denominator) <= 1e-6) return null;
-    const rayDistance = depth / denominator;
-    if (!Number.isFinite(rayDistance) || rayDistance <= MIN_DEPTH) return null;
-    return add3(ray.origin, scale3(ray.direction, rayDistance));
+    return viewPointToWorldAtDepth(view, uv, sampleChartDepth(chart, uv));
 };
 
-export const viewPointToWorldAtProjectionDepth = (
+export const viewPointToWorldAtDepth = (
     view: PaintView,
     point: Vec2,
     depth: number,
-    projectionMode: ChartProjectionMode,
 ): Vec3 | null => {
     const ray = makeViewRay(view, point);
     if (!ray) return null;
-    if (projectionMode === "ray-depth") {
-        return add3(ray.origin, scale3(ray.direction, Math.max(MIN_DEPTH, depth)));
-    }
     const denominator = dot3(ray.direction, viewForward(view));
     if (Math.abs(denominator) <= 1e-6) return null;
-    const rayDistance = Math.max(MIN_DEPTH, depth) / denominator;
-    if (!Number.isFinite(rayDistance) || rayDistance <= MIN_DEPTH) return null;
-    return add3(ray.origin, scale3(ray.direction, rayDistance));
+    const distance = Math.max(MIN_DEPTH, depth) / denominator;
+    if (!Number.isFinite(distance) || distance <= MIN_DEPTH) return null;
+    return add3(ray.origin, scale3(ray.direction, distance));
 };
 
-export const depthForProjectionAtPoint = (
+export const viewDepthForDistanceAtPoint = (
     view: PaintView,
     point: Vec2,
-    rayDistance: number,
-    projectionMode: ChartProjectionMode,
+    distance: number,
 ): number => {
-    if (projectionMode === "ray-depth") return rayDistance;
     const ray = makeViewRay(view, point);
-    if (!ray) return rayDistance;
-    return Math.max(MIN_DEPTH, rayDistance * dot3(ray.direction, viewForward(view)));
+    if (!ray) return distance;
+    return Math.max(MIN_DEPTH, distance * dot3(ray.direction, viewForward(view)));
+};
+
+export const viewDepthForWorldPoint = (view: PaintView, point: Vec3): number => {
+    return dot3(sub3(point, cameraCenter(view)), viewForward(view));
 };
 
 export const makeViewRay = (view: PaintView, point: Vec2): { origin: Vec3; direction: Vec3 } | null => {

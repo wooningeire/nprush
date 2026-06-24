@@ -3,12 +3,11 @@ import {
     raycastPaintObjectSurfaceBatch,
     raycastPaintObjectSurfaces,
 } from "./objectRaycast.ts";
-import { cameraCenter } from "./projection.ts";
+import { viewDepthForWorldPoint } from "./projection.ts";
 import type { PaintSurfaceRaycastCache } from "./surfaceRaycastCache.ts";
 import { MIN_DEPTH } from "./constants.ts";
-import { clamp, distance3 } from "./vectorMath.ts";
+import { clamp } from "./vectorMath.ts";
 import type {
-    ChartProjectionMode,
     ChartRole,
     PaintChart,
     PaintObject,
@@ -21,12 +20,10 @@ export const getOrCreatePaintChart = (
     object: PaintObject,
     view: PaintView,
     role: ChartRole,
-    projectionMode: ChartProjectionMode,
 ): PaintChart => {
     const existing = object.charts.find(chart =>
         chart.sourceViewId === view.id
         && chart.role === role
-        && chart.projectionMode === projectionMode
     );
     if (existing) return existing;
 
@@ -35,7 +32,6 @@ export const getOrCreatePaintChart = (
         objectId: object.id,
         sourceViewId: view.id,
         role,
-        projectionMode,
         depth: role === "occluder" ? defaultDepth * 0.82 : defaultDepth,
     });
     object.charts.push(chart);
@@ -87,8 +83,7 @@ export const findPaintChart = (
 };
 
 export const defaultDepthForPaintView = (view: PaintView): number => {
-    const camera = cameraCenter(view);
-    return Math.max(MIN_DEPTH, distance3(camera, [0, 0, 0]));
+    return Math.max(MIN_DEPTH, viewDepthForWorldPoint(view, [0, 0, 0]));
 };
 
 export const paintDepthRadiusForView = (

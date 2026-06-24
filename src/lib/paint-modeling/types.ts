@@ -9,7 +9,7 @@ export type Vec4 = [number, number, number, number];
 export type PlacementMode = "snap" | "new-surface" | "occluding-surface" | "paint-behind";
 export type BrushMode = "color" | "surface" | "depth";
 export type ChartRole = "surface" | "occluder" | "behind";
-export type ChartProjectionMode = "view-plane" | "ray-depth";
+export type ChartProjectionMode = "view-plane";
 export type StrokeGeometryMode = "billboard" | "ribbon";
 
 export type PaintLayer = {

@@ -2,10 +2,9 @@ import { chartHasCoverage } from "./chartPainting.ts";
 import {
     cameraCenter,
     chartPointToWorldFromView,
-    depthForProjectionAtPoint,
     projectVisiblePoint,
     viewForward,
-    viewPointToWorldAtProjectionDepth,
+    viewPointToWorldAtDepth,
 } from "./projection.ts";
 import {
     appendChartSegments,
@@ -21,7 +20,6 @@ import { dot3, sub3 } from "./vectorMath.ts";
 import type {
     BrushMode,
     BrushStyle,
-    ChartProjectionMode,
     PaintChart,
     PaintLayer,
     PaintObject,
@@ -47,7 +45,6 @@ export type RenderAssemblyContext = {
     draftStroke: Vec2[] | null,
     brushMode: BrushMode,
     placementMode: PlacementMode,
-    chartProjectionMode: ChartProjectionMode,
     brush: BrushStyle,
     defaultDepthForView: (view: PaintView) => number,
     raycastObjectSurface: (
@@ -276,9 +273,7 @@ const draftStrokePreviewDepth = (
 
     const cursor = context.draftStroke.at(-1)!;
     const hit = context.raycastObjectSurface(object, view, cursor);
-    return hit
-        ? depthForProjectionAtPoint(view, cursor, hit.viewDepth, context.chartProjectionMode)
-        : context.defaultDepthForView(view);
+    return hit ? hit.viewDepth : context.defaultDepthForView(view);
 };
 
 const draftStrokePreviewWorldPoint = (
@@ -289,10 +284,10 @@ const draftStrokePreviewWorldPoint = (
     previewDepth: number,
 ): Vec3 | null => {
     if (context.brushMode === "surface") {
-        return viewPointToWorldAtProjectionDepth(view, point, previewDepth, "view-plane");
+        return viewPointToWorldAtDepth(view, point, previewDepth);
     }
     if (context.placementMode === "snap") {
-        return viewPointToWorldAtProjectionDepth(view, point, previewDepth, context.chartProjectionMode);
+        return viewPointToWorldAtDepth(view, point, previewDepth);
     }
     return draftStrokeWorldPoint(context, object, view, point);
 };
@@ -311,46 +306,31 @@ const draftStrokeWorldPoint = (
     if (context.placementMode === "paint-behind") {
         const hit = context.raycastObjectSurface(object, view, point);
         if (hit) {
-            const depth = depthForProjectionAtPoint(
-                view,
-                point,
-                hit.viewDepth + OCCLUSION_GAP,
-                context.chartProjectionMode,
-            );
-            return viewPointToWorldAtProjectionDepth(view, point, depth, context.chartProjectionMode);
+            return viewPointToWorldAtDepth(view, point, hit.viewDepth + OCCLUSION_GAP);
         }
-        return viewPointToWorldAtProjectionDepth(
+        return viewPointToWorldAtDepth(
             view,
             point,
             context.defaultDepthForView(view) * 1.12,
-            context.chartProjectionMode,
         );
     }
 
     if (context.placementMode === "occluding-surface") {
         const hit = context.raycastObjectSurface(object, view, point);
         if (hit) {
-            const depth = depthForProjectionAtPoint(
-                view,
-                point,
-                Math.max(MIN_DEPTH, hit.viewDepth - OCCLUSION_GAP),
-                context.chartProjectionMode,
-            );
-            return viewPointToWorldAtProjectionDepth(view, point, depth, context.chartProjectionMode);
+            return viewPointToWorldAtDepth(view, point, Math.max(MIN_DEPTH, hit.viewDepth - OCCLUSION_GAP));
         }
-        return viewPointToWorldAtProjectionDepth(
+        return viewPointToWorldAtDepth(
             view,
             point,
             context.defaultDepthForView(view) * 0.82,
-            context.chartProjectionMode,
         );
     }
 
-    return viewPointToWorldAtProjectionDepth(
+    return viewPointToWorldAtDepth(
         view,
         point,
         context.defaultDepthForView(view),
-        context.chartProjectionMode,
     );
 };
 
