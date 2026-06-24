@@ -1,7 +1,7 @@
 import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
 import { Splat } from "./Splat.wgsl.ts";
 
-export default interpolateWgslTemplate`
+export default interpolateWgslTemplate/* wgsl */`
 // 4-pass 8-bit radix sort of splat indices by camera depth (far-to-near).
 //
 // Each pass processes one 8-bit digit of the 32-bit key. Keys are bit-inverted

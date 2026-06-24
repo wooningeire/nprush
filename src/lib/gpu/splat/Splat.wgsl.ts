@@ -1,6 +1,6 @@
 import { WgslStruct } from "../wgsl-templates/WgslStruct.ts";
 
-export const Splat = WgslStruct.fromCode(`\
+export const Splat = WgslStruct.fromCode(/* wgsl */`\
 struct Splat {
     pos_sx: vec4f,
     color: vec4f,

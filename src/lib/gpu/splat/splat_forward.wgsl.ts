@@ -1,7 +1,7 @@
 import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
 import { Splat } from "./Splat.wgsl.ts";
 
-export default interpolateWgslTemplate`
+export default interpolateWgslTemplate/* wgsl */`
 const SH_C1: f32 = 0.4886025119029199;
 const DEPTH_NEAR: f32 = 0.1;
 
