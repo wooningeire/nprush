@@ -22,6 +22,7 @@ export type PaintLayer = {
 export interface PaintView {
     id: string;
     name: string;
+    order: number;
     long: number;
     lat: number;
     radius: number;

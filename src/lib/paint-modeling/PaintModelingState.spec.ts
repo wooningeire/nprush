@@ -367,6 +367,44 @@ describe("PaintModelingState prototype", () => {
         expect(state.buildRenderSegments(true).filter(isRenderSegment).length).toBe(sceneSegmentCount);
     });
 
+    it("reorders paint layers, objects, and views with undoable order fields", () => {
+        const state = new PaintModelingState();
+        const layer1 = state.paintLayers[0];
+        const layer2 = state.addPaintLayer(false);
+        const layer3 = state.addPaintLayer(false);
+
+        state.addObject("Object 1", false);
+        const object1 = state.objects[0];
+        state.addObject("Object 2", false);
+        const object2 = state.objects[1];
+
+        const view1 = state.views[0];
+        state.orbit.turn({ x: 20, y: 0 });
+        const view2 = state.saveCurrentView(800, 600, false);
+
+        state.beginUndoGroup();
+        expect(state.reorderPaintLayer(layer3.id, layer1.id)).toBe(true);
+        expect(state.reorderObject(object2.id, object1.id)).toBe(true);
+        expect(state.reorderView(view2.id, view1.id)).toBe(true);
+        state.commitUndoGroup();
+
+        expect(state.paintLayers.map(layer => layer.id)).toEqual([layer3.id, layer1.id, layer2.id]);
+        expect(state.paintLayers.map(layer => layer.order)).toEqual([0, 1, 2]);
+        expect(state.objects.map(object => object.id)).toEqual([object2.id, object1.id]);
+        expect(state.objects.map(object => object.layerIndex)).toEqual([0, 1]);
+        expect(state.views.map(view => view.id)).toEqual([view2.id, view1.id]);
+        expect(state.views.map(view => view.order)).toEqual([0, 1]);
+
+        expect(state.undo()).toBe(true);
+
+        expect(state.paintLayers.map(layer => layer.id)).toEqual([layer1.id, layer2.id, layer3.id]);
+        expect(state.paintLayers.map(layer => layer.order)).toEqual([0, 1, 2]);
+        expect(state.objects.map(object => object.id)).toEqual([object1.id, object2.id]);
+        expect(state.objects.map(object => object.layerIndex)).toEqual([0, 1]);
+        expect(state.views.map(view => view.id)).toEqual([view1.id, view2.id]);
+        expect(state.views.map(view => view.order)).toEqual([0, 1]);
+    });
+
     it("undoes paint layer creation", () => {
         const state = new PaintModelingState();
         const baseLayerId = state.activePaintLayerId;

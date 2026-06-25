@@ -39,6 +39,7 @@ export type ViewDeletionResult = {
 
 export const capturePaintView = (
     name: string,
+    order: number,
     width: number,
     height: number,
     orbit: PaintOrbitSource,
@@ -46,6 +47,7 @@ export const capturePaintView = (
 ): PaintView => ({
     id: makeViewId(),
     name,
+    order,
     long: orbit.long,
     lat: orbit.lat,
     radius: orbit.radius,

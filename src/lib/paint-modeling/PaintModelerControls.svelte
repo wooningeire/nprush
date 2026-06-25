@@ -1,4 +1,6 @@
 <script lang="ts">
+import { flip } from "svelte/animate";
+import { circOut } from "svelte/easing";
 import type { PaintModelingState } from "./PaintModelingState.svelte.ts";
 
 let {
@@ -21,12 +23,53 @@ let {
 
 let sortedPaintLayers = $derived([...modelerState.paintLayers].sort((a, b) => a.order - b.order));
 let sortedObjects = $derived([...modelerState.objects].sort((a, b) => a.layerIndex - b.layerIndex));
-let sortedViews = $derived([...modelerState.views].sort((a, b) => a.createdAt - b.createdAt));
+let sortedViews = $derived([...modelerState.views].sort((a, b) => a.order - b.order));
 
 const layerStrokeCount = (layerId: string, layerOrder: number): number =>
     modelerState.strokes.filter(stroke =>
         stroke.layerId === layerId || (!stroke.layerId && layerOrder === 0)
     ).length;
+
+type ReorderList = "paint-layer" | "object" | "view";
+
+let draggingList = $state<ReorderList | null>(null);
+let draggingId = $state<string | null>(null);
+
+const reorderDraggedItem = (list: ReorderList, sourceId: string, targetId: string): boolean => {
+    if (list === "paint-layer") return modelerState.reorderPaintLayer(sourceId, targetId);
+    if (list === "object") return modelerState.reorderObject(sourceId, targetId);
+    return modelerState.reorderView(sourceId, targetId);
+};
+
+const beginDragReorder = (list: ReorderList, id: string, event: DragEvent): void => {
+    draggingList = list;
+    draggingId = id;
+    modelerState.beginUndoGroup();
+    event.dataTransfer?.setData("text/plain", id);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+};
+
+const dragOverReorderTarget = (list: ReorderList, targetId: string, event: DragEvent): void => {
+    if (draggingList !== list || !draggingId) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    if (draggingId === targetId) return;
+
+    if (reorderDraggedItem(list, draggingId, targetId)) requestRender();
+};
+
+const finishDragReorder = (): void => {
+    modelerState.commitUndoGroup();
+    draggingList = null;
+    draggingId = null;
+};
+
+const dropReorderTarget = (event: DragEvent): void => {
+    event.preventDefault();
+    finishDragReorder();
+};
+
+const isDragging = (list: ReorderList, id: string): boolean => draggingList === list && draggingId === id;
 </script>
 
 <aside class="control-panel">
@@ -160,8 +203,15 @@ const layerStrokeCount = (layerId: string, layerOrder: number): number =>
             {#each sortedPaintLayers as layer (layer.id)}
                 <button
                     type="button"
-                    class="select-row layer-row"
+                    class="select-row layer-row sortable-row"
                     class:active={layer.id === modelerState.activePaintLayerId}
+                    class:dragging={isDragging("paint-layer", layer.id)}
+                    draggable="true"
+                    ondragstart={(event) => beginDragReorder("paint-layer", layer.id, event)}
+                    ondragover={(event) => dragOverReorderTarget("paint-layer", layer.id, event)}
+                    ondrop={dropReorderTarget}
+                    ondragend={finishDragReorder}
+                    animate:flip={{duration: 200, easing: circOut}}
                     onclick={() => {
                         modelerState.selectPaintLayer(layer.id);
                         requestRender();
@@ -183,7 +233,18 @@ const layerStrokeCount = (layerId: string, layerOrder: number): number =>
         {:else}
             <div class="list">
                 {#each sortedObjects as object (object.id)}
-                    <div class="list-row">
+                    <div
+                        class="list-row sortable-row"
+                        class:dragging={isDragging("object", object.id)}
+                        role="group"
+                        aria-label={`Drag ${object.name}`}
+                        draggable="true"
+                        ondragstart={(event) => beginDragReorder("object", object.id, event)}
+                        ondragover={(event) => dragOverReorderTarget("object", object.id, event)}
+                        ondrop={dropReorderTarget}
+                        ondragend={finishDragReorder}
+                        animate:flip={{duration: 200, easing: circOut}}
+                    >
                         <button
                             class="select-row"
                             class:active={object.id === modelerState.activeObjectId}
@@ -220,7 +281,18 @@ const layerStrokeCount = (layerId: string, layerOrder: number): number =>
         {:else}
             <div class="list">
                 {#each sortedViews as view (view.id)}
-                    <div class="list-row">
+                    <div
+                        class="list-row sortable-row"
+                        class:dragging={isDragging("view", view.id)}
+                        role="group"
+                        aria-label={`Drag ${view.name}`}
+                        draggable="true"
+                        ondragstart={(event) => beginDragReorder("view", view.id, event)}
+                        ondragover={(event) => dragOverReorderTarget("view", view.id, event)}
+                        ondrop={dropReorderTarget}
+                        ondragend={finishDragReorder}
+                        animate:flip={{duration: 200, easing: circOut}}
+                    >
                         <button
                             class="select-row"
                             class:active={view.id === modelerState.activeViewId && modelerState.isCameraAtActiveView}
@@ -409,6 +481,15 @@ button {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
+}
+
+.sortable-row {
+    user-select: none;
+    cursor: grab;
+
+    &.dragging {
+        opacity: 0.58;
+    }
 }
 
 .layer-row {

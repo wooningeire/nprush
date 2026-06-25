@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "playwright/test";
+import { expect, test, type Locator, type Page } from "playwright/test";
 
 test("paint modeler canvas supports the simplified paint tool surface", async ({ page }) => {
     const consoleProblems: string[] = [];
@@ -21,6 +21,14 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await expect(paintLayers.getByRole("button", { name: /Layer 1\s+0s/ })).toHaveClass(/active/);
     await paintLayers.getByRole("button", { name: "Add" }).click();
     await expect(paintLayers.getByRole("button", { name: /Layer 2\s+0s/ })).toHaveClass(/active/);
+    await paintLayers.getByRole("button", { name: "Add" }).click();
+    await expect(paintLayers.getByRole("button", { name: /Layer 3\s+0s/ })).toHaveClass(/active/);
+    await dragRowBefore(
+        page,
+        paintLayers.locator(".layer-row").filter({ hasText: "Layer 3" }),
+        paintLayers.locator(".layer-row").filter({ hasText: "Layer 1" }),
+    );
+    await expect(paintLayers.locator(".layer-row").first()).toContainText("Layer 3");
     await paintLayers.getByRole("button", { name: /Layer 1\s+0s/ }).click();
     await expect(paintLayers.getByRole("button", { name: /Layer 1\s+0s/ })).toHaveClass(/active/);
 
@@ -30,6 +38,33 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     expect(layerBox.x).toBeGreaterThanOrEqual(controlPanelBox.x - 1);
     expect(layerBox.x + layerBox.width).toBeLessThanOrEqual(controlPanelBox.x + controlPanelBox.width + 1);
 
+    const viewport = page.locator("paint-viewport");
+    await expect(viewport).toBeVisible();
+    const initialViewportBox = await viewport.boundingBox();
+    if (!initialViewportBox) throw new Error("paint viewport missing");
+    const initialCx = initialViewportBox.x + initialViewportBox.width * 0.5;
+    const initialCy = initialViewportBox.y + initialViewportBox.height * 0.5;
+    await page.mouse.move(initialCx, initialCy);
+    await page.mouse.down({ button: "middle" });
+    await page.mouse.move(initialCx + 64, initialCy + 18, { steps: 4 });
+    await page.mouse.up({ button: "middle" });
+    await page.getByRole("button", { name: "Add Object" }).click();
+
+    const objects = page.locator("section").filter({ hasText: "Objects" });
+    await dragRowBefore(
+        page,
+        objects.locator(".list-row").filter({ hasText: "Object 2" }),
+        objects.locator(".list-row").filter({ hasText: "Object 1" }),
+    );
+    await expect(objects.locator(".list-row").first()).toContainText("Object 2");
+
+    const views = page.locator("section").filter({ hasText: "Views" });
+    await dragRowBefore(
+        page,
+        views.locator(".list-row").filter({ hasText: "View 2" }),
+        views.locator(".list-row").filter({ hasText: "View 1" }),
+    );
+    await expect(views.locator(".list-row").first()).toContainText("View 2");
     await expect(page.getByRole("button", { name: "Depth Brush" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Depth Pull" })).toHaveCount(0);
     await expect(page.getByText("Placement", { exact: true })).toHaveCount(0);
@@ -69,7 +104,6 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await expect(page.getByRole("button", { name: "Surface" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Width")).toHaveValue("66");
 
-    const viewport = page.locator("paint-viewport");
     await expect(viewport).toBeVisible();
     const box = await viewport.boundingBox();
     if (!box) throw new Error("paint viewport missing");
@@ -135,6 +169,12 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     expect(consoleProblems).toEqual([]);
 });
 
+async function dragRowBefore(page: Page, source: Locator, target: Locator) {
+    await source.scrollIntoViewIfNeeded();
+    await target.scrollIntoViewIfNeeded();
+    await source.dragTo(target);
+    await waitForAnimationFrame(page);
+}
 function isExpectedStartupNoise(text: string): boolean {
     return text.includes("ResizeObserver loop completed")
         || text.includes("could not get gpu adapter");

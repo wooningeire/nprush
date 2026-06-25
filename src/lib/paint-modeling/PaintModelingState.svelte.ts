@@ -19,6 +19,7 @@ import {
     createBasePaintLayer,
     createPaintLayer,
 } from "./state/paintLayers.ts";
+import { reorderPaintLayers, reorderPaintObjects, reorderPaintViews } from "./state/reorder.ts";
 import { makeId } from "./state/sceneData.ts";
 import {
     cameraMovedFromPaintView,
@@ -198,6 +199,35 @@ export class PaintModelingState {
 
     selectPaintLayer(layerId: string) {
         if (this.paintLayers.some(layer => layer.id === layerId)) this.activePaintLayerId = layerId;
+    }
+
+    reorderPaintLayer(layerId: string, targetLayerId: string): boolean {
+        const paintLayers = reorderPaintLayers(this.paintLayers, layerId, targetLayerId);
+        if (!paintLayers) return false;
+
+        this.recordUndoSnapshot();
+        this.paintLayers = paintLayers;
+        this.meshVersion += 1;
+        return true;
+    }
+
+    reorderObject(objectId: string, targetObjectId: string): boolean {
+        const objects = reorderPaintObjects(this.objects, objectId, targetObjectId);
+        if (!objects) return false;
+
+        this.recordUndoSnapshot();
+        this.objects = objects;
+        this.meshVersion += 1;
+        return true;
+    }
+
+    reorderView(viewId: string, targetViewId: string): boolean {
+        const views = reorderPaintViews(this.views, viewId, targetViewId);
+        if (!views) return false;
+
+        this.recordUndoSnapshot();
+        this.views = views;
+        return true;
     }
 
     setPlacementMode(mode: PlacementMode) { this.placementMode = mode; }
@@ -431,6 +461,7 @@ export class PaintModelingState {
                     ? {
                         ...refreshedView,
                         id: active.id,
+                        order: active.order,
                         createdAt: active.createdAt,
                     }
                     : view);
@@ -484,7 +515,7 @@ export class PaintModelingState {
     }
 
     private captureCurrentView(name: string, width: number, height: number): PaintView {
-        return capturePaintView(name, width, height, this.orbit, this.camera);
+        return capturePaintView(name, this.nextViewOrder(), width, height, this.orbit, this.camera);
     }
 
     private strokePlacementContext(): StrokePlacementContext {
@@ -530,6 +561,8 @@ export class PaintModelingState {
     private nextLayerIndex(): number { return this.objects.reduce((max, object) => Math.max(max, object.layerIndex), -1) + 1; }
 
     private nextPaintLayerOrder(): number { return this.paintLayers.reduce((max, layer) => Math.max(max, layer.order), -1) + 1; }
+
+    private nextViewOrder(): number { return this.views.reduce((max, view) => Math.max(max, view.order), -1) + 1; }
 
     private nextPaintOrder(objectId: string): number {
         return this.strokes
