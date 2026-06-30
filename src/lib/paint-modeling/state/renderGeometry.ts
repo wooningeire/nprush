@@ -44,11 +44,14 @@ export type SurfaceRenderPoint = {
 };
 
 type RibbonPoint = {
+    center: Vec3,
     left: Vec3,
     right: Vec3,
+    sideOffset: Vec2,
 };
 
 type RibbonSample = {
+    sourcePoint: Vec2,
     point: RibbonPoint,
 };
 
@@ -191,7 +194,27 @@ const appendRibbonStrokeTriangles = (
     surfacePointForRef: (ref: SurfaceRef) => SurfaceRenderPoint | null,
     color: Vec4,
 ) => {
-    let previous: RibbonSample | null = null;
+    let run: RibbonSample[] = [];
+
+    const flushRun = () => {
+        if (run.length < 2) {
+            run = [];
+            return;
+        }
+
+        for (let i = 1; i < run.length; i++) {
+            appendRibbonQuad(segments, run[i - 1].point, run[i].point, color);
+        }
+
+        const startCap = ribbonCapPointAt(run[0], run[1], strokeSourceView, stroke.style.width);
+        if (startCap) appendRibbonQuad(segments, startCap, run[0].point, color);
+
+        const endIndex = run.length - 1;
+        const endCap = ribbonCapPointAt(run[endIndex], run[endIndex - 1], strokeSourceView, stroke.style.width);
+        if (endCap) appendRibbonQuad(segments, run[endIndex].point, endCap, color);
+
+        run = [];
+    };
 
     for (let index = 0; index < stroke.samples.length; index++) {
         const sample = stroke.samples[index];
@@ -200,15 +223,59 @@ const appendRibbonStrokeTriangles = (
             ? ribbonPointAt(stroke.samples, index, strokeSourceView, stroke.style.width, center)
             : null;
         if (!point) {
-            previous = null;
+            flushRun();
             continue;
         }
 
-        if (previous) {
-            appendRibbonQuad(segments, previous.point, point, color);
-        }
-        previous = { point };
+        run.push({
+            sourcePoint: sample.sourcePoint,
+            point,
+        });
     }
+
+    flushRun();
+};
+
+const ribbonCapPointAt = (
+    sample: RibbonSample,
+    neighbor: RibbonSample,
+    strokeSourceView: PaintView,
+    width: number,
+): RibbonPoint | null => {
+    const sourcePoint = ribbonCapSourcePointAt(sample, neighbor, strokeSourceView, width);
+    if (!sourcePoint) return null;
+
+    const viewDepth = dot3(sub3(sample.point.center, cameraCenter(strokeSourceView)), viewForward(strokeSourceView));
+    if (!Number.isFinite(viewDepth) || viewDepth <= MIN_DEPTH) return null;
+
+    const center = viewPointToWorldAtDepth(strokeSourceView, sourcePoint, viewDepth);
+    if (!center) return null;
+
+    return ribbonPointAroundCenter(
+        strokeSourceView,
+        sourcePoint,
+        viewDepth,
+        sample.point.sideOffset,
+        center,
+    );
+};
+
+const ribbonCapSourcePointAt = (
+    sample: RibbonSample,
+    neighbor: RibbonSample,
+    strokeSourceView: PaintView,
+    width: number,
+): Vec2 | null => {
+    const dxPx = (sample.sourcePoint.x - neighbor.sourcePoint.x) * strokeSourceView.width * 0.5;
+    const dyPx = (sample.sourcePoint.y - neighbor.sourcePoint.y) * strokeSourceView.height * 0.5;
+    const lengthPx = Math.hypot(dxPx, dyPx);
+    if (lengthPx <= 1e-6) return null;
+
+    const halfWidthPx = Math.max(width, 1) * 0.5;
+    return {
+        x: sample.sourcePoint.x + dxPx / lengthPx * halfWidthPx * 2 / strokeSourceView.width,
+        y: sample.sourcePoint.y + dyPx / lengthPx * halfWidthPx * 2 / strokeSourceView.height,
+    };
 };
 
 const ribbonPointAt = (
@@ -225,11 +292,27 @@ const ribbonPointAt = (
     const viewDepth = dot3(sub3(center, cameraCenter(strokeSourceView)), viewForward(strokeSourceView));
     if (!Number.isFinite(viewDepth) || viewDepth <= MIN_DEPTH) return null;
 
+    return ribbonPointAroundCenter(
+        strokeSourceView,
+        sample.sourcePoint,
+        viewDepth,
+        sideOffset,
+        center,
+    );
+};
+
+const ribbonPointAroundCenter = (
+    strokeSourceView: PaintView,
+    sourcePoint: Vec2,
+    viewDepth: number,
+    sideOffset: Vec2,
+    center: Vec3,
+): RibbonPoint | null => {
     const sideWorld = viewPointToWorldAtDepth(
         strokeSourceView,
         {
-            x: sample.sourcePoint.x + sideOffset.x,
-            y: sample.sourcePoint.y + sideOffset.y,
+            x: sourcePoint.x + sideOffset.x,
+            y: sourcePoint.y + sideOffset.y,
         },
         viewDepth,
     );
@@ -239,8 +322,10 @@ const ribbonPointAt = (
     if (Math.hypot(side[0], side[1], side[2]) <= 1e-8) return null;
 
     return {
+        center,
         left: sub3(center, side),
         right: add3(center, side),
+        sideOffset,
     };
 };
 

@@ -1018,6 +1018,35 @@ describe("PaintModelingState prototype", () => {
         expect(ribbonTriangles.every(triangle => triangle.color[3] === 1)).toBe(true);
     });
 
+    it("keeps ribbon caps visible after committing a stroke", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("ribbon");
+        state.setBrushWidth(40);
+        drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
+
+        const stroke = state.strokes[0];
+        const sourceView = state.views.find(view => view.id === stroke.sourceViewId)!;
+        const ribbonTriangles = state
+            .buildRenderSegments({ showChartWireframe: false })
+            .filter(isRenderTriangle);
+        const projectedXPx = ribbonTriangles
+            .flatMap(triangle => [
+                triangle.a,
+                triangle.b,
+                triangle.c,
+            ])
+            .map(point => projectWorldPoint(sourceView, point).x * sourceView.width * 0.5);
+        const firstSampleXPx = stroke.samples[0].sourcePoint.x * sourceView.width * 0.5;
+        const lastSampleXPx = stroke.samples.at(-1)!.sourcePoint.x * sourceView.width * 0.5;
+
+        expect(Math.min(...projectedXPx)).toBeGreaterThan(firstSampleXPx - 20.5);
+        expect(Math.min(...projectedXPx)).toBeLessThan(firstSampleXPx - 19.5);
+        expect(Math.max(...projectedXPx)).toBeGreaterThan(lastSampleXPx + 19.5);
+        expect(Math.max(...projectedXPx)).toBeLessThan(lastSampleXPx + 20.5);
+    });
+
     it("keeps thin committed strokes visible even when chart fill triangles are sparse", () => {
         const state = new PaintModelingState();
         state.addObject();
