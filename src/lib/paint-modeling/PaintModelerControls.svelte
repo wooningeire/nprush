@@ -8,17 +8,21 @@ let {
     rendererError,
     showChartWireframe,
     showSurfaceField,
+    shadeRibbons,
     requestRender,
     setShowChartWireframe,
     setShowSurfaceField,
+    setShadeRibbons,
 }: {
     modelerState: PaintModelingState,
     rendererError: string | null,
     showChartWireframe: boolean,
     showSurfaceField: boolean,
+    shadeRibbons: boolean,
     requestRender: () => void,
     setShowChartWireframe: (value: boolean) => void,
     setShowSurfaceField: (value: boolean) => void,
+    setShadeRibbons: (value: boolean) => void,
 } = $props();
 
 let sortedPaintLayers = $derived([...modelerState.paintLayers].sort((a, b) => a.order - b.order));
@@ -127,16 +131,6 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
         <div class="mode-row stroke-geometry-row" role="group" aria-label="Stroke geometry">
             <button
                 type="button"
-                class:active={modelerState.brush.geometryMode === "billboard"}
-                aria-pressed={modelerState.brush.geometryMode === "billboard"}
-                disabled={modelerState.brushMode !== "color"}
-                onclick={() => {
-                    modelerState.setBrushGeometryMode("billboard");
-                    requestRender();
-                }}
-            >Billboard</button>
-            <button
-                type="button"
                 class:active={modelerState.brush.geometryMode === "ribbon"}
                 aria-pressed={modelerState.brush.geometryMode === "ribbon"}
                 disabled={modelerState.brushMode !== "color"}
@@ -145,7 +139,28 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
                     requestRender();
                 }}
             >Ribbon</button>
+            <button
+                type="button"
+                class:active={modelerState.brush.geometryMode === "billboard"}
+                aria-pressed={modelerState.brush.geometryMode === "billboard"}
+                disabled={modelerState.brushMode !== "color"}
+                onclick={() => {
+                    modelerState.setBrushGeometryMode("billboard");
+                    requestRender();
+                }}
+            >Billboard</button>
         </div>
+        <label class="toggle-row">
+            <input
+                type="checkbox"
+                checked={shadeRibbons}
+                disabled={modelerState.brushMode !== "color" || modelerState.brush.geometryMode !== "ribbon"}
+                onchange={(event) => {
+                    setShadeRibbons((event.currentTarget as HTMLInputElement).checked);
+                }}
+            />
+            <span>Shade ribbons</span>
+        </label>
         <label class="color-row">
             <span>Color</span>
             <input

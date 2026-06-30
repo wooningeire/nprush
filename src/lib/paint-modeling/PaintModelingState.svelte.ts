@@ -75,7 +75,7 @@ const DEFAULT_COLOR_BRUSH: BrushStyle = {
     color: "#ffd27a",
     width: 18,
     opacity: 1,
-    geometryMode: "billboard",
+    geometryMode: "ribbon",
 };
 const DEFAULT_BRUSH_WIDTH_BY_MODE: Record<BrushMode, number> = {
     color: DEFAULT_COLOR_BRUSH.width,

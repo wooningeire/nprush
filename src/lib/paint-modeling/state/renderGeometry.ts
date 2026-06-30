@@ -172,10 +172,11 @@ export const appendStrokeRenderSegments = (
     stroke: PaintStroke,
     strokeSourceView: PaintView | null,
     surfacePointForRef: (ref: SurfaceRef) => SurfaceRenderPoint | null,
+    shadeRibbons: boolean,
 ) => {
     const color = parseColor(stroke.style.color, stroke.style.opacity);
     if ((stroke.style.geometryMode ?? "billboard") === "ribbon" && strokeSourceView) {
-        appendRibbonStrokeTriangles(segments, stroke, strokeSourceView, surfacePointForRef, color);
+        appendRibbonStrokeTriangles(segments, stroke, strokeSourceView, surfacePointForRef, color, shadeRibbons);
         return;
     }
 
@@ -193,8 +194,10 @@ const appendRibbonStrokeTriangles = (
     strokeSourceView: PaintView,
     surfacePointForRef: (ref: SurfaceRef) => SurfaceRenderPoint | null,
     color: Vec4,
+    shadeRibbons: boolean,
 ) => {
     let run: RibbonSample[] = [];
+    const shade = shadeRibbons ? 1 : 0;
 
     const flushRun = () => {
         if (run.length < 2) {
@@ -203,15 +206,15 @@ const appendRibbonStrokeTriangles = (
         }
 
         for (let i = 1; i < run.length; i++) {
-            appendRibbonQuad(segments, run[i - 1].point, run[i].point, color);
+            appendRibbonQuad(segments, run[i - 1].point, run[i].point, color, shade);
         }
 
         const startCap = ribbonCapPointAt(run[0], run[1], strokeSourceView, stroke.style.width);
-        if (startCap) appendRibbonQuad(segments, startCap, run[0].point, color);
+        if (startCap) appendRibbonQuad(segments, startCap, run[0].point, color, shade);
 
         const endIndex = run.length - 1;
         const endCap = ribbonCapPointAt(run[endIndex], run[endIndex - 1], strokeSourceView, stroke.style.width);
-        if (endCap) appendRibbonQuad(segments, run[endIndex].point, endCap, color);
+        if (endCap) appendRibbonQuad(segments, run[endIndex].point, endCap, color, shade);
 
         run = [];
     };
@@ -359,9 +362,20 @@ const appendRibbonQuad = (
     a: RibbonPoint,
     b: RibbonPoint,
     color: Vec4,
+    shade: number,
 ) => {
-    appendWorldTriangle(segments, a.left, a.right, b.right, color);
-    appendWorldTriangle(segments, a.left, b.right, b.left, color);
+    appendWorldTriangle(segments, a.left, a.right, b.right, color, {
+        normal: triangleNormal(a.left, a.right, b.right),
+        shade,
+    });
+    appendWorldTriangle(segments, a.left, b.right, b.left, color, {
+        normal: triangleNormal(a.left, b.right, b.left),
+        shade,
+    });
+};
+
+const triangleNormal = (a: Vec3, b: Vec3, c: Vec3): Vec3 => {
+    return normalize3(cross3(sub3(b, a), sub3(c, a)), [0, 0, 1]);
 };
 
 export const appendWorldStrokeRun = (
@@ -473,6 +487,7 @@ const appendWorldTriangle = (
     b: Vec3 | null,
     c: Vec3 | null,
     color: Vec4,
+    options: { normal?: Vec3; shade?: number } = {},
 ) => {
     if (!a || !b || !c) return;
     segments.push({
@@ -481,5 +496,7 @@ const appendWorldTriangle = (
         b,
         c,
         color,
+        ...(options.normal ? { normal: options.normal } : {}),
+        ...(options.shade !== undefined ? { shade: options.shade } : {}),
     });
 };

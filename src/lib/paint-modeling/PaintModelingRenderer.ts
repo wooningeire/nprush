@@ -12,6 +12,7 @@ import {
     GRID_UNIFORM_FLOATS,
     MATRIX_FLOATS,
     SEGMENT_UNIFORM_FLOATS,
+    TRIANGLE_UNIFORM_FLOATS,
     VERTICES_PER_SEGMENT,
     VERTICES_PER_TRIANGLE,
 } from "./renderer/constants.ts";
@@ -121,7 +122,7 @@ export class PaintModelingRenderer {
 
         this.gridUniformBuffer = createUniformBuffer(device, GRID_UNIFORM_FLOATS, "paint modeler grid uniforms");
         this.segmentUniformBuffer = createUniformBuffer(device, SEGMENT_UNIFORM_FLOATS, "paint modeler segment uniforms");
-        this.triangleUniformBuffer = createUniformBuffer(device, MATRIX_FLOATS, "paint modeler triangle uniforms");
+        this.triangleUniformBuffer = createUniformBuffer(device, TRIANGLE_UNIFORM_FLOATS, "paint modeler triangle uniforms");
         this.gridBindGroup = createUniformBindGroup(
             device,
             uniformBindGroupLayout,
@@ -230,13 +231,17 @@ export class PaintModelingRenderer {
         this.device.queue.submit([encoder.finish()]);
     }
 
-    render(viewProjMat: number[] | Float32Array, viewProjInvMat: number[] | Float32Array) {
+    render(
+        viewProjMat: number[] | Float32Array,
+        viewProjInvMat: number[] | Float32Array,
+        viewMat: number[] | Float32Array,
+    ) {
         const width = Math.floor(this.context.canvas.width);
         const height = Math.floor(this.context.canvas.height);
         if (width <= 0 || height <= 0) return;
 
         this.ensureDepthTexture(width, height);
-        this.writeUniforms(viewProjMat, viewProjInvMat);
+        this.writeUniforms(viewProjMat, viewProjInvMat, viewMat);
         const chartRenderItems = this.chartStore.prepareRenderItems(
             this.chartScene.objects,
             this.chartScene.views,
@@ -297,7 +302,11 @@ export class PaintModelingRenderer {
         this.device.destroy();
     }
 
-    private writeUniforms(viewProjMat: number[] | Float32Array, viewProjInvMat: number[] | Float32Array) {
+    private writeUniforms(
+        viewProjMat: number[] | Float32Array,
+        viewProjInvMat: number[] | Float32Array,
+        viewMat: number[] | Float32Array,
+    ) {
         const canvas = this.context.canvas as HTMLCanvasElement;
         const gridUniformData = new Float32Array(GRID_UNIFORM_FLOATS);
         gridUniformData.set(viewProjInvMat, 0);
@@ -316,8 +325,9 @@ export class PaintModelingRenderer {
         );
         this.device.queue.writeBuffer(this.segmentUniformBuffer, 0, segmentUniformData);
 
-        const triangleUniformData = new Float32Array(MATRIX_FLOATS);
+        const triangleUniformData = new Float32Array(TRIANGLE_UNIFORM_FLOATS);
         triangleUniformData.set(viewProjMat, 0);
+        triangleUniformData.set(viewMat, MATRIX_FLOATS);
         this.device.queue.writeBuffer(this.triangleUniformBuffer, 0, triangleUniformData);
     }
 

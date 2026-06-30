@@ -6,6 +6,8 @@ import {
     VERTICES_PER_TRIANGLE,
 } from "./constants.ts";
 
+const DEFAULT_TRIANGLE_NORMAL: Vec3 = [0, 0, 1];
+
 export const isRenderSegment = (primitive: RenderPrimitive): primitive is RenderSegment => (
     primitive.kind !== "triangle" && primitive.kind !== "stroke"
 );
@@ -91,9 +93,11 @@ const appendTriangle = (
     offset: number,
     triangle: RenderTriangle,
 ): number => {
-    offset = appendTriangleVertex(out, offset, triangle.a, triangle.color);
-    offset = appendTriangleVertex(out, offset, triangle.b, triangle.color);
-    offset = appendTriangleVertex(out, offset, triangle.c, triangle.color);
+    const normal = triangle.normal ?? DEFAULT_TRIANGLE_NORMAL;
+    const shade = triangle.shade ?? 0;
+    offset = appendTriangleVertex(out, offset, triangle.a, triangle.color, normal, shade);
+    offset = appendTriangleVertex(out, offset, triangle.b, triangle.color, normal, shade);
+    offset = appendTriangleVertex(out, offset, triangle.c, triangle.color, normal, shade);
     return offset;
 };
 
@@ -102,6 +106,8 @@ const appendTriangleVertex = (
     offset: number,
     position: Vec3,
     color: [number, number, number, number],
+    normal: Vec3,
+    shade: number,
 ): number => {
     out[offset++] = position[0];
     out[offset++] = position[1];
@@ -110,6 +116,10 @@ const appendTriangleVertex = (
     out[offset++] = color[1];
     out[offset++] = color[2];
     out[offset++] = color[3];
+    out[offset++] = normal[0];
+    out[offset++] = normal[1];
+    out[offset++] = normal[2];
+    out[offset++] = shade;
     return offset;
 };
 

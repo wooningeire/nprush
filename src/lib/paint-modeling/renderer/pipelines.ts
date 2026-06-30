@@ -105,6 +105,8 @@ export const createTrianglePipeline = (
             attributes: [
                 { shaderLocation: 0, offset: 0, format: "float32x3" },
                 { shaderLocation: 1, offset: 3 * Float32Array.BYTES_PER_ELEMENT, format: "float32x4" },
+                { shaderLocation: 2, offset: 7 * Float32Array.BYTES_PER_ELEMENT, format: "float32x3" },
+                { shaderLocation: 3, offset: 10 * Float32Array.BYTES_PER_ELEMENT, format: "float32" },
             ],
         }],
     },

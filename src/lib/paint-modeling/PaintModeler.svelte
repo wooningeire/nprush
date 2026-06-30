@@ -24,6 +24,7 @@ let rendererError = $state<string | null>(null);
 let finishingStroke = false;
 let showChartWireframe = $state(true);
 let showSurfaceField = $state(false);
+let shadeRibbons = $state(true);
 
 
 $effect(() => {
@@ -49,6 +50,7 @@ $effect(() => {
     modelerState.paintLayers.length;
     showChartWireframe;
     showSurfaceField;
+    shadeRibbons;
     requestRender();
 });
 
@@ -105,6 +107,11 @@ function setShowSurfaceField(value: boolean) {
     requestRender();
 }
 
+function setShadeRibbons(value: boolean) {
+    shadeRibbons = value;
+    requestRender();
+}
+
 async function render() {
     await ensureRenderer();
     if (!renderer) return;
@@ -114,6 +121,7 @@ async function render() {
         modelerState.renderDepthSortKey,
         showChartWireframe ? "wire" : "no-wire",
         showSurfaceField ? "field" : "no-field",
+        shadeRibbons ? "shade-ribbons" : "flat-ribbons",
     ].join(":");
     if (uploadedStaticSceneKey !== staticSceneKey) {
         if (uploadedChartStateVersion !== modelerState.meshVersion) {
@@ -125,6 +133,7 @@ async function render() {
             showChartWireframe: false,
             showSurfaceField: false,
             showDraftStroke: false,
+            shadeRibbons,
         }));
         uploadedStaticSceneKey = staticSceneKey;
     }
@@ -134,7 +143,11 @@ async function render() {
         renderer.setDraftSegments(modelerState.buildDraftRenderSegments());
         uploadedDraftKey = draftKey;
     }
-    renderer.render(modelerState.camera.viewProjMat, modelerState.camera.viewProjInvMat);
+    renderer.render(
+        modelerState.camera.viewProjMat,
+        modelerState.camera.viewProjInvMat,
+        modelerState.camera.viewMat,
+    );
 }
 
 function cancelRender() {
@@ -282,9 +295,11 @@ function draftRenderKey(): string {
         {rendererError}
         {showChartWireframe}
         {showSurfaceField}
+        {shadeRibbons}
         {requestRender}
         {setShowChartWireframe}
         {setShowSurfaceField}
+        {setShadeRibbons}
     />
     <paint-viewport
         bind:clientWidth={() => viewportWidth, value => viewportWidth = value}
@@ -363,5 +378,3 @@ canvas {
     }
 }
 </style>
-
-

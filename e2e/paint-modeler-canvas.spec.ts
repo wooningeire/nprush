@@ -78,16 +78,23 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await expect(page.getByLabel("Seam size")).toHaveCount(0);
     await expect(page.getByLabel("Surface field")).not.toBeChecked();
     await expect(page.getByRole("group", { name: "Brush mode" })).toBeVisible();
-    await expect(page.getByRole("group", { name: "Stroke geometry" })).toBeVisible();
+    const strokeGeometry = page.getByRole("group", { name: "Stroke geometry" });
+    await expect(strokeGeometry).toBeVisible();
+    await expect(strokeGeometry.getByRole("button").nth(0)).toHaveText("Ribbon");
+    await expect(strokeGeometry.getByRole("button").nth(1)).toHaveText("Billboard");
     await expect(page.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByRole("button", { name: "Billboard" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "Ribbon" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "Billboard" })).toHaveAttribute("aria-pressed", "false");
     await expect(page.getByRole("button", { name: "Ribbon" })).toBeEnabled();
+    await expect(page.getByLabel("Shade ribbons")).toBeChecked();
+    await expect(page.getByLabel("Shade ribbons")).toBeEnabled();
     await expect(page.getByLabel("Width")).toHaveValue("18");
     await page.getByRole("button", { name: "Surface" }).click();
     await expect(page.getByRole("button", { name: "Surface" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Width")).toHaveValue("72");
     await expect(page.getByLabel("Color")).toBeDisabled();
     await expect(page.getByRole("button", { name: "Ribbon" })).toBeDisabled();
+    await expect(page.getByLabel("Shade ribbons")).toBeDisabled();
 
     await page.getByLabel("Width").evaluate(element => {
         const input = element as HTMLInputElement;
@@ -155,6 +162,12 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await expect(page.getByLabel("Width")).toHaveValue("18");
     await expect(page.getByLabel("Color")).toBeEnabled();
     await expect(page.getByRole("button", { name: "Ribbon" })).toBeEnabled();
+    await expect(page.getByLabel("Shade ribbons")).toBeEnabled();
+    await expect(page.getByLabel("Shade ribbons")).toBeChecked();
+    await page.getByLabel("Shade ribbons").uncheck();
+    await expect(page.getByLabel("Shade ribbons")).not.toBeChecked();
+    await page.getByLabel("Shade ribbons").check();
+    await expect(page.getByLabel("Shade ribbons")).toBeChecked();
     await page.getByRole("button", { name: "Ribbon" }).click();
     await expect(page.getByRole("button", { name: "Ribbon" })).toHaveAttribute("aria-pressed", "true");
 

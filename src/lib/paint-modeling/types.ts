@@ -122,6 +122,8 @@ export interface RenderTriangle {
     b: Vec3;
     c: Vec3;
     color: Vec4;
+    normal?: Vec3;
+    shade?: number;
 }
 
 export interface RenderStroke {
@@ -137,4 +139,5 @@ export interface PaintRenderOptions {
     showChartWireframe?: boolean;
     showSurfaceField?: boolean;
     showDraftStroke?: boolean;
+    shadeRibbons?: boolean;
 }

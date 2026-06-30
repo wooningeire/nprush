@@ -111,6 +111,7 @@ export const buildPaintRenderSegments = (
             stroke,
             viewById.get(stroke.sourceViewId) ?? null,
             surfacePointForRef,
+            renderOptions.shadeRibbons,
         );
     }
     if (renderOptions.showDraftStroke) {
@@ -156,12 +157,14 @@ const normalizeRenderOptions = (options: boolean | PaintRenderOptions): Required
             showChartWireframe: options,
             showSurfaceField: false,
             showDraftStroke: true,
+            shadeRibbons: true,
         };
     }
     return {
         showChartWireframe: options.showChartWireframe ?? true,
         showSurfaceField: options.showSurfaceField ?? false,
         showDraftStroke: options.showDraftStroke ?? true,
+        shadeRibbons: options.shadeRibbons ?? true,
     };
 };
 

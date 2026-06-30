@@ -62,6 +62,12 @@ describe("PaintModelingState prototype", () => {
         expect(state.brush.width).toBe(12);
     });
 
+    it("defaults color strokes to ribbons", () => {
+        const state = new PaintModelingState();
+
+        expect(state.brush.geometryMode).toBe("ribbon");
+    });
+
     it("can snap a later-view stroke to an existing surface chart", () => {
         const state = new PaintModelingState();
         state.addObject();
@@ -292,6 +298,7 @@ describe("PaintModelingState prototype", () => {
     it("keeps color brush fallback geometry when no surface exists", () => {
         const state = new PaintModelingState();
         state.addObject();
+        state.setBrushGeometryMode("billboard");
         drawStroke(state, { x: -0.16, y: 0 }, { x: 0.16, y: 0 });
 
         const primitives = state.buildRenderSegments({ showChartWireframe: false });
@@ -514,6 +521,7 @@ describe("PaintModelingState prototype", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
         state.setBrushWidth(18);
         drawStroke(state, { x: -0.12, y: 0 }, { x: 0.12, y: 0 });
 
@@ -528,10 +536,11 @@ describe("PaintModelingState prototype", () => {
         expect(renderSegments.length).toBeGreaterThan(emptyOverlayCount);
     });
 
-    it("renders committed paint as vector strokes by default", () => {
+    it("renders committed billboard paint as vector strokes", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
         state.setBrushWidth(48);
         drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
 
@@ -546,6 +555,7 @@ describe("PaintModelingState prototype", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
         state.setBrushWidth(36);
 
         state.beginStroke({ x: -0.16, y: -0.04 }, 800, 600);
@@ -568,6 +578,7 @@ describe("PaintModelingState prototype", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
 
         state.beginStroke({ x: -0.46, y: -0.08 }, 800, 600);
         for (let i = 1; i <= 160; i++) {
@@ -776,6 +787,7 @@ describe("PaintModelingState prototype", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
         drawStroke(state, { x: -0.18, y: 0 }, { x: 0.18, y: 0 });
 
         const staticBefore = state.buildRenderSegments({
@@ -807,6 +819,7 @@ describe("PaintModelingState prototype", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
         state.setBrushWidth(48);
         drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
 
@@ -886,12 +899,14 @@ describe("PaintModelingState prototype", () => {
         const narrow = new PaintModelingState();
         narrow.addObject();
         narrow.setPlacementMode("new-surface");
+        narrow.setBrushGeometryMode("billboard");
         narrow.setBrushWidth(8);
         drawStroke(narrow, { x: -0.12, y: 0 }, { x: 0.12, y: 0 });
 
         const wide = new PaintModelingState();
         wide.addObject();
         wide.setPlacementMode("new-surface");
+        wide.setBrushGeometryMode("billboard");
         wide.setBrushWidth(48);
         wide.setBrushOpacity(0.42);
         drawStroke(wide, { x: -0.12, y: 0 }, { x: 0.12, y: 0 });
@@ -911,6 +926,7 @@ describe("PaintModelingState prototype", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
         state.setBrushWidth(48);
         state.setBrushOpacity(0.42);
 
@@ -940,6 +956,7 @@ describe("PaintModelingState prototype", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
         state.setBrushColor("#ff0000");
         drawStroke(state, { x: -0.26, y: -0.08 }, { x: 0.26, y: -0.08 });
 
@@ -966,6 +983,7 @@ describe("PaintModelingState prototype", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
         state.setBrushColor("#ff0000");
         drawStroke(state, { x: -0.26, y: -0.08 }, { x: 0.26, y: -0.08 });
 
@@ -1016,6 +1034,30 @@ describe("PaintModelingState prototype", () => {
         expect(firstRibbonWidthPx).toBeGreaterThan(35.5);
         expect(firstRibbonWidthPx).toBeLessThan(36.5);
         expect(ribbonTriangles.every(triangle => triangle.color[3] === 1)).toBe(true);
+        expect(ribbonTriangles.every(triangle => triangle.normal !== undefined)).toBe(true);
+        expect(ribbonTriangles.every(triangle => triangle.shade === 1)).toBe(true);
+    });
+
+    it("can render existing ribbon triangles flat when ribbon shading is off", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.setPlacementMode("new-surface");
+        state.setBrushWidth(36);
+        drawStroke(state, { x: -0.28, y: -0.08 }, { x: 0.28, y: 0.12 });
+
+        const shadedTriangles = state
+            .buildRenderSegments({ showChartWireframe: false })
+            .filter(isRenderTriangle);
+        const flatTriangles = state
+            .buildRenderSegments({ showChartWireframe: false, shadeRibbons: false })
+            .filter(isRenderTriangle);
+
+        expect(state.strokes[0].style.geometryMode).toBe("ribbon");
+        expect(shadedTriangles.length).toBeGreaterThan(0);
+        expect(flatTriangles.length).toBe(shadedTriangles.length);
+        expect(shadedTriangles.every(triangle => triangle.shade === 1)).toBe(true);
+        expect(flatTriangles.every(triangle => triangle.normal !== undefined)).toBe(true);
+        expect(flatTriangles.every(triangle => triangle.shade === 0)).toBe(true);
     });
 
     it("keeps ribbon caps visible after committing a stroke", () => {
@@ -1051,6 +1093,7 @@ describe("PaintModelingState prototype", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setPlacementMode("new-surface");
+        state.setBrushGeometryMode("billboard");
         state.setBrushWidth(3);
         drawStroke(state, { x: -0.32, y: -0.2 }, { x: 0.32, y: 0.2 });
 
