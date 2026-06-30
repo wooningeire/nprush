@@ -1,15 +1,5 @@
-import { Camera } from "../viewer/Camera.svelte.ts";
+﻿import { Camera } from "../viewer/Camera.svelte.ts";
 import { CameraOrbit } from "../viewer/CameraOrbit.svelte.ts";
-import {
-    defaultDepthForPaintView,
-    getOrCreatePaintChart,
-    paintDepthRadiusForView,
-    raycastPaintObjectSurfaceBatchWithViews,
-    raycastPaintObjectSurfaceWithViews,
-    raycastPaintObjectSurfacesWithViews,
-} from "./state/chartAccess.ts";
-import type { ChartPaintRun } from "./state/chartPainting.ts";
-import { touchPaintCharts } from "./state/chartMutation.ts";
 import {
     MAX_BRUSH_WIDTH,
     MIN_BRUSH_WIDTH,
@@ -21,6 +11,11 @@ import {
 } from "./state/paintLayers.ts";
 import { reorderPaintLayers, reorderPaintObjects, reorderPaintViews } from "./state/reorder.ts";
 import { makeId } from "./state/sceneData.ts";
+import {
+    addDeformationLineToStroke,
+    raycastStrokeSurface,
+    sculptStrokeMesh,
+} from "./state/strokeMesh.ts";
 import {
     cameraMovedFromPaintView,
     capturePaintView,
@@ -37,50 +32,30 @@ import {
 import {
     buildDraftPaintRenderSegments,
     buildPaintRenderSegments,
-    paintSurfaceRefWorldPoint,
-    projectPaintSurfaceRef,
     type RenderAssemblyContext,
 } from "./state/renderAssembly.ts";
-import { planPaintChartSeams } from "./state/seamEditing.ts";
 import { planFinishedStroke } from "./state/strokeSession.ts";
 import { samplePaintStrokeSpline } from "./state/strokeSampling.ts";
-import type {
-    SnapPlacementPlan,
-    StrokePlacementContext,
-} from "./state/strokePlacement.ts";
-import { PaintSurfaceRaycastCache } from "./state/surfaceRaycastCache.ts";
 import { clamp } from "./state/vectorMath.ts";
 import type {
     BrushStyle,
-    BrushMode,
-    ChartRole,
-    OcclusionClaim,
-    PaintChart,
+    DeformationLine,
     PaintLayer,
     PaintObject,
     PaintStroke,
     PaintView,
     PaintRenderOptions,
-    PlacementMode,
-    StrokeGeometryMode,
     RenderPrimitive,
-    SurfaceHit,
-    SurfaceRef,
+    RibbonUv,
+    StrokeSurfaceHit,
     Vec2,
     Vec3,
 } from "./types.ts";
 
-
-const DEFAULT_COLOR_BRUSH: BrushStyle = {
+const DEFAULT_BRUSH: BrushStyle = {
     color: "#ffd27a",
     width: 18,
     opacity: 1,
-    geometryMode: "ribbon",
-};
-const DEFAULT_BRUSH_WIDTH_BY_MODE: Record<BrushMode, number> = {
-    color: DEFAULT_COLOR_BRUSH.width,
-    surface: Math.min(MAX_BRUSH_WIDTH, DEFAULT_COLOR_BRUSH.width * 4),
-    depth: Math.min(MAX_BRUSH_WIDTH, DEFAULT_COLOR_BRUSH.width * 2),
 };
 
 export class PaintModelingState {
@@ -91,25 +66,15 @@ export class PaintModelingState {
     objects = $state<PaintObject[]>([]);
     paintLayers = $state<PaintLayer[]>([createBasePaintLayer()]);
     strokes = $state<PaintStroke[]>([]);
-    occlusionClaims = $state<OcclusionClaim[]>([]);
     activeObjectId = $state<string | null>(null);
     activeViewId = $state<string | null>(null);
     activePaintLayerId = $state(BASE_PAINT_LAYER_ID);
-    placementMode = $state<PlacementMode>("snap");
-    brushMode = $state<BrushMode>("color");
-    brush = $state<BrushStyle>({ ...DEFAULT_COLOR_BRUSH });
+    brush = $state<BrushStyle>({ ...DEFAULT_BRUSH });
     draftStroke = $state<Vec2[] | null>(null);
     undoStack = $state<PaintSceneSnapshot[]>([]);
     meshVersion = $state(0);
-    raycastCountForDiagnostics = 0;
-    raycastCacheBuildCountForDiagnostics = 0;
-    private readonly surfaceRaycastCache = new PaintSurfaceRaycastCache(() => {
-        this.raycastCacheBuildCountForDiagnostics += 1;
-    });
-    private brushWidthByMode: Record<BrushMode, number> = { ...DEFAULT_BRUSH_WIDTH_BY_MODE };
     private pendingStrokeUndoSnapshot: PaintSceneSnapshot | null = null;
     private pendingStrokeView: PaintView | null = null;
-    private pendingGpuChartPaintRuns: ChartPaintRun[] = [];
     private undoGroup: { snapshot: PaintSceneSnapshot; dirty: boolean } | null = null;
 
     readonly orbit = new CameraOrbit();
@@ -157,15 +122,6 @@ export class PaintModelingState {
         return this.activeView ? "New view" : "No saved view";
     }
 
-    get chartCount(): number { return this.objects.reduce((sum, object) => sum + object.charts.length, 0); }
-
-    get seamCount(): number {
-        return this.objects.reduce(
-            (sum, object) => sum + object.charts.reduce((chartSum, chart) => chartSum + chart.seams.filter(Boolean).length, 0),
-            0,
-        );
-    }
-
     get canUndo(): boolean { return this.undoStack.length > 0; }
 
     addObject(name?: string, recordHistory = true) {
@@ -178,7 +134,6 @@ export class PaintModelingState {
             visible: true,
             locked: false,
             layerIndex: this.nextLayerIndex(),
-            charts: [],
         };
         this.objects = [...this.objects, object];
         this.activeObjectId = object.id;
@@ -230,30 +185,11 @@ export class PaintModelingState {
         return true;
     }
 
-    setPlacementMode(mode: PlacementMode) { this.placementMode = mode; }
-
-    setBrushMode(mode: BrushMode) {
-        this.brushWidthByMode[this.brushMode] = this.brush.width;
-        this.brushMode = mode;
-        this.brush.width = this.brushWidthByMode[mode];
-    }
-
     setBrushColor(color: string) { this.brush.color = color; }
 
-    setBrushGeometryMode(mode: StrokeGeometryMode) { this.brush.geometryMode = mode; }
-
-    setBrushWidth(width: number) {
-        const clampedWidth = clamp(width, MIN_BRUSH_WIDTH, MAX_BRUSH_WIDTH);
-        this.brushWidthByMode[this.brushMode] = clampedWidth;
-        this.brush.width = clampedWidth;
-    }
+    setBrushWidth(width: number) { this.brush.width = clamp(width, MIN_BRUSH_WIDTH, MAX_BRUSH_WIDTH); }
 
     setBrushOpacity(_opacity: number) { this.brush.opacity = 1; }
-
-    resetDiagnostics() {
-        this.raycastCountForDiagnostics = 0;
-        this.raycastCacheBuildCountForDiagnostics = 0;
-    }
 
     beginUndoGroup() {
         if (!this.undoGroup) {
@@ -273,17 +209,11 @@ export class PaintModelingState {
 
     cancelUndoGroup() { this.undoGroup = null; }
 
-    consumeGpuChartPaintRuns(): ChartPaintRun[] {
-        const runs = this.pendingGpuChartPaintRuns;
-        this.pendingGpuChartPaintRuns = [];
-        return runs;
-    }
-
     beginStroke(point: Vec2, width: number, height: number) {
         const undoSnapshot = this.captureSceneSnapshot();
         this.viewportWidth = Math.max(1, width);
         this.viewportHeight = Math.max(1, height);
-        if (!this.activeObjectId && this.brushMode !== "depth") this.addObject(undefined, false);
+        if (!this.activeObjectId) this.addObject(undefined, false);
         const object = this.activeObject;
         if (!object || object.locked || !object.visible) {
             this.pendingStrokeUndoSnapshot = null;
@@ -291,12 +221,8 @@ export class PaintModelingState {
             return;
         }
 
-        if (this.brushMode === "depth") {
-            this.pendingStrokeView = this.currentEffectView();
-        } else {
-            this.ensureActiveView(width, height, false);
-            this.pendingStrokeView = this.activeView;
-        }
+        this.ensureActiveView(width, height, false);
+        this.pendingStrokeView = this.activeView;
         this.draftStroke = [point];
         this.pendingStrokeUndoSnapshot = undoSnapshot;
     }
@@ -318,20 +244,16 @@ export class PaintModelingState {
         return samplePaintStrokeSpline(this.draftStroke);
     }
 
-    finishStroke(options: { snapPlacementPlan?: SnapPlacementPlan } = {}) {
+    finishStroke() {
         const result = planFinishedStroke({
             draftStroke: this.draftStroke,
             pendingStrokeUndoSnapshot: this.pendingStrokeUndoSnapshot,
             undoSnapshot: this.pendingStrokeUndoSnapshot ?? this.captureSceneSnapshot(),
             object: this.activeObject,
             view: this.pendingStrokeView ?? this.activeView,
-            brushMode: this.brushMode,
-            placementMode: this.placementMode,
             brush: this.brush,
-            placementContext: this.strokePlacementContext(),
             nextPaintOrder: objectId => this.nextPaintOrder(objectId),
             paintLayerId: this.activePaintLayer?.id ?? BASE_PAINT_LAYER_ID,
-            snapPlacementPlan: options.snapPlacementPlan,
         });
 
         this.draftStroke = null;
@@ -343,15 +265,37 @@ export class PaintModelingState {
         }
 
         this.pushUndoSnapshot(result.undoSnapshot);
-        this.pendingGpuChartPaintRuns.push(...result.gpuChartPaintRuns);
-        this.touchCharts(result.touchedChartIds);
-        if (result.kind === "stroke") {
-            this.strokes = [...this.strokes, result.stroke];
-            if (result.occlusionClaim) {
-                this.occlusionClaims = [...this.occlusionClaims, result.occlusionClaim];
-            }
-        }
+        this.strokes = [...this.strokes, result.stroke];
         this.meshVersion += 1;
+    }
+
+    sculptStrokeAt(strokeId: string, center: RibbonUv, delta: Vec3, radius?: number): boolean {
+        if (!this.strokes.some(stroke => stroke.id === strokeId)) return false;
+        this.recordUndoSnapshot();
+        this.strokes = this.strokes.map(stroke => stroke.id === strokeId
+            ? sculptStrokeMesh(stroke, center, delta, radius)
+            : stroke);
+        this.meshVersion += 1;
+        return true;
+    }
+
+    addDeformationLine(strokeId: string, points: RibbonUv[]): boolean {
+        if (!this.strokes.some(stroke => stroke.id === strokeId) || points.length < 2) return false;
+        this.recordUndoSnapshot();
+        const line: DeformationLine = {
+            id: makeId("deform"),
+            points: points.map(point => ({ ...point })),
+        };
+        this.strokes = this.strokes.map(stroke => stroke.id === strokeId
+            ? addDeformationLineToStroke(stroke, line)
+            : stroke);
+        this.meshVersion += 1;
+        return true;
+    }
+
+    raycastStrokeAt(point: Vec2, view: PaintView | null = this.currentEffectView()): StrokeSurfaceHit | null {
+        if (!view) return null;
+        return raycastStrokeSurface(this.objects, this.strokes, view, point);
     }
 
     undo(): boolean {
@@ -371,7 +315,6 @@ export class PaintModelingState {
             objectId,
             this.objects,
             this.strokes,
-            this.occlusionClaims,
             this.activeObjectId,
         );
         if (!deletion) return false;
@@ -379,7 +322,6 @@ export class PaintModelingState {
         this.recordUndoSnapshot();
         this.objects = deletion.objects;
         this.strokes = deletion.strokes;
-        this.occlusionClaims = deletion.occlusionClaims;
         this.activeObjectId = deletion.activeObjectId;
         this.draftStroke = null;
         this.pendingStrokeView = null;
@@ -392,43 +334,21 @@ export class PaintModelingState {
     deleteView(viewId: string): boolean {
         const deletion = deletePaintView(
             viewId,
-            this.objects,
             this.views,
             this.strokes,
-            this.occlusionClaims,
             this.activeViewId,
         );
         if (!deletion) return false;
 
         this.recordUndoSnapshot();
-        this.objects = deletion.objects;
         this.views = deletion.views;
         this.strokes = deletion.strokes;
-        this.occlusionClaims = deletion.occlusionClaims;
         this.activeViewId = null;
         if (deletion.selectViewId) {
             this.selectView(deletion.selectViewId);
         }
         this.draftStroke = null;
         this.pendingStrokeView = null;
-        this.meshVersion += 1;
-        return true;
-    }
-
-    markSeamAt(point: Vec2): boolean { return this.markSeamAlong([point]); }
-
-    markSeamAlong(points: Vec2[]): boolean {
-        const object = this.activeObject;
-        const view = this.currentEffectView();
-        if (!object || !view || object.locked) return false;
-        const seamEdit = planPaintChartSeams(object, this.views, view, points);
-        this.raycastCountForDiagnostics += seamEdit.raycastCount;
-        if (!seamEdit.hasHits) return false;
-
-        this.recordUndoSnapshot();
-        const touchedChartIds = seamEdit.apply();
-        if (touchedChartIds.size === 0) return false;
-        this.touchCharts(touchedChartIds);
         this.meshVersion += 1;
         return true;
     }
@@ -455,7 +375,7 @@ export class PaintModelingState {
         const active = this.activeView;
         if (active && !this.cameraMovedFrom(active)) {
             if (active.width === this.viewportWidth && active.height === this.viewportHeight) return;
-            if (!viewHasAuthoredContent(active.id, this.objects, this.strokes, this.occlusionClaims)) {
+            if (!viewHasAuthoredContent(active.id, this.strokes)) {
                 const refreshedView = this.captureCurrentView(active.name, this.viewportWidth, this.viewportHeight);
                 this.views = this.views.map(view => view.id === active.id
                     ? {
@@ -473,12 +393,6 @@ export class PaintModelingState {
 
     cameraMovedFrom(view: PaintView): boolean { return cameraMovedFromPaintView(view, this.orbit); }
 
-    surfaceRefWorldPoint(ref: SurfaceRef): Vec3 | null { return paintSurfaceRefWorldPoint(this.objects, this.views, ref); }
-
-    projectSurfaceRef(ref: SurfaceRef, view: PaintView | null = this.activeView): Vec2 | null {
-        return projectPaintSurfaceRef(this.objects, this.views, ref, view);
-    }
-
     buildRenderSegments(options: boolean | PaintRenderOptions = true): RenderPrimitive[] {
         return buildPaintRenderSegments(this.renderAssemblyContext(), options);
     }
@@ -495,16 +409,11 @@ export class PaintModelingState {
             activeObject: this.activeObject,
             activeView: this.pendingStrokeView ?? this.activeView,
             draftStroke: this.draftStroke,
-            brushMode: this.brushMode,
-            placementMode: this.placementMode,
             brush: this.brush,
-            defaultDepthForView: view => this.defaultDepthForView(view),
-            raycastObjectSurface: (object, view, point, excludeChartId) =>
-                this.raycastObjectSurface(object, view, point, excludeChartId),
         };
     }
 
-    private currentEffectView(): PaintView {
+    private currentEffectView(): PaintView | null {
         const width = Math.max(1, this.viewportWidth);
         const height = Math.max(1, this.viewportHeight);
         const active = this.activeView;
@@ -517,46 +426,6 @@ export class PaintModelingState {
     private captureCurrentView(name: string, width: number, height: number): PaintView {
         return capturePaintView(name, this.nextViewOrder(), width, height, this.orbit, this.camera);
     }
-
-    private strokePlacementContext(): StrokePlacementContext {
-        return {
-            getOrCreateChart: (object, view, role) =>
-                this.getOrCreateChart(object, view, role),
-            findView: viewId => this.views.find(view => view.id === viewId) ?? null,
-            defaultDepthForView: view => this.defaultDepthForView(view),
-            paintDepthRadiusForView: view => this.paintDepthRadiusForView(view),
-            raycastObjectSurface: (object, view, point, excludeChartId) =>
-                this.raycastObjectSurface(object, view, point, excludeChartId),
-            raycastObjectSurfaceBatch: (object, view, points, excludeChartId) =>
-                this.raycastObjectSurfaceBatch(object, view, points, excludeChartId),
-            raycastObjectSurfaces: (object, view, point) =>
-                this.raycastObjectSurfaces(object, view, point),
-        };
-    }
-
-    private defaultDepthForView(view: PaintView): number { return defaultDepthForPaintView(view); }
-
-    private paintDepthRadiusForView(view: PaintView): number { return paintDepthRadiusForView(view, this.brush.width); }
-
-    private getOrCreateChart(object: PaintObject, view: PaintView, role: ChartRole): PaintChart {
-        return getOrCreatePaintChart(object, view, role);
-    }
-
-    private raycastObjectSurface(object: PaintObject, view: PaintView, point: Vec2, excludeChartId?: string): SurfaceHit | null {
-        this.raycastCountForDiagnostics += 1;
-        return raycastPaintObjectSurfaceWithViews(object, this.views, view, point, excludeChartId, this.surfaceRaycastCache);
-    }
-
-    private raycastObjectSurfaceBatch(object: PaintObject, view: PaintView, points: Vec2[], excludeChartId?: string): Array<SurfaceHit | null> {
-        if (points.length > 0) this.raycastCountForDiagnostics += 1;
-        return raycastPaintObjectSurfaceBatchWithViews(object, this.views, view, points, excludeChartId, this.surfaceRaycastCache);
-    }
-
-    private raycastObjectSurfaces(object: PaintObject, view: PaintView, point: Vec2, excludeChartId?: string): SurfaceHit[] {
-        this.raycastCountForDiagnostics += 1;
-        return raycastPaintObjectSurfacesWithViews(object, this.views, view, point, excludeChartId, this.surfaceRaycastCache);
-    }
-
 
     private nextLayerIndex(): number { return this.objects.reduce((max, object) => Math.max(max, object.layerIndex), -1) + 1; }
 
@@ -587,13 +456,10 @@ export class PaintModelingState {
         this.draftStroke = null;
         this.pendingStrokeUndoSnapshot = null;
         this.pendingStrokeView = null;
-        this.pendingGpuChartPaintRuns = [];
         this.undoGroup = null;
 
         const activeView = this.activeView;
         if (activeView) selectPaintView(this.views, this.orbit, activeView.id);
         this.meshVersion += 1;
     }
-
-    private touchCharts(chartIds: Set<string>) { this.objects = touchPaintCharts(this.objects, chartIds); }
 }

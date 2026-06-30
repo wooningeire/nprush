@@ -1,16 +1,10 @@
-export interface Vec2 {
-    x: number;
-    y: number;
-}
+export type Vec2 = {
+    x: number,
+    y: number,
+};
 
 export type Vec3 = [number, number, number];
 export type Vec4 = [number, number, number, number];
-
-export type PlacementMode = "snap" | "new-surface" | "occluding-surface" | "paint-behind";
-export type BrushMode = "color" | "surface" | "depth";
-export type ChartRole = "surface" | "occluder" | "behind";
-export type ChartProjectionMode = "view-plane";
-export type StrokeGeometryMode = "billboard" | "ribbon";
 
 export type PaintLayer = {
     id: string,
@@ -19,126 +13,116 @@ export type PaintLayer = {
     visible: boolean,
 };
 
-export interface PaintView {
-    id: string;
-    name: string;
-    order: number;
-    long: number;
-    lat: number;
-    radius: number;
-    offset: Vec3;
-    width: number;
-    height: number;
-    viewProjMat: number[];
-    viewProjInvMat: number[];
-    viewMat: number[];
-    viewInvMat: number[];
-    createdAt: number;
-}
+export type PaintView = {
+    id: string,
+    name: string,
+    order: number,
+    long: number,
+    lat: number,
+    radius: number,
+    offset: Vec3,
+    width: number,
+    height: number,
+    viewProjMat: number[],
+    viewProjInvMat: number[],
+    viewMat: number[],
+    viewInvMat: number[],
+    createdAt: number,
+};
 
-export interface BrushStyle {
-    color: string;
-    width: number;
-    opacity: number;
-    geometryMode: StrokeGeometryMode;
-}
+export type BrushStyle = {
+    color: string,
+    width: number,
+    opacity: number,
+};
 
-export interface SurfaceRef {
-    chartId: string;
-    uv: Vec2;
-}
+export type RibbonUv = {
+    u: number,
+    v: number,
+};
 
-export interface PaintSample {
-    sourcePoint: Vec2;
-    surfaceRef: SurfaceRef;
-    placement: PlacementMode;
-}
+export type PaintRibbonVertex = {
+    position: Vec3,
+    u: number,
+    v: number,
+};
 
-export interface PaintStroke {
-    id: string;
-    objectId: string;
-    layerId?: string;
-    sourceViewId: string;
-    placement: PlacementMode;
-    samples: PaintSample[];
-    style: BrushStyle;
-    paintOrder: number;
-}
+export type PaintRibbonFace = [number, number, number, number];
 
-export interface PaintChart {
-    id: string;
-    objectId: string;
-    sourceViewId: string;
-    role: ChartRole;
-    projectionMode: ChartProjectionMode;
-    width: number;
-    height: number;
-    depths: number[];
-    coverage: number[];
-    seams: boolean[];
-    createdAt: number;
-}
+export type PaintRibbonMesh = {
+    rows: number,
+    columns: number[],
+    closed: boolean,
+    vertices: PaintRibbonVertex[],
+    faces: PaintRibbonFace[],
+};
 
-export interface PaintObject {
-    id: string;
-    name: string;
-    visible: boolean;
-    locked: boolean;
-    layerIndex: number;
-    charts: PaintChart[];
-}
+export type DeformationLine = {
+    id: string,
+    points: RibbonUv[],
+};
 
-export interface OcclusionClaim {
-    id: string;
-    objectId: string;
-    viewId: string;
-    frontChartId: string;
-    backRefs: SurfaceRef[];
-    mask: Vec2[];
-    createdAt: number;
-}
+export type PaintStroke = {
+    id: string,
+    objectId: string,
+    layerId?: string,
+    sourceViewId: string,
+    sourcePoints: Vec2[],
+    centerline: Vec3[],
+    mesh: PaintRibbonMesh,
+    deformationLines: DeformationLine[],
+    style: BrushStyle,
+    paintOrder: number,
+};
 
-export interface SurfaceHit {
-    objectId: string;
-    chartId: string;
-    surfaceRef: SurfaceRef;
-    world: Vec3;
-    viewDepth: number;
-}
+export type PaintObject = {
+    id: string,
+    name: string,
+    visible: boolean,
+    locked: boolean,
+    layerIndex: number,
+};
 
-export interface RenderSegment {
-    kind?: "segment";
-    a: Vec3;
-    b: Vec3;
-    color: Vec4;
-    width?: number;
-    capStart?: boolean;
-    capEnd?: boolean;
-}
+export type StrokeSurfaceHit = {
+    objectId: string,
+    strokeId: string,
+    faceIndex: number,
+    uv: RibbonUv,
+    world: Vec3,
+    viewDepth: number,
+};
 
-export interface RenderTriangle {
-    kind: "triangle";
-    a: Vec3;
-    b: Vec3;
-    c: Vec3;
-    color: Vec4;
-    normal?: Vec3;
-    shade?: number;
-    depthWrite?: boolean;
-}
+export type RenderSegment = {
+    kind?: "segment",
+    a: Vec3,
+    b: Vec3,
+    color: Vec4,
+    width?: number,
+    capStart?: boolean,
+    capEnd?: boolean,
+};
 
-export interface RenderStroke {
-    kind: "stroke";
-    points: Vec3[];
-    color: Vec4;
-    width: number;
-}
+export type RenderTriangle = {
+    kind: "triangle",
+    a: Vec3,
+    b: Vec3,
+    c: Vec3,
+    color: Vec4,
+    normal?: Vec3,
+    shade?: number,
+    depthWrite?: boolean,
+};
+
+export type RenderStroke = {
+    kind: "stroke",
+    points: Vec3[],
+    color: Vec4,
+    width: number,
+};
 
 export type RenderPrimitive = RenderSegment | RenderTriangle | RenderStroke;
 
-export interface PaintRenderOptions {
-    showChartWireframe?: boolean;
-    showSurfaceField?: boolean;
-    showDraftStroke?: boolean;
-    shadeRibbons?: boolean;
-}
+export type PaintRenderOptions = {
+    showDraftStroke?: boolean,
+    shadeRibbons?: boolean,
+};

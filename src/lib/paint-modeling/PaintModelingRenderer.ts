@@ -1,11 +1,8 @@
 import { requestGpu } from "$/gpu/setup/requestGpu";
-import { GpuPaintChartStore } from "./gpu/GpuPaintChartStore.ts";
 import gridShaderSource from "./paint_modeler_grid.wgsl?raw";
 import segmentShaderSource from "./paint_modeler_segments.wgsl?raw";
 import triangleShaderSource from "./paint_modeler_triangles.wgsl?raw";
-import type { PaintObject, PaintView, RenderPrimitive, SurfaceHit, Vec2 } from "./types.ts";
-import type { ChartPaintRun } from "./state/chartPainting.ts";
-import { COVERAGE_EPSILON, MIN_DEPTH } from "./state/constants.ts";
+import type { RenderPrimitive } from "./types.ts";
 import {
     DEPTH_FORMAT,
     GRID_PLANE_Z,
@@ -42,12 +39,10 @@ import {
 export class PaintModelingRenderer {
     private readonly device: GPUDevice;
     private readonly context: GPUCanvasContext;
-    private readonly chartStore: GpuPaintChartStore;
     private readonly gridPipeline: GPURenderPipeline;
     private readonly segmentPipeline: GPURenderPipeline;
     private readonly strokePipeline: GPURenderPipeline;
     private readonly trianglePipeline: GPURenderPipeline;
-    private readonly depthTrianglePipeline: GPURenderPipeline;
     private readonly gridUniformBuffer: GPUBuffer;
     private readonly segmentUniformBuffer: GPUBuffer;
     private readonly triangleUniformBuffer: GPUBuffer;
@@ -59,7 +54,7 @@ export class PaintModelingRenderer {
     private readonly draftSegmentBuffer: VertexBufferState = createVertexBufferState();
     private readonly draftStrokeBuffer: VertexBufferState = createVertexBufferState();
     private readonly triangleBuffer: VertexBufferState = createVertexBufferState();
-    private readonly depthTriangleBuffer: VertexBufferState = createVertexBufferState();
+    private readonly draftTriangleBuffer: VertexBufferState = createVertexBufferState();
     private depthTexture: GPUTexture | null = null;
     private depthWidth = 0;
     private depthHeight = 0;
@@ -68,13 +63,7 @@ export class PaintModelingRenderer {
     private draftSegmentVertexCount = 0;
     private draftStrokeVertexCount = 0;
     private triangleVertexCount = 0;
-    private depthTriangleVertexCount = 0;
-    private chartScene = {
-        objects: [] as PaintObject[],
-        views: [] as PaintView[],
-        showChartWireframe: false,
-        showSurfaceField: false,
-    };
+    private draftTriangleVertexCount = 0;
 
     static async create(canvas: HTMLCanvasElement): Promise<PaintModelingRenderer> {
         const gpu = await requestGpu({});
@@ -99,7 +88,6 @@ export class PaintModelingRenderer {
     ) {
         this.device = device;
         this.context = context;
-        this.chartStore = new GpuPaintChartStore(device, format);
 
         const gridModule = createLoggedShaderModule(device, "paint modeler grid shader", gridShaderSource);
         const segmentModule = createLoggedShaderModule(device, "paint modeler segment shader", segmentShaderSource);
@@ -121,8 +109,7 @@ export class PaintModelingRenderer {
         this.gridPipeline = createGridPipeline(device, pipelineLayout, gridModule, format);
         this.segmentPipeline = createSegmentPipeline(device, pipelineLayout, segmentModule, format, "triangle-list");
         this.strokePipeline = createSegmentPipeline(device, pipelineLayout, segmentModule, format, "triangle-strip");
-        this.trianglePipeline = createTrianglePipeline(device, pipelineLayout, triangleModule, format, false);
-        this.depthTrianglePipeline = createTrianglePipeline(device, pipelineLayout, triangleModule, format, true);
+        this.trianglePipeline = createTrianglePipeline(device, pipelineLayout, triangleModule, format, true);
 
         this.gridUniformBuffer = createUniformBuffer(device, GRID_UNIFORM_FLOATS, "paint modeler grid uniforms");
         this.segmentUniformBuffer = createUniformBuffer(device, SEGMENT_UNIFORM_FLOATS, "paint modeler segment uniforms");
@@ -151,44 +138,36 @@ export class PaintModelingRenderer {
         const renderSegments = segments.filter(isRenderSegment);
         const strokes = segments.filter(isRenderStroke);
         const triangles = segments.filter(isRenderTriangle);
-        const overlayTriangles = triangles.filter(triangle => !triangle.depthWrite);
-        const depthTriangles = triangles.filter(triangle => triangle.depthWrite);
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
         const strokeVertexCount = strokeStripVertexCount(strokes);
-        const triangleVertexCount = overlayTriangles.length * VERTICES_PER_TRIANGLE;
-        const depthTriangleVertexCount = depthTriangles.length * VERTICES_PER_TRIANGLE;
+        const triangleVertexCount = triangles.length * VERTICES_PER_TRIANGLE;
         const segmentData = createSegmentData(renderSegments);
         const strokeData = createStrokeData(strokes);
-        const triangleData = createTriangleData(overlayTriangles);
-        const depthTriangleData = createTriangleData(depthTriangles);
+        const triangleData = createTriangleData(triangles);
 
         this.segmentVertexCount = segmentVertexCount;
         this.strokeVertexCount = strokeVertexCount;
         this.triangleVertexCount = triangleVertexCount;
-        this.depthTriangleVertexCount = depthTriangleVertexCount;
 
         uploadVertexData(this.device, this.segmentBuffer, segmentData, segmentVertexCount, "paint modeler segments");
         uploadVertexData(this.device, this.strokeBuffer, strokeData, strokeVertexCount, "paint modeler strokes");
         uploadVertexData(this.device, this.triangleBuffer, triangleData, triangleVertexCount, "paint modeler triangles");
-        uploadVertexData(
-            this.device,
-            this.depthTriangleBuffer,
-            depthTriangleData,
-            depthTriangleVertexCount,
-            "paint modeler depth triangles",
-        );
     }
 
     setDraftSegments(segments: RenderPrimitive[]) {
         const renderSegments = segments.filter(isRenderSegment);
         const strokes = segments.filter(isRenderStroke);
+        const triangles = segments.filter(isRenderTriangle);
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
         const strokeVertexCount = strokeStripVertexCount(strokes);
+        const triangleVertexCount = triangles.length * VERTICES_PER_TRIANGLE;
         const segmentData = createSegmentData(renderSegments);
         const strokeData = createStrokeData(strokes);
+        const triangleData = createTriangleData(triangles);
 
         this.draftSegmentVertexCount = segmentVertexCount;
         this.draftStrokeVertexCount = strokeVertexCount;
+        this.draftTriangleVertexCount = triangleVertexCount;
         uploadVertexData(
             this.device,
             this.draftSegmentBuffer,
@@ -203,48 +182,13 @@ export class PaintModelingRenderer {
             strokeVertexCount,
             "paint modeler draft strokes",
         );
-    }
-
-    syncChartState(objects: PaintObject[]) {
-        this.chartStore.syncObjects(objects);
-    }
-
-    setChartScene(
-        objects: PaintObject[],
-        views: PaintView[],
-        showChartWireframe: boolean,
-        showSurfaceField: boolean,
-    ) {
-        this.chartScene = {
-            objects,
-            views,
-            showChartWireframe,
-            showSurfaceField,
-        };
-    }
-
-    raycastObjectSurfaceBatch(
-        object: PaintObject,
-        views: PaintView[],
-        view: PaintView,
-        points: Vec2[],
-        excludeChartId?: string,
-    ): Promise<Array<SurfaceHit | null>> {
-        return this.chartStore.raycastObjectSurfaceBatch(object, views, view, points, excludeChartId);
-    }
-    applyChartPaintRuns(runs: ChartPaintRun[]) {
-        if (runs.length === 0) return;
-        const encoder = this.device.createCommandEncoder({ label: "paint modeler chart paint encoder" });
-        for (const run of runs) {
-            this.chartStore.applyPaintRun(encoder, run.chart, run.samples, {
-                radius: run.radius,
-                requireCoverage: run.requireCoverage,
-                depthWriteMode: run.depthWriteMode,
-                coverageEpsilon: COVERAGE_EPSILON,
-                minDepth: MIN_DEPTH,
-            });
-        }
-        this.device.queue.submit([encoder.finish()]);
+        uploadVertexData(
+            this.device,
+            this.draftTriangleBuffer,
+            triangleData,
+            triangleVertexCount,
+            "paint modeler draft triangles",
+        );
     }
 
     render(
@@ -258,13 +202,6 @@ export class PaintModelingRenderer {
 
         this.ensureDepthTexture(width, height);
         this.writeUniforms(viewProjMat, viewProjInvMat, viewMat);
-        const chartRenderItems = this.chartStore.prepareRenderItems(
-            this.chartScene.objects,
-            this.chartScene.views,
-            viewProjMat,
-            this.chartScene.showChartWireframe,
-            this.chartScene.showSurfaceField,
-        );
 
         const encoder = this.device.createCommandEncoder({ label: "paint modeler render encoder" });
         const pass = encoder.beginRenderPass({
@@ -286,23 +223,11 @@ export class PaintModelingRenderer {
         pass.setPipeline(this.gridPipeline);
         pass.setBindGroup(0, this.gridBindGroup);
         pass.draw(3);
-        this.chartStore.drawRenderItems(pass, chartRenderItems);
 
-        if (this.triangleVertexCount > 0 && this.triangleBuffer.buffer) {
-            pass.setPipeline(this.trianglePipeline);
-            pass.setBindGroup(0, this.triangleBindGroup);
-            pass.setVertexBuffer(0, this.triangleBuffer.buffer);
-            pass.draw(this.triangleVertexCount);
-        }
-        if (this.depthTriangleVertexCount > 0 && this.depthTriangleBuffer.buffer) {
-            pass.setPipeline(this.depthTrianglePipeline);
-            pass.setBindGroup(0, this.triangleBindGroup);
-            pass.setVertexBuffer(0, this.depthTriangleBuffer.buffer);
-            pass.draw(this.depthTriangleVertexCount);
-        }
-
+        this.drawTriangleBuffer(pass, this.triangleBuffer, this.triangleVertexCount);
         this.drawSegmentBuffer(pass, this.segmentBuffer, this.segmentVertexCount, this.segmentPipeline);
         this.drawSegmentBuffer(pass, this.strokeBuffer, this.strokeVertexCount, this.strokePipeline);
+        this.drawTriangleBuffer(pass, this.draftTriangleBuffer, this.draftTriangleVertexCount);
         this.drawSegmentBuffer(pass, this.draftSegmentBuffer, this.draftSegmentVertexCount, this.segmentPipeline);
         this.drawSegmentBuffer(pass, this.draftStrokeBuffer, this.draftStrokeVertexCount, this.strokePipeline);
 
@@ -316,12 +241,11 @@ export class PaintModelingRenderer {
         destroyVertexBuffer(this.draftSegmentBuffer);
         destroyVertexBuffer(this.draftStrokeBuffer);
         destroyVertexBuffer(this.triangleBuffer);
-        destroyVertexBuffer(this.depthTriangleBuffer);
+        destroyVertexBuffer(this.draftTriangleBuffer);
         this.depthTexture?.destroy();
         this.gridUniformBuffer.destroy();
         this.segmentUniformBuffer.destroy();
         this.triangleUniformBuffer.destroy();
-        this.chartStore.destroy();
         this.device.destroy();
     }
 
@@ -363,6 +287,18 @@ export class PaintModelingRenderer {
         if (vertexCount === 0 || !buffer.buffer) return;
         pass.setPipeline(pipeline);
         pass.setBindGroup(0, this.segmentBindGroup);
+        pass.setVertexBuffer(0, buffer.buffer);
+        pass.draw(vertexCount);
+    }
+
+    private drawTriangleBuffer(
+        pass: GPURenderPassEncoder,
+        buffer: VertexBufferState,
+        vertexCount: number,
+    ) {
+        if (vertexCount === 0 || !buffer.buffer) return;
+        pass.setPipeline(this.trianglePipeline);
+        pass.setBindGroup(0, this.triangleBindGroup);
         pass.setVertexBuffer(0, buffer.buffer);
         pass.draw(vertexCount);
     }

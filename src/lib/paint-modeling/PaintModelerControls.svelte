@@ -6,22 +6,14 @@ import type { PaintModelingState } from "./PaintModelingState.svelte.ts";
 let {
     modelerState,
     rendererError,
-    showChartWireframe,
-    showSurfaceField,
     shadeRibbons,
     requestRender,
-    setShowChartWireframe,
-    setShowSurfaceField,
     setShadeRibbons,
 }: {
     modelerState: PaintModelingState,
     rendererError: string | null,
-    showChartWireframe: boolean,
-    showSurfaceField: boolean,
     shadeRibbons: boolean,
     requestRender: () => void,
-    setShowChartWireframe: (value: boolean) => void,
-    setShowSurfaceField: (value: boolean) => void,
     setShadeRibbons: (value: boolean) => void,
 } = $props();
 
@@ -33,6 +25,9 @@ const layerStrokeCount = (layerId: string, layerOrder: number): number =>
     modelerState.strokes.filter(stroke =>
         stroke.layerId === layerId || (!stroke.layerId && layerOrder === 0)
     ).length;
+
+const objectStrokeCount = (objectId: string): number =>
+    modelerState.strokes.filter(stroke => stroke.objectId === objectId).length;
 
 type ReorderList = "paint-layer" | "object" | "view";
 
@@ -79,7 +74,7 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
 <aside class="control-panel">
     <section>
         <div class="section-title">Paint Modeler</div>
-        <div class="subtle">Surface paint prototype</div>
+        <div class="subtle">Stroke-owned ribbon prototype</div>
     </section>
 
     <div class="separator"></div>
@@ -99,62 +94,10 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
 
     <section>
         <div class="section-title">Brush</div>
-        <div class="mode-row brush-mode-row" role="group" aria-label="Brush mode">
-            <button
-                type="button"
-                class:active={modelerState.brushMode === "color"}
-                aria-pressed={modelerState.brushMode === "color"}
-                onclick={() => {
-                    modelerState.setBrushMode("color");
-                    requestRender();
-                }}
-            >Color</button>
-            <button
-                type="button"
-                class:active={modelerState.brushMode === "surface"}
-                aria-pressed={modelerState.brushMode === "surface"}
-                onclick={() => {
-                    modelerState.setBrushMode("surface");
-                    requestRender();
-                }}
-            >Surface</button>
-            <button
-                type="button"
-                class:active={modelerState.brushMode === "depth"}
-                aria-pressed={modelerState.brushMode === "depth"}
-                onclick={() => {
-                    modelerState.setBrushMode("depth");
-                    requestRender();
-                }}
-            >Depth</button>
-        </div>
-        <div class="mode-row stroke-geometry-row" role="group" aria-label="Stroke geometry">
-            <button
-                type="button"
-                class:active={modelerState.brush.geometryMode === "ribbon"}
-                aria-pressed={modelerState.brush.geometryMode === "ribbon"}
-                disabled={modelerState.brushMode !== "color"}
-                onclick={() => {
-                    modelerState.setBrushGeometryMode("ribbon");
-                    requestRender();
-                }}
-            >Ribbon</button>
-            <button
-                type="button"
-                class:active={modelerState.brush.geometryMode === "billboard"}
-                aria-pressed={modelerState.brush.geometryMode === "billboard"}
-                disabled={modelerState.brushMode !== "color"}
-                onclick={() => {
-                    modelerState.setBrushGeometryMode("billboard");
-                    requestRender();
-                }}
-            >Billboard</button>
-        </div>
         <label class="toggle-row">
             <input
                 type="checkbox"
                 checked={shadeRibbons}
-                disabled={modelerState.brushMode !== "color" || modelerState.brush.geometryMode !== "ribbon"}
                 onchange={(event) => {
                     setShadeRibbons((event.currentTarget as HTMLInputElement).checked);
                 }}
@@ -166,8 +109,10 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
             <input
                 type="color"
                 value={modelerState.brush.color}
-                disabled={modelerState.brushMode !== "color"}
-                oninput={(event) => modelerState.setBrushColor((event.currentTarget as HTMLInputElement).value)}
+                oninput={(event) => {
+                    modelerState.setBrushColor((event.currentTarget as HTMLInputElement).value);
+                    requestRender();
+                }}
             />
         </label>
         <label class="range-row">
@@ -178,25 +123,12 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
                 max="72"
                 step="1"
                 value={modelerState.brush.width}
-                oninput={(event) => modelerState.setBrushWidth(Number((event.currentTarget as HTMLInputElement).value))}
+                oninput={(event) => {
+                    modelerState.setBrushWidth(Number((event.currentTarget as HTMLInputElement).value));
+                    requestRender();
+                }}
             />
             <small>{Math.round(modelerState.brush.width)}</small>
-        </label>
-        <label class="toggle-row">
-            <input
-                type="checkbox"
-                checked={showChartWireframe}
-                onchange={(event) => setShowChartWireframe((event.currentTarget as HTMLInputElement).checked)}
-            />
-            <span>Chart wire</span>
-        </label>
-        <label class="toggle-row">
-            <input
-                type="checkbox"
-                checked={showSurfaceField}
-                onchange={(event) => setShowSurfaceField((event.currentTarget as HTMLInputElement).checked)}
-            />
-            <span>Surface field</span>
         </label>
     </section>
 
@@ -269,7 +201,7 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
                             }}
                         >
                             <span>{object.name}</span>
-                            <small>{object.charts.length}c {modelerState.strokes.filter(stroke => stroke.objectId === object.id).length}s</small>
+                            <small>{objectStrokeCount(object.id)}s</small>
                         </button>
                         <button
                             class="delete-row"
@@ -338,8 +270,7 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
     <div class="separator"></div>
 
     <section class="stats">
-        <span>Charts {modelerState.chartCount}</span>
-        <span>Claims {modelerState.occlusionClaims.length}</span>
+        <span>Strokes {modelerState.strokes.length}</span>
     </section>
 
     {#if rendererError}
@@ -424,30 +355,6 @@ button {
     font-size: 0.72rem;
 }
 
-.mode-row {
-    display: grid;
-    gap: 0.35rem;
-
-    button {
-        min-width: 0;
-        padding: 0.35rem 0.5rem;
-
-        &.active {
-            border-color: oklch(78% 0.08 185 / 0.65);
-            background: oklch(56% 0.07 190 / 0.28);
-            color: oklch(94% 0.03 185);
-        }
-    }
-}
-
-.brush-mode-row {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.stroke-geometry-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
 .color-row,
 .range-row,
 .toggle-row {
@@ -467,11 +374,6 @@ button {
         padding: 0;
         border: 0;
         background: transparent;
-
-        &:disabled {
-            opacity: 0.45;
-            cursor: not-allowed;
-        }
     }
 }
 
@@ -528,6 +430,7 @@ button {
         border-color: rgba(128, 179, 221, 0.48);
     }
 }
+
 .list-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 4.2rem;

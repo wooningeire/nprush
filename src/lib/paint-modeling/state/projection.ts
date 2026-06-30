@@ -1,11 +1,6 @@
-import { sampleChartDepth } from "./chartPainting.ts";
-import { MIN_DEPTH } from "./constants.ts";
+﻿import { MIN_DEPTH } from "./constants.ts";
 import { add3, dot3, normalize3, scale3, sub3 } from "./vectorMath.ts";
-import type { PaintChart, PaintView, Vec2, Vec3 } from "../types.ts";
-
-export const chartPointToWorldFromView = (chart: PaintChart, view: PaintView, uv: Vec2): Vec3 | null => {
-    return viewPointToWorldAtDepth(view, uv, sampleChartDepth(chart, uv));
-};
+import type { PaintView, Vec2, Vec3 } from "../types.ts";
 
 export const viewPointToWorldAtDepth = (
     view: PaintView,
@@ -33,6 +28,10 @@ export const viewDepthForDistanceAtPoint = (
 
 export const viewDepthForWorldPoint = (view: PaintView, point: Vec3): number => {
     return dot3(sub3(point, cameraCenter(view)), viewForward(view));
+};
+
+export const defaultDepthForPaintView = (view: PaintView): number => {
+    return Math.max(MIN_DEPTH, viewDepthForWorldPoint(view, [0, 0, 0]));
 };
 
 export const makeViewRay = (view: PaintView, point: Vec2): { origin: Vec3; direction: Vec3 } | null => {

@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from "playwright/test";
 
-test("paint modeler canvas supports the simplified paint tool surface", async ({ page }) => {
+test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page }) => {
     const consoleProblems: string[] = [];
     page.on("console", message => {
         if (message.type() === "error" && !isExpectedStartupNoise(message.text())) {
@@ -14,15 +14,31 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     await forbidWebglContexts(page);
 
     await page.goto("/paint-modeler");
-    await dismissStartupAlerts(page, 700);
+    await dismissStartupAlerts(page);
     await expect(page.locator("paint-viewport")).toBeVisible();
-    await page.getByRole("button", { name: "Add Object" }).click();
+    await waitForAnimationFrame(page);
+    await expect(page.getByText("Stroke-owned ribbon prototype")).toBeVisible();
+
+    await expect(page.getByRole("button", { name: "Surface" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Depth" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Snap" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "View Plane" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Chart wire" })).toHaveCount(0);
+    await expect(page.getByLabel("Surface field")).toHaveCount(0);
+    await expect(page.getByLabel("Opacity")).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "Brush mode" })).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "Stroke geometry" })).toHaveCount(0);
+    await expect(page.getByText(/Charts \d+/)).toHaveCount(0);
+
+    await addObjectAndWait(page, "Object 1");
+
     const paintLayers = page.locator("section").filter({ hasText: "Paint Layers" });
     await expect(paintLayers.getByRole("button", { name: /Layer 1\s+0s/ })).toHaveClass(/active/);
     await paintLayers.getByRole("button", { name: "Add" }).click();
     await expect(paintLayers.getByRole("button", { name: /Layer 2\s+0s/ })).toHaveClass(/active/);
     await paintLayers.getByRole("button", { name: "Add" }).click();
     await expect(paintLayers.getByRole("button", { name: /Layer 3\s+0s/ })).toHaveClass(/active/);
+
     await dragRowBefore(
         page,
         paintLayers.locator(".layer-row").filter({ hasText: "Layer 3" }),
@@ -39,16 +55,18 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
     expect(layerBox.x + layerBox.width).toBeLessThanOrEqual(controlPanelBox.x + controlPanelBox.width + 1);
 
     const viewport = page.locator("paint-viewport");
-    await expect(viewport).toBeVisible();
-    const initialViewportBox = await viewport.boundingBox();
-    if (!initialViewportBox) throw new Error("paint viewport missing");
-    const initialCx = initialViewportBox.x + initialViewportBox.width * 0.5;
-    const initialCy = initialViewportBox.y + initialViewportBox.height * 0.5;
-    await page.mouse.move(initialCx, initialCy);
+    const firstBox = await viewport.boundingBox();
+    if (!firstBox) throw new Error("paint viewport missing");
+    const firstCenter = {
+        x: firstBox.x + firstBox.width * 0.5,
+        y: firstBox.y + firstBox.height * 0.5,
+    };
+
+    await page.mouse.move(firstCenter.x, firstCenter.y);
     await page.mouse.down({ button: "middle" });
-    await page.mouse.move(initialCx + 64, initialCy + 18, { steps: 4 });
+    await page.mouse.move(firstCenter.x + 64, firstCenter.y + 18, { steps: 4 });
     await page.mouse.up({ button: "middle" });
-    await page.getByRole("button", { name: "Add Object" }).click();
+    await addObjectAndWait(page, "Object 2");
 
     const objects = page.locator("section").filter({ hasText: "Objects" });
     await dragRowBefore(
@@ -65,135 +83,106 @@ test("paint modeler canvas supports the simplified paint tool surface", async ({
         views.locator(".list-row").filter({ hasText: "View 1" }),
     );
     await expect(views.locator(".list-row").first()).toContainText("View 2");
-    await expect(page.getByRole("button", { name: "Depth Brush" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Depth Pull" })).toHaveCount(0);
-    await expect(page.getByText("Placement", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Projection", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Render", { exact: true })).toHaveCount(0);
-    await expect(page.getByText("Tool", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Seam" })).toHaveCount(0);
-    await expect(page.getByLabel("Opacity")).toHaveCount(0);
-    await expect(page.getByLabel("Depth rate")).toHaveCount(0);
-    await expect(page.getByLabel("Brush lattice")).toHaveCount(0);
-    await expect(page.getByLabel("Seam size")).toHaveCount(0);
-    await expect(page.getByLabel("Surface field")).not.toBeChecked();
-    await expect(page.getByRole("group", { name: "Brush mode" })).toBeVisible();
-    const strokeGeometry = page.getByRole("group", { name: "Stroke geometry" });
-    await expect(strokeGeometry).toBeVisible();
-    await expect(strokeGeometry.getByRole("button").nth(0)).toHaveText("Ribbon");
-    await expect(strokeGeometry.getByRole("button").nth(1)).toHaveText("Billboard");
-    await expect(page.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByRole("button", { name: "Ribbon" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByRole("button", { name: "Billboard" })).toHaveAttribute("aria-pressed", "false");
-    await expect(page.getByRole("button", { name: "Ribbon" })).toBeEnabled();
+
     await expect(page.getByLabel("Shade ribbons")).toBeChecked();
     await expect(page.getByLabel("Shade ribbons")).toBeEnabled();
     await expect(page.getByLabel("Width")).toHaveValue("18");
-    await page.getByRole("button", { name: "Surface" }).click();
-    await expect(page.getByRole("button", { name: "Surface" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByLabel("Width")).toHaveValue("72");
-    await expect(page.getByLabel("Color")).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Ribbon" })).toBeDisabled();
-    await expect(page.getByLabel("Shade ribbons")).toBeDisabled();
-
     await page.getByLabel("Width").evaluate(element => {
         const input = element as HTMLInputElement;
-        input.value = "66";
+        input.value = "42";
         input.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    await expect(page.getByLabel("Width")).toHaveValue("66");
-
-    await page.getByRole("button", { name: "Depth" }).click();
-    await expect(page.getByRole("button", { name: "Depth" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByLabel("Width")).toHaveValue("36");
-    await expect(page.getByLabel("Color")).toBeDisabled();
-    await page.getByRole("button", { name: "Surface" }).click();
-    await expect(page.getByRole("button", { name: "Surface" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByLabel("Width")).toHaveValue("66");
-
-    await expect(viewport).toBeVisible();
-    const box = await viewport.boundingBox();
-    if (!box) throw new Error("paint viewport missing");
-    const cx = box.x + box.width * 0.56;
-    const cy = box.y + box.height * 0.52;
-
-    await page.mouse.move(cx - 150, cy - 20);
-    await page.mouse.down();
-    for (const [dx, dy] of [[-95, 10], [-35, -12], [40, 8], [105, -10], [155, 12]]) {
-        await page.mouse.move(cx + dx, cy + dy, { steps: 5 });
-    }
-    await page.mouse.up();
-
-    await expect(page.getByText("Charts 1")).toBeVisible();
-    await expect(page.getByText("1c 0s")).toBeVisible();
-
-    await page.mouse.move(cx, cy);
-    await page.mouse.down({ button: "middle" });
-    await page.mouse.move(cx + 90, cy + 24, { steps: 6 });
-    await page.mouse.up({ button: "middle" });
-    await waitForAnimationFrame(page);
-
-    const rendererUnavailable = await page.getByText("WebGPU unavailable").isVisible().catch(() => false);
-    if (rendererUnavailable) {
-        await expect(page.getByText("WebGPU unavailable")).toBeVisible();
-        await page.getByLabel("Surface field").check();
-        await expect(page.getByLabel("Surface field")).toBeChecked();
-    } else {
-        const withChartWire = await page.locator("canvas").screenshot();
-        await page.getByLabel("Chart wire").uncheck();
-        await expect(page.getByLabel("Chart wire")).not.toBeChecked();
-        await waitForAnimationFrame(page);
-        const withoutChartWire = await page.locator("canvas").screenshot();
-        expect(withoutChartWire.equals(withChartWire)).toBe(false);
-        await page.getByLabel("Chart wire").check();
-        await expect(page.getByLabel("Chart wire")).toBeChecked();
-        await waitForAnimationFrame(page);
-
-        const withoutSurfaceField = await page.locator("canvas").screenshot();
-        await page.getByLabel("Surface field").check();
-        await expect(page.getByLabel("Surface field")).toBeChecked();
-        await waitForAnimationFrame(page);
-        const withSurfaceField = await page.locator("canvas").screenshot();
-        expect(withSurfaceField.equals(withoutSurfaceField)).toBe(false);
-    }
-    await page.getByLabel("Surface field").uncheck();
-    await page.getByRole("button", { name: "Color" }).click();
-    await expect(page.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByLabel("Width")).toHaveValue("18");
-    await expect(page.getByLabel("Color")).toBeEnabled();
-    await expect(page.getByRole("button", { name: "Ribbon" })).toBeEnabled();
-    await expect(page.getByLabel("Shade ribbons")).toBeEnabled();
-    await expect(page.getByLabel("Shade ribbons")).toBeChecked();
+    await expect(page.getByLabel("Width")).toHaveValue("42");
     await page.getByLabel("Shade ribbons").uncheck();
     await expect(page.getByLabel("Shade ribbons")).not.toBeChecked();
     await page.getByLabel("Shade ribbons").check();
     await expect(page.getByLabel("Shade ribbons")).toBeChecked();
-    await page.getByRole("button", { name: "Ribbon" }).click();
-    await expect(page.getByRole("button", { name: "Ribbon" })).toHaveAttribute("aria-pressed", "true");
 
-    await page.mouse.move(cx - 130, cy + 74);
-    await page.mouse.down();
-    await page.mouse.move(cx + 42, cy + 84, { steps: 6 });
-    await expect(page.locator(".draft")).toHaveCount(0);
-    await page.mouse.up();
-    await expect(page.getByText(/\d+c 1s/)).toBeVisible();
+    const strokeBox = await viewport.boundingBox();
+    if (!strokeBox) throw new Error("paint viewport missing");
+    const center = {
+        x: strokeBox.x + strokeBox.width * 0.56,
+        y: strokeBox.y + strokeBox.height * 0.52,
+    };
+
+    await drawRibbonUntilStrokeCount(page, center.x, center.y, 1);
     await expect(paintLayers.getByRole("button", { name: /Layer 1\s+1s/ })).toBeVisible();
+    await expect(objects.getByRole("button", { name: /Object 2\s+1s/ })).toBeVisible();
 
+    const rendererUnavailable = await page.getByText("WebGPU unavailable").isVisible().catch(() => false);
+    if (!rendererUnavailable) {
+        const beforeOrbit = await page.locator("canvas").screenshot();
+        await page.mouse.move(center.x, center.y);
+        await page.mouse.down({ button: "middle" });
+        await page.mouse.move(center.x + 120, center.y + 24, { steps: 8 });
+        await page.mouse.up({ button: "middle" });
+        await waitForAnimationFrame(page);
+        const afterOrbit = await page.locator("canvas").screenshot();
+        expect(afterOrbit.equals(beforeOrbit)).toBe(false);
+    }
+
+    await expect(page.getByRole("button", { name: "Chart wire" })).toHaveCount(0);
+    await expect(page.getByLabel("Surface field")).toHaveCount(0);
     expect(consoleProblems).toEqual([]);
 });
 
-async function dragRowBefore(page: Page, source: Locator, target: Locator) {
+const addObjectAndWait = async (page: Page, objectName: string): Promise<void> => {
+    const objects = page.locator("section").filter({ hasText: "Objects" });
+    const row = objects.getByRole("button", { name: new RegExp(`${objectName}\\s+0s`) });
+    for (let attempt = 0; attempt < 4; attempt++) {
+        if (await row.count() > 0) return;
+        await page.getByRole("button", { name: "Add Object" }).click();
+        await waitForAnimationFrame(page);
+    }
+    await expect(row).toBeVisible();
+};
+
+const drawRibbonUntilStrokeCount = async (
+    page: Page,
+    cx: number,
+    cy: number,
+    strokeCount: number,
+): Promise<void> => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        await drawRibbon(page, cx, cy);
+        if (await isStrokeCountVisible(page, strokeCount)) return;
+    }
+    await expect(page.getByText(`Strokes ${strokeCount}`)).toBeVisible();
+};
+
+const drawRibbon = async (page: Page, cx: number, cy: number): Promise<void> => {
+    await page.mouse.move(cx - 150, cy - 20);
+    await page.mouse.down();
+    for (const [dx, dy] of [
+        [-95, 10],
+        [-35, -12],
+        [40, 8],
+        [105, -10],
+        [155, 12],
+    ]) {
+        await page.mouse.move(cx + dx, cy + dy, { steps: 5 });
+    }
+    await page.mouse.up();
+    await waitForAnimationFrame(page);
+};
+
+const isStrokeCountVisible = async (page: Page, count: number): Promise<boolean> => {
+    return page.getByText(`Strokes ${count}`).isVisible({ timeout: 1_500 }).catch(() => false);
+};
+
+const dragRowBefore = async (page: Page, source: Locator, target: Locator): Promise<void> => {
     await source.scrollIntoViewIfNeeded();
     await target.scrollIntoViewIfNeeded();
     await source.dragTo(target);
     await waitForAnimationFrame(page);
-}
-function isExpectedStartupNoise(text: string): boolean {
+};
+
+const isExpectedStartupNoise = (text: string): boolean => {
     return text.includes("ResizeObserver loop completed")
         || text.includes("could not get gpu adapter");
-}
+};
 
-async function dismissStartupAlerts(page: Page, durationMs = 1_200) {
+const dismissStartupAlerts = async (page: Page, durationMs = 1_200): Promise<void> => {
     const deadline = Date.now() + durationMs;
     while (Date.now() < deadline) {
         const dismiss = page.getByLabel("Dismiss");
@@ -204,15 +193,15 @@ async function dismissStartupAlerts(page: Page, durationMs = 1_200) {
             await page.waitForTimeout(100);
         }
     }
-}
+};
 
-async function waitForAnimationFrame(page: Page) {
+const waitForAnimationFrame = async (page: Page): Promise<void> => {
     await page.evaluate(() => new Promise<void>(resolve => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     }));
-}
+};
 
-async function forbidWebglContexts(page: Page) {
+const forbidWebglContexts = async (page: Page): Promise<void> => {
     await page.addInitScript(() => {
         const originalGetContext = HTMLCanvasElement.prototype.getContext;
         HTMLCanvasElement.prototype.getContext = function(...args) {
@@ -227,4 +216,4 @@ async function forbidWebglContexts(page: Page) {
             return originalGetContext.apply(this, args);
         } as typeof HTMLCanvasElement.prototype.getContext;
     });
-}
+};

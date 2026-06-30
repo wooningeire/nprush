@@ -4,8 +4,6 @@ import PaintModelerControls from "./PaintModelerControls.svelte";
 import { PaintModelingRenderer } from "./PaintModelingRenderer.ts";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
 import { clampNdcPoint, ndcFromClientPoint } from "../contour-modeler/contourGeometry.ts";
-import { carryStrokeDepths, snapCarryDepthAtPoint } from "./state/snapDepthCarry.ts";
-import type { SnapPlacementPlan } from "./state/strokePlacement.ts";
 import type { Vec2 } from "./types.ts";
 
 const modelerState = new PaintModelingState();
@@ -18,14 +16,9 @@ let rendererInitializing = false;
 let renderFrameId: number | null = null;
 let uploadedStaticSceneKey: string | null = null;
 let uploadedDraftKey: string | null = null;
-let uploadedChartStateVersion: number | null = null;
 let pointerMode = $state<"paint" | "orbit" | null>(null);
 let rendererError = $state<string | null>(null);
-let finishingStroke = false;
-let showChartWireframe = $state(true);
-let showSurfaceField = $state(false);
 let shadeRibbons = $state(true);
-
 
 $effect(() => {
     if (!canvas) return;
@@ -43,19 +36,14 @@ $effect(() => {
     modelerState.activeObjectId;
     modelerState.draftStroke;
     modelerState.brush;
-    modelerState.brush.geometryMode;
-    modelerState.brushMode;
-    modelerState.placementMode;
     modelerState.activePaintLayerId;
     modelerState.paintLayers.length;
-    showChartWireframe;
-    showSurfaceField;
     shadeRibbons;
     requestRender();
 });
 
 $effect(() => {
-        requestRender();
+    requestRender();
 });
 
 onDestroy(() => {
@@ -64,7 +52,6 @@ onDestroy(() => {
     renderer = null;
     uploadedStaticSceneKey = null;
     uploadedDraftKey = null;
-    uploadedChartStateVersion = null;
 });
 
 async function ensureRenderer() {
@@ -81,7 +68,6 @@ async function ensureRenderer() {
         renderer = await PaintModelingRenderer.create(canvas);
         uploadedStaticSceneKey = null;
         uploadedDraftKey = null;
-        uploadedChartStateVersion = null;
     } catch (error) {
         rendererError = (error as Error)?.message ?? String(error);
     } finally {
@@ -97,16 +83,6 @@ function requestRender() {
     });
 }
 
-function setShowChartWireframe(value: boolean) {
-    showChartWireframe = value;
-    requestRender();
-}
-
-function setShowSurfaceField(value: boolean) {
-    showSurfaceField = value;
-    requestRender();
-}
-
 function setShadeRibbons(value: boolean) {
     shadeRibbons = value;
     requestRender();
@@ -119,19 +95,10 @@ async function render() {
     const staticSceneKey = [
         modelerState.meshVersion,
         modelerState.renderDepthSortKey,
-        showChartWireframe ? "wire" : "no-wire",
-        showSurfaceField ? "field" : "no-field",
         shadeRibbons ? "shade-ribbons" : "flat-ribbons",
     ].join(":");
     if (uploadedStaticSceneKey !== staticSceneKey) {
-        if (uploadedChartStateVersion !== modelerState.meshVersion) {
-            renderer.syncChartState(modelerState.objects);
-            uploadedChartStateVersion = modelerState.meshVersion;
-        }
-        renderer.setChartScene(modelerState.objects, modelerState.views, showChartWireframe, showSurfaceField);
         renderer.setSegments(modelerState.buildRenderSegments({
-            showChartWireframe: false,
-            showSurfaceField: false,
             showDraftStroke: false,
             shadeRibbons,
         }));
@@ -158,7 +125,6 @@ function cancelRender() {
 }
 
 function onPointerDown(event: PointerEvent) {
-    if (finishingStroke) return;
     const target = event.currentTarget as HTMLElement;
     target.setPointerCapture(event.pointerId);
     const point = pointerNdc(event, target);
@@ -195,7 +161,7 @@ function onPointerMove(event: PointerEvent) {
     event.preventDefault();
 }
 
-async function onPointerUp(event: PointerEvent) {
+function onPointerUp(event: PointerEvent) {
     const target = event.currentTarget as HTMLElement;
     const shouldFinishPaint = pointerMode === "paint";
     pointerMode = null;
@@ -205,59 +171,9 @@ async function onPointerUp(event: PointerEvent) {
     event.preventDefault();
 
     if (shouldFinishPaint) {
-        await finishPaintStroke();
+        modelerState.finishStroke();
     }
     requestRender();
-}
-
-async function finishPaintStroke() {
-    if (finishingStroke) return;
-    finishingStroke = true;
-    try {
-        const snapPlacementPlan = await buildGpuSnapPlacementPlan();
-        modelerState.finishStroke(snapPlacementPlan ? { snapPlacementPlan } : undefined);
-        applyGpuChartPaintRuns();
-    } finally {
-        finishingStroke = false;
-    }
-}
-
-async function buildGpuSnapPlacementPlan(): Promise<SnapPlacementPlan | undefined> {
-    if (!renderer || modelerState.brushMode !== "color" || modelerState.placementMode !== "snap") return undefined;
-
-    const object = modelerState.activeObject;
-    const view = modelerState.activeView;
-    const points = modelerState.draftStrokeSourcePoints();
-    if (!object || !view || !points || object.charts.length === 0) return undefined;
-
-    try {
-        if (uploadedChartStateVersion !== modelerState.meshVersion) {
-            renderer.syncChartState(modelerState.objects);
-            uploadedChartStateVersion = modelerState.meshVersion;
-        }
-        const hits = await renderer.raycastObjectSurfaceBatch(object, modelerState.views, view, points);
-        return {
-            hits,
-            carriedDepths: carryStrokeDepths(
-                hits.map(hit => hit ? snapCarryDepthAtPoint(hit.viewDepth) : null),
-                points,
-            ),
-        };
-    } catch (error) {
-        console.warn("GPU snap placement failed; falling back to CPU raycast", error);
-        return undefined;
-    }
-}
-
-function applyGpuChartPaintRuns() {
-    const runs = modelerState.consumeGpuChartPaintRuns();
-    if (runs.length === 0) return;
-    if (!renderer) {
-        uploadedChartStateVersion = null;
-        return;
-    }
-    renderer.applyChartPaintRuns(runs);
-    uploadedChartStateVersion = modelerState.meshVersion;
 }
 
 function onPointerLeave() {
@@ -276,13 +192,10 @@ function draftRenderKey(): string {
     return [
         "draft",
         draft.length,
-        modelerState.brushMode,
-        modelerState.placementMode,
         last.x.toFixed(4),
         last.y.toFixed(4),
         modelerState.brush.color,
         modelerState.brush.width.toFixed(1),
-        modelerState.brush.geometryMode,
         modelerState.activePaintLayerId,
     ].join(":");
 }
@@ -293,12 +206,8 @@ function draftRenderKey(): string {
     <PaintModelerControls
         {modelerState}
         {rendererError}
-        {showChartWireframe}
-        {showSurfaceField}
         {shadeRibbons}
         {requestRender}
-        {setShowChartWireframe}
-        {setShowSurfaceField}
         {setShadeRibbons}
     />
     <paint-viewport

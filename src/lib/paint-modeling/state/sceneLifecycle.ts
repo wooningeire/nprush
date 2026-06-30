@@ -1,7 +1,6 @@
-import { vec3 } from "wgpu-matrix";
+﻿import { vec3 } from "wgpu-matrix";
 import { distance3 } from "./vectorMath.ts";
 import type {
-    OcclusionClaim,
     PaintObject,
     PaintStroke,
     PaintView,
@@ -25,15 +24,12 @@ type PaintOrbitSource = {
 export type ObjectDeletionResult = {
     objects: PaintObject[],
     strokes: PaintStroke[],
-    occlusionClaims: OcclusionClaim[],
     activeObjectId: string | null,
 };
 
 export type ViewDeletionResult = {
-    objects: PaintObject[],
     views: PaintView[],
     strokes: PaintStroke[],
-    occlusionClaims: OcclusionClaim[],
     selectViewId: string | null,
 };
 
@@ -90,19 +86,13 @@ export const cameraMovedFromPaintView = (
 
 export const viewHasAuthoredContent = (
     viewId: string,
-    objects: PaintObject[],
     strokes: PaintStroke[],
-    occlusionClaims: OcclusionClaim[],
-): boolean =>
-    strokes.some(stroke => stroke.sourceViewId === viewId)
-    || occlusionClaims.some(claim => claim.viewId === viewId)
-    || objects.some(object => object.charts.some(chart => chart.sourceViewId === viewId));
+): boolean => strokes.some(stroke => stroke.sourceViewId === viewId);
 
 export const deletePaintObject = (
     objectId: string,
     objects: PaintObject[],
     strokes: PaintStroke[],
-    occlusionClaims: OcclusionClaim[],
     activeObjectId: string | null,
 ): ObjectDeletionResult | null => {
     if (!objects.some(object => object.id === objectId)) return null;
@@ -111,7 +101,6 @@ export const deletePaintObject = (
     return {
         objects: nextObjects,
         strokes: strokes.filter(stroke => stroke.objectId !== objectId),
-        occlusionClaims: occlusionClaims.filter(claim => claim.objectId !== objectId),
         activeObjectId: activeObjectId === objectId
             ? nextObjects[0]?.id ?? null
             : activeObjectId,
@@ -120,37 +109,16 @@ export const deletePaintObject = (
 
 export const deletePaintView = (
     viewId: string,
-    objects: PaintObject[],
     views: PaintView[],
     strokes: PaintStroke[],
-    occlusionClaims: OcclusionClaim[],
     activeViewId: string | null,
 ): ViewDeletionResult | null => {
     if (!views.some(view => view.id === viewId)) return null;
 
-    const removedChartIds = new Set<string>();
-    const nextObjects = objects.map(object => {
-        const keptCharts = object.charts.filter(chart => {
-            if (chart.sourceViewId !== viewId) return true;
-            removedChartIds.add(chart.id);
-            return false;
-        });
-        return { ...object, charts: keptCharts };
-    });
     const nextViews = views.filter(view => view.id !== viewId);
-
     return {
-        objects: nextObjects,
         views: nextViews,
-        strokes: strokes.filter(stroke =>
-            stroke.sourceViewId !== viewId
-            && !stroke.samples.some(sample => removedChartIds.has(sample.surfaceRef.chartId))
-        ),
-        occlusionClaims: occlusionClaims.filter(claim =>
-            claim.viewId !== viewId
-            && !removedChartIds.has(claim.frontChartId)
-            && !claim.backRefs.some(ref => removedChartIds.has(ref.chartId))
-        ),
+        strokes: strokes.filter(stroke => stroke.sourceViewId !== viewId),
         selectViewId: activeViewId === viewId
             ? nextViews[0]?.id ?? null
             : activeViewId,
