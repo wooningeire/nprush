@@ -365,10 +365,12 @@ const appendRibbonQuad = (
     shade: number,
 ) => {
     appendWorldTriangle(segments, a.left, a.right, b.right, color, {
+        depthWrite: true,
         normal: triangleNormal(a.left, a.right, b.right),
         shade,
     });
     appendWorldTriangle(segments, a.left, b.right, b.left, color, {
+        depthWrite: true,
         normal: triangleNormal(a.left, b.right, b.left),
         shade,
     });
@@ -487,7 +489,7 @@ const appendWorldTriangle = (
     b: Vec3 | null,
     c: Vec3 | null,
     color: Vec4,
-    options: { normal?: Vec3; shade?: number } = {},
+    options: { depthWrite?: boolean; normal?: Vec3; shade?: number } = {},
 ) => {
     if (!a || !b || !c) return;
     segments.push({
@@ -498,5 +500,6 @@ const appendWorldTriangle = (
         color,
         ...(options.normal ? { normal: options.normal } : {}),
         ...(options.shade !== undefined ? { shade: options.shade } : {}),
+        ...(options.depthWrite ? { depthWrite: true } : {}),
     });
 };

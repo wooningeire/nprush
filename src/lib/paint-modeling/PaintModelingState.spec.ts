@@ -251,6 +251,7 @@ describe("PaintModelingState prototype", () => {
         expect(noWirePrimitives.filter(isRenderTriangle)).toHaveLength(0);
         expect(chartFill.length).toBeGreaterThan(0);
         expect(chartFill.every(triangle => triangle.color[3] > 0 && triangle.color[3] <= 0.1)).toBe(true);
+        expect(chartFill.every(triangle => triangle.depthWrite !== true)).toBe(true);
         expect(wirePrimitives.filter(isRenderSegment).length).toBeGreaterThan(0);
     });
 
@@ -834,6 +835,7 @@ describe("PaintModelingState prototype", () => {
         expect(wireOn.some(segment => segment.width === 1.15)).toBe(true);
         expect(chartFill.length).toBeGreaterThan(0);
         expect(chartFill.every(triangle => triangle.color[3] > 0 && triangle.color[3] <= 0.1)).toBe(true);
+        expect(chartFill.every(triangle => triangle.depthWrite !== true)).toBe(true);
     });
 
     it("renders a surface normal field without requiring depth preview", () => {
@@ -1029,6 +1031,7 @@ describe("PaintModelingState prototype", () => {
         expect(stroke.style.geometryMode).toBe("ribbon");
         expect(primitives.filter(isRenderStroke)).toHaveLength(0);
         expect(ribbonTriangles.length).toBeGreaterThan(0);
+        expect(ribbonTriangles.every(triangle => triangle.depthWrite === true)).toBe(true);
         expect(Math.max(...ribbonTriangles.map(triangleArea))).toBeGreaterThan(0.0001);
         expect(distance3(firstRibbonCenter, firstSampleCenter)).toBeLessThan(1e-6);
         expect(firstRibbonWidthPx).toBeGreaterThan(35.5);

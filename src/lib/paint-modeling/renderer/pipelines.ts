@@ -94,8 +94,11 @@ export const createTrianglePipeline = (
     layout: GPUPipelineLayout,
     module: GPUShaderModule,
     format: GPUTextureFormat,
+    depthWriteEnabled: boolean,
 ): GPURenderPipeline => device.createRenderPipeline({
-    label: "paint modeler triangle pipeline",
+    label: depthWriteEnabled
+        ? "paint modeler depth triangle pipeline"
+        : "paint modeler overlay triangle pipeline",
     layout,
     vertex: {
         module,
@@ -122,6 +125,6 @@ export const createTrianglePipeline = (
     depthStencil: {
         format: DEPTH_FORMAT,
         depthCompare: "less-equal",
-        depthWriteEnabled: false,
+        depthWriteEnabled,
     },
 });

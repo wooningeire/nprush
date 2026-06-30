@@ -124,6 +124,7 @@ export interface RenderTriangle {
     color: Vec4;
     normal?: Vec3;
     shade?: number;
+    depthWrite?: boolean;
 }
 
 export interface RenderStroke {
