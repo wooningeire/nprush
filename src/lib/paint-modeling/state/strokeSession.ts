@@ -1,6 +1,9 @@
 import { makeId } from "./sceneData.ts";
 import { samplePaintStrokeSpline } from "./strokeSampling.ts";
-import { buildRibbonStrokeGeometry } from "./strokeMesh.ts";
+import {
+    buildRibbonStrokeGeometry,
+    ribbonSegmentCount,
+} from "./strokeMesh.ts";
 import type { PaintSceneSnapshot } from "./sceneHistory.ts";
 import type {
     BrushStyle,
@@ -51,7 +54,7 @@ export const planFinishedStroke = ({
 
     const sourcePoints = samplePaintStrokeSpline(draftStroke);
     const geometry = buildRibbonStrokeGeometry(sourcePoints, view, brush.width);
-    if (!geometry || geometry.mesh.faces.length === 0) {
+    if (!geometry || ribbonSegmentCount(geometry.ribbon) === 0) {
         return {
             kind: "discard",
             restoreSnapshot: undoSnapshot,
@@ -67,9 +70,7 @@ export const planFinishedStroke = ({
             layerId: paintLayerId,
             sourceViewId: view.id,
             sourcePoints,
-            centerline: geometry.centerline,
-            mesh: geometry.mesh,
-            deformationLines: [],
+            ribbon: geometry.ribbon,
             style: { ...brush },
             paintOrder: nextPaintOrder(object.id),
         },

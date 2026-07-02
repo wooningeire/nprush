@@ -1,10 +1,10 @@
-﻿import {
+import {
     cameraCenter,
     viewForward,
 } from "./projection.ts";
 import {
-    appendRibbonMeshTriangles,
-    appendStrokeRenderTriangles,
+    appendRibbonRenderPrimitive,
+    appendStrokeRenderRibbon,
     parseColor,
 } from "./renderGeometry.ts";
 import { BASE_PAINT_LAYER_ID } from "./paintLayers.ts";
@@ -19,7 +19,6 @@ import type {
     PaintView,
     RenderPrimitive,
     Vec2,
-    Vec3,
 } from "../types.ts";
 
 export type RenderAssemblyContext = {
@@ -48,7 +47,7 @@ export const buildPaintRenderSegments = (
         context.paintLayers,
         context.renderView,
     )) {
-        appendStrokeRenderTriangles(segments, stroke, renderOptions.shadeRibbons);
+        appendStrokeRenderRibbon(segments, stroke, renderOptions.shadeRibbons);
     }
 
     if (renderOptions.showDraftStroke) {
@@ -122,8 +121,8 @@ const strokeDepthForRender = (
     let total = 0;
     let count = 0;
 
-    for (const point of stroke.centerline) {
-        const depth = dot3(sub3(point, origin), forward);
+    for (const vertex of stroke.ribbon.vertices) {
+        const depth = dot3(sub3(vertex.position, origin), forward);
         if (!Number.isFinite(depth)) continue;
         total += depth;
         count += 1;
@@ -145,5 +144,5 @@ const appendDraftStrokePreviewSegments = (
     if (!geometry) return;
 
     const color = parseColor(context.brush.color, 0.72);
-    appendRibbonMeshTriangles(segments, geometry.mesh, color, shadeRibbons ? 1 : 0);
+    appendRibbonRenderPrimitive(segments, geometry.ribbon, color, shadeRibbons ? 1 : 0);
 };

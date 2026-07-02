@@ -31,7 +31,7 @@ $effect(() => {
 });
 
 $effect(() => {
-    modelerState.meshVersion;
+    modelerState.ribbonVersion;
     modelerState.activeViewId;
     modelerState.activeObjectId;
     modelerState.draftStroke;
@@ -93,7 +93,7 @@ async function render() {
     if (!renderer) return;
 
     const staticSceneKey = [
-        modelerState.meshVersion,
+        modelerState.ribbonVersion,
         modelerState.renderDepthSortKey,
         shadeRibbons ? "shade-ribbons" : "flat-ribbons",
     ].join(":");

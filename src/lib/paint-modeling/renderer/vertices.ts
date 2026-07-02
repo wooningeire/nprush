@@ -1,4 +1,4 @@
-import type { RenderPrimitive, RenderSegment, RenderStroke, RenderTriangle, Vec3 } from "../types.ts";
+import type { RenderPrimitive, RenderRibbon, RenderSegment, RenderStroke, RenderTriangle, Vec3 } from "../types.ts";
 import {
     FLOATS_PER_TRIANGLE_VERTEX,
     FLOATS_PER_VERTEX,
@@ -9,12 +9,14 @@ import {
 const DEFAULT_TRIANGLE_NORMAL: Vec3 = [0, 0, 1];
 
 export const isRenderSegment = (primitive: RenderPrimitive): primitive is RenderSegment => (
-    primitive.kind !== "triangle" && primitive.kind !== "stroke"
+    primitive.kind !== "triangle" && primitive.kind !== "stroke" && primitive.kind !== "ribbon"
 );
 
 export const isRenderTriangle = (primitive: RenderPrimitive): primitive is RenderTriangle => primitive.kind === "triangle";
 
 export const isRenderStroke = (primitive: RenderPrimitive): primitive is RenderStroke => primitive.kind === "stroke";
+
+export const isRenderRibbon = (primitive: RenderPrimitive): primitive is RenderRibbon => primitive.kind === "ribbon";
 
 export const createSegmentData = (segments: RenderSegment[]): Float32Array => {
     const data = new Float32Array(segments.length * VERTICES_PER_SEGMENT * FLOATS_PER_VERTEX);

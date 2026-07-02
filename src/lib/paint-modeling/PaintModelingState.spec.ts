@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
-import {
-    evaluatedStrokeMesh,
-    meshConnectedComponentCount,
-} from "./state/strokeMesh.ts";
 import type {
     PaintView,
     RenderPrimitive,
+    RenderRibbon,
     RenderStroke,
     RenderTriangle,
     Vec2,
@@ -42,26 +39,25 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         expect(state.isCameraAtActiveView).toBe(false);
     });
 
-    it("creates one connected ribbon mesh for a brushstroke", () => {
+    it("creates an oriented-vertex ribbon for a brushstroke", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setBrushWidth(36);
         drawStroke(state, { x: -0.28, y: -0.08 }, { x: 0.28, y: 0.12 });
 
         const stroke = state.strokes[0];
-        const mesh = stroke.mesh;
+        const ribbon = stroke.ribbon;
 
         expect(state.objects).toHaveLength(1);
         expect(state.strokes).toHaveLength(1);
-        expect(stroke.centerline).toHaveLength(mesh.rows);
-        expect(mesh.columns).toEqual([-1, 0, 1]);
-        expect(mesh.vertices).toHaveLength(mesh.rows * mesh.columns.length);
-        expect(mesh.faces).toHaveLength((mesh.rows - 1) * 2);
-        expect(meshConnectedComponentCount(mesh)).toBe(1);
-        expect(mesh.faces.every(face => new Set(face).size === 4)).toBe(true);
+        expect(ribbon.closed).toBe(false);
+        expect(ribbon.vertices.length).toBeGreaterThan(1);
+        expect(ribbon.vertices[0].u).toBe(0);
+        expect(ribbon.vertices.at(-1)?.u).toBeCloseTo(1, 5);
+        expect(ribbon.vertices.every(vertex => distance3(vertex.side, [0, 0, 0]) > 0)).toBe(true);
     });
 
-    it("keeps a ring-like stroke as one connected surface", () => {
+    it("keeps a ring-like stroke as a closed oriented-vertex ribbon", () => {
         const state = new PaintModelingState();
         state.addObject();
         state.setBrushWidth(48);
@@ -75,84 +71,34 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         }
         state.finishStroke();
 
-        const mesh = state.strokes[0].mesh;
+        const ribbon = state.strokes[0].ribbon;
 
-        expect(mesh.closed).toBe(true);
-        expect(meshConnectedComponentCount(mesh)).toBe(1);
-        expect(mesh.faces).toHaveLength(mesh.rows * (mesh.columns.length - 1));
+        expect(ribbon.closed).toBe(true);
+        expect(ribbon.vertices.length).toBeGreaterThan(8);
+        expect(ribbon.vertices.at(-1)?.u).toBeLessThan(1);
     });
 
-    it("sculpts a ribbon without changing mesh connectivity", () => {
-        const state = new PaintModelingState();
-        state.addObject();
-        state.setBrushWidth(36);
-        drawStroke(state, { x: -0.22, y: 0 }, { x: 0.22, y: 0 });
+    it("does not expose CPU ribbon raycast or deformation hooks", () => {
+        const state = new PaintModelingState() as unknown as Record<string, unknown>;
 
-        const stroke = state.strokes[0];
-        const verticesBefore = stroke.mesh.vertices.map(vertex => [...vertex.position] as Vec3);
-        const facesBefore = stroke.mesh.faces.map(face => [...face]);
-        const moved = state.sculptStrokeAt(stroke.id, { u: 0.5, v: 0 }, [0, 0.08, 0], 0.24);
-        const sculpted = state.strokes[0];
-        const movement = sculpted.mesh.vertices.map((vertex, index) => distance3(vertex.position, verticesBefore[index]));
-
-        expect(moved).toBe(true);
-        expect(sculpted.mesh.vertices).toHaveLength(verticesBefore.length);
-        expect(sculpted.mesh.faces).toEqual(facesBefore);
-        expect(meshConnectedComponentCount(sculpted.mesh)).toBe(1);
-        expect(Math.max(...movement)).toBeGreaterThan(0.01);
+        expect(state.raycastStrokeAt).toBeUndefined();
+        expect(state.sculptStrokeAt).toBeUndefined();
+        expect(state.addDeformationLine).toBeUndefined();
     });
 
-    it("adds a deformation line as local support columns", () => {
-        const state = new PaintModelingState();
-        state.addObject();
-        state.setBrushWidth(42);
-        drawStroke(state, { x: -0.3, y: -0.04 }, { x: 0.3, y: 0.04 });
-
-        const stroke = state.strokes[0];
-        const rowsBefore = stroke.mesh.rows;
-        const columnsBefore = stroke.mesh.columns.length;
-        const facesBefore = stroke.mesh.faces.length;
-        const added = state.addDeformationLine(stroke.id, [
-            { u: 0.12, v: 0.45 },
-            { u: 0.88, v: 0.5 },
-        ]);
-        const refined = state.strokes[0];
-
-        expect(added).toBe(true);
-        expect(refined.deformationLines).toHaveLength(1);
-        expect(refined.mesh.rows).toBe(rowsBefore);
-        expect(refined.mesh.columns.length).toBeGreaterThan(columnsBefore);
-        expect(refined.mesh.faces.length).toBeGreaterThan(facesBefore);
-        expect(refined.mesh.vertices.length).toBe(rowsBefore * refined.mesh.columns.length);
-        expect(meshConnectedComponentCount(refined.mesh)).toBe(1);
-    });
-
-    it("raycasts the evaluated ribbon surface", () => {
-        const state = new PaintModelingState();
-        state.addObject();
-        drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
-
-        const hit = state.raycastStrokeAt({ x: 0, y: 0 }, state.activeView);
-
-        expect(hit?.strokeId).toBe(state.strokes[0].id);
-        expect(hit?.uv.u).toBeGreaterThan(0.3);
-        expect(hit?.uv.u).toBeLessThan(0.7);
-        expect(Math.abs(hit?.uv.v ?? 1)).toBeLessThan(0.2);
-    });
-
-    it("renders committed ribbons from the evaluated surface", () => {
+    it("renders committed ribbons as GPU-expanded ribbon primitives", () => {
         const state = new PaintModelingState();
         state.addObject();
         drawStroke(state, { x: -0.24, y: 0 }, { x: 0.24, y: 0 });
 
         const primitives = state.buildRenderSegments({ showDraftStroke: false });
-        const triangles = primitives.filter(isRenderTriangle);
-        const evaluated = evaluatedStrokeMesh(state.strokes[0]);
+        const ribbons = primitives.filter(isRenderRibbon);
 
-        expect(triangles.length).toBe(evaluated.faces.length * 2);
+        expect(ribbons).toHaveLength(1);
+        expect(ribbons[0].vertices).toBe(state.strokes[0].ribbon.vertices);
+        expect(ribbons[0].shade).toBe(1);
+        expect(primitives.filter(isRenderTriangle)).toHaveLength(0);
         expect(primitives.filter(isRenderStroke)).toHaveLength(0);
-        expect(triangles.every(triangle => triangle.normal !== undefined)).toBe(true);
-        expect(triangles.every(triangle => triangle.shade === 1)).toBe(true);
     });
 
     it("undoes a paint stroke together with auto-created object and view", () => {
@@ -172,7 +118,7 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         expect(state.activeViewId).toBeNull();
     });
 
-    it("deletes objects and views with their stroke meshes", () => {
+    it("deletes objects and views with their ribbons", () => {
         const state = new PaintModelingState();
         state.addObject("First");
         const objectId = state.activeObjectId!;
@@ -192,6 +138,8 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         expect(state.objects.some(object => object.name === "Second")).toBe(false);
     });
 });
+
+const isRenderRibbon = (primitive: RenderPrimitive): primitive is RenderRibbon => primitive.kind === "ribbon";
 
 const isRenderTriangle = (primitive: RenderPrimitive): primitive is RenderTriangle => primitive.kind === "triangle";
 

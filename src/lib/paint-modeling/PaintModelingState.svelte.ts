@@ -1,4 +1,4 @@
-﻿import { Camera } from "../viewer/Camera.svelte.ts";
+import { Camera } from "../viewer/Camera.svelte.ts";
 import { CameraOrbit } from "../viewer/CameraOrbit.svelte.ts";
 import {
     MAX_BRUSH_WIDTH,
@@ -11,11 +11,6 @@ import {
 } from "./state/paintLayers.ts";
 import { reorderPaintLayers, reorderPaintObjects, reorderPaintViews } from "./state/reorder.ts";
 import { makeId } from "./state/sceneData.ts";
-import {
-    addDeformationLineToStroke,
-    raycastStrokeSurface,
-    sculptStrokeMesh,
-} from "./state/strokeMesh.ts";
 import {
     cameraMovedFromPaintView,
     capturePaintView,
@@ -39,17 +34,13 @@ import { samplePaintStrokeSpline } from "./state/strokeSampling.ts";
 import { clamp } from "./state/vectorMath.ts";
 import type {
     BrushStyle,
-    DeformationLine,
     PaintLayer,
     PaintObject,
     PaintStroke,
     PaintView,
     PaintRenderOptions,
     RenderPrimitive,
-    RibbonUv,
-    StrokeSurfaceHit,
     Vec2,
-    Vec3,
 } from "./types.ts";
 
 const DEFAULT_BRUSH: BrushStyle = {
@@ -72,7 +63,7 @@ export class PaintModelingState {
     brush = $state<BrushStyle>({ ...DEFAULT_BRUSH });
     draftStroke = $state<Vec2[] | null>(null);
     undoStack = $state<PaintSceneSnapshot[]>([]);
-    meshVersion = $state(0);
+    ribbonVersion = $state(0);
     private pendingStrokeUndoSnapshot: PaintSceneSnapshot | null = null;
     private pendingStrokeView: PaintView | null = null;
     private undoGroup: { snapshot: PaintSceneSnapshot; dirty: boolean } | null = null;
@@ -137,7 +128,7 @@ export class PaintModelingState {
         };
         this.objects = [...this.objects, object];
         this.activeObjectId = object.id;
-        this.meshVersion += 1;
+        this.ribbonVersion += 1;
     }
 
     selectObject(objectId: string) {
@@ -162,7 +153,7 @@ export class PaintModelingState {
 
         this.recordUndoSnapshot();
         this.paintLayers = paintLayers;
-        this.meshVersion += 1;
+        this.ribbonVersion += 1;
         return true;
     }
 
@@ -172,7 +163,7 @@ export class PaintModelingState {
 
         this.recordUndoSnapshot();
         this.objects = objects;
-        this.meshVersion += 1;
+        this.ribbonVersion += 1;
         return true;
     }
 
@@ -266,36 +257,7 @@ export class PaintModelingState {
 
         this.pushUndoSnapshot(result.undoSnapshot);
         this.strokes = [...this.strokes, result.stroke];
-        this.meshVersion += 1;
-    }
-
-    sculptStrokeAt(strokeId: string, center: RibbonUv, delta: Vec3, radius?: number): boolean {
-        if (!this.strokes.some(stroke => stroke.id === strokeId)) return false;
-        this.recordUndoSnapshot();
-        this.strokes = this.strokes.map(stroke => stroke.id === strokeId
-            ? sculptStrokeMesh(stroke, center, delta, radius)
-            : stroke);
-        this.meshVersion += 1;
-        return true;
-    }
-
-    addDeformationLine(strokeId: string, points: RibbonUv[]): boolean {
-        if (!this.strokes.some(stroke => stroke.id === strokeId) || points.length < 2) return false;
-        this.recordUndoSnapshot();
-        const line: DeformationLine = {
-            id: makeId("deform"),
-            points: points.map(point => ({ ...point })),
-        };
-        this.strokes = this.strokes.map(stroke => stroke.id === strokeId
-            ? addDeformationLineToStroke(stroke, line)
-            : stroke);
-        this.meshVersion += 1;
-        return true;
-    }
-
-    raycastStrokeAt(point: Vec2, view: PaintView | null = this.currentEffectView()): StrokeSurfaceHit | null {
-        if (!view) return null;
-        return raycastStrokeSurface(this.objects, this.strokes, view, point);
+        this.ribbonVersion += 1;
     }
 
     undo(): boolean {
@@ -325,7 +287,7 @@ export class PaintModelingState {
         this.activeObjectId = deletion.activeObjectId;
         this.draftStroke = null;
         this.pendingStrokeView = null;
-        this.meshVersion += 1;
+        this.ribbonVersion += 1;
         return true;
     }
 
@@ -349,7 +311,7 @@ export class PaintModelingState {
         }
         this.draftStroke = null;
         this.pendingStrokeView = null;
-        this.meshVersion += 1;
+        this.ribbonVersion += 1;
         return true;
     }
 
@@ -460,6 +422,6 @@ export class PaintModelingState {
 
         const activeView = this.activeView;
         if (activeView) selectPaintView(this.views, this.orbit, activeView.id);
-        this.meshVersion += 1;
+        this.ribbonVersion += 1;
     }
 }

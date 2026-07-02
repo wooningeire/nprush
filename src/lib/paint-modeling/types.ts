@@ -36,32 +36,16 @@ export type BrushStyle = {
     opacity: number,
 };
 
-export type RibbonUv = {
-    u: number,
-    v: number,
-};
-
 export type PaintRibbonVertex = {
     position: Vec3,
+    side: Vec3,
     u: number,
-    v: number,
 };
 
-export type PaintRibbonFace = [number, number, number, number];
-
-export type PaintRibbonMesh = {
-    rows: number,
-    columns: number[],
+export type PaintRibbon = {
     closed: boolean,
     vertices: PaintRibbonVertex[],
-    faces: PaintRibbonFace[],
 };
-
-export type DeformationLine = {
-    id: string,
-    points: RibbonUv[],
-};
-
 
 export type PaintStroke = {
     id: string,
@@ -69,9 +53,7 @@ export type PaintStroke = {
     layerId?: string,
     sourceViewId: string,
     sourcePoints: Vec2[],
-    centerline: Vec3[],
-    mesh: PaintRibbonMesh,
-    deformationLines: DeformationLine[],
+    ribbon: PaintRibbon,
     style: BrushStyle,
     paintOrder: number,
 };
@@ -82,15 +64,6 @@ export type PaintObject = {
     visible: boolean,
     locked: boolean,
     layerIndex: number,
-};
-
-export type StrokeSurfaceHit = {
-    objectId: string,
-    strokeId: string,
-    faceIndex: number,
-    uv: RibbonUv,
-    world: Vec3,
-    viewDepth: number,
 };
 
 export type RenderSegment = {
@@ -121,7 +94,15 @@ export type RenderStroke = {
     width: number,
 };
 
-export type RenderPrimitive = RenderSegment | RenderTriangle | RenderStroke;
+export type RenderRibbon = {
+    kind: "ribbon",
+    vertices: PaintRibbonVertex[],
+    closed: boolean,
+    color: Vec4,
+    shade?: number,
+};
+
+export type RenderPrimitive = RenderSegment | RenderTriangle | RenderStroke | RenderRibbon;
 
 export type PaintRenderOptions = {
     showDraftStroke?: boolean,

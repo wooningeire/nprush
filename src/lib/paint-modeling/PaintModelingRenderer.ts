@@ -2,6 +2,7 @@ import { requestGpu } from "$/gpu/setup/requestGpu";
 import gridShaderSource from "./paint_modeler_grid.wgsl?raw";
 import segmentShaderSource from "./paint_modeler_segments.wgsl?raw";
 import triangleShaderSource from "./paint_modeler_triangles.wgsl?raw";
+import ribbonShaderSource from "./paint_modeler_ribbons.wgsl?raw";
 import type { RenderPrimitive } from "./types.ts";
 import {
     DEPTH_FORMAT,
@@ -25,6 +26,7 @@ import {
     createGridPipeline,
     createSegmentPipeline,
     createTrianglePipeline,
+    createRibbonPipeline,
 } from "./renderer/pipelines.ts";
 import {
     createSegmentData,
@@ -33,8 +35,15 @@ import {
     isRenderSegment,
     isRenderStroke,
     isRenderTriangle,
+    isRenderRibbon,
     strokeStripVertexCount,
 } from "./renderer/vertices.ts";
+import {
+    createRibbonDraws,
+    destroyRibbonDraws,
+    writeRibbonDrawUniforms,
+    type RibbonDrawState,
+} from "./renderer/ribbons.ts";
 
 export class PaintModelingRenderer {
     private readonly device: GPUDevice;
@@ -43,6 +52,8 @@ export class PaintModelingRenderer {
     private readonly segmentPipeline: GPURenderPipeline;
     private readonly strokePipeline: GPURenderPipeline;
     private readonly trianglePipeline: GPURenderPipeline;
+    private readonly ribbonPipeline: GPURenderPipeline;
+    private readonly ribbonBindGroupLayout: GPUBindGroupLayout;
     private readonly gridUniformBuffer: GPUBuffer;
     private readonly segmentUniformBuffer: GPUBuffer;
     private readonly triangleUniformBuffer: GPUBuffer;
@@ -55,6 +66,8 @@ export class PaintModelingRenderer {
     private readonly draftStrokeBuffer: VertexBufferState = createVertexBufferState();
     private readonly triangleBuffer: VertexBufferState = createVertexBufferState();
     private readonly draftTriangleBuffer: VertexBufferState = createVertexBufferState();
+    private ribbonDraws: RibbonDrawState[] = [];
+    private draftRibbonDraws: RibbonDrawState[] = [];
     private depthTexture: GPUTexture | null = null;
     private depthWidth = 0;
     private depthHeight = 0;
@@ -92,6 +105,7 @@ export class PaintModelingRenderer {
         const gridModule = createLoggedShaderModule(device, "paint modeler grid shader", gridShaderSource);
         const segmentModule = createLoggedShaderModule(device, "paint modeler segment shader", segmentShaderSource);
         const triangleModule = createLoggedShaderModule(device, "paint modeler triangle shader", triangleShaderSource);
+        const ribbonModule = createLoggedShaderModule(device, "paint modeler ribbon shader", ribbonShaderSource);
 
         const uniformBindGroupLayout = device.createBindGroupLayout({
             label: "paint modeler uniform bind group layout",
@@ -101,15 +115,36 @@ export class PaintModelingRenderer {
                 buffer: { type: "uniform" },
             }],
         });
+        const ribbonBindGroupLayout = device.createBindGroupLayout({
+            label: "paint modeler ribbon bind group layout",
+            entries: [
+                {
+                    binding: 0,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: { type: "uniform" },
+                },
+                {
+                    binding: 1,
+                    visibility: GPUShaderStage.VERTEX,
+                    buffer: { type: "read-only-storage" },
+                },
+            ],
+        });
         const pipelineLayout = device.createPipelineLayout({
             label: "paint modeler pipeline layout",
             bindGroupLayouts: [uniformBindGroupLayout],
         });
+        const ribbonPipelineLayout = device.createPipelineLayout({
+            label: "paint modeler ribbon pipeline layout",
+            bindGroupLayouts: [ribbonBindGroupLayout],
+        });
 
+        this.ribbonBindGroupLayout = ribbonBindGroupLayout;
         this.gridPipeline = createGridPipeline(device, pipelineLayout, gridModule, format);
         this.segmentPipeline = createSegmentPipeline(device, pipelineLayout, segmentModule, format, "triangle-list");
         this.strokePipeline = createSegmentPipeline(device, pipelineLayout, segmentModule, format, "triangle-strip");
         this.trianglePipeline = createTrianglePipeline(device, pipelineLayout, triangleModule, format, true);
+        this.ribbonPipeline = createRibbonPipeline(device, ribbonPipelineLayout, ribbonModule, format);
 
         this.gridUniformBuffer = createUniformBuffer(device, GRID_UNIFORM_FLOATS, "paint modeler grid uniforms");
         this.segmentUniformBuffer = createUniformBuffer(device, SEGMENT_UNIFORM_FLOATS, "paint modeler segment uniforms");
@@ -138,6 +173,7 @@ export class PaintModelingRenderer {
         const renderSegments = segments.filter(isRenderSegment);
         const strokes = segments.filter(isRenderStroke);
         const triangles = segments.filter(isRenderTriangle);
+        const ribbons = segments.filter(isRenderRibbon);
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
         const strokeVertexCount = strokeStripVertexCount(strokes);
         const triangleVertexCount = triangles.length * VERTICES_PER_TRIANGLE;
@@ -152,12 +188,20 @@ export class PaintModelingRenderer {
         uploadVertexData(this.device, this.segmentBuffer, segmentData, segmentVertexCount, "paint modeler segments");
         uploadVertexData(this.device, this.strokeBuffer, strokeData, strokeVertexCount, "paint modeler strokes");
         uploadVertexData(this.device, this.triangleBuffer, triangleData, triangleVertexCount, "paint modeler triangles");
+        destroyRibbonDraws(this.ribbonDraws);
+        this.ribbonDraws = createRibbonDraws(
+            this.device,
+            this.ribbonBindGroupLayout,
+            ribbons,
+            "paint modeler ribbons",
+        );
     }
 
     setDraftSegments(segments: RenderPrimitive[]) {
         const renderSegments = segments.filter(isRenderSegment);
         const strokes = segments.filter(isRenderStroke);
         const triangles = segments.filter(isRenderTriangle);
+        const ribbons = segments.filter(isRenderRibbon);
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
         const strokeVertexCount = strokeStripVertexCount(strokes);
         const triangleVertexCount = triangles.length * VERTICES_PER_TRIANGLE;
@@ -189,6 +233,13 @@ export class PaintModelingRenderer {
             triangleVertexCount,
             "paint modeler draft triangles",
         );
+        destroyRibbonDraws(this.draftRibbonDraws);
+        this.draftRibbonDraws = createRibbonDraws(
+            this.device,
+            this.ribbonBindGroupLayout,
+            ribbons,
+            "paint modeler draft ribbons",
+        );
     }
 
     render(
@@ -202,6 +253,8 @@ export class PaintModelingRenderer {
 
         this.ensureDepthTexture(width, height);
         this.writeUniforms(viewProjMat, viewProjInvMat, viewMat);
+        writeRibbonDrawUniforms(this.device, this.ribbonDraws, viewProjMat, viewMat);
+        writeRibbonDrawUniforms(this.device, this.draftRibbonDraws, viewProjMat, viewMat);
 
         const encoder = this.device.createCommandEncoder({ label: "paint modeler render encoder" });
         const pass = encoder.beginRenderPass({
@@ -224,9 +277,11 @@ export class PaintModelingRenderer {
         pass.setBindGroup(0, this.gridBindGroup);
         pass.draw(3);
 
+        this.drawRibbonDraws(pass, this.ribbonDraws);
         this.drawTriangleBuffer(pass, this.triangleBuffer, this.triangleVertexCount);
         this.drawSegmentBuffer(pass, this.segmentBuffer, this.segmentVertexCount, this.segmentPipeline);
         this.drawSegmentBuffer(pass, this.strokeBuffer, this.strokeVertexCount, this.strokePipeline);
+        this.drawRibbonDraws(pass, this.draftRibbonDraws);
         this.drawTriangleBuffer(pass, this.draftTriangleBuffer, this.draftTriangleVertexCount);
         this.drawSegmentBuffer(pass, this.draftSegmentBuffer, this.draftSegmentVertexCount, this.segmentPipeline);
         this.drawSegmentBuffer(pass, this.draftStrokeBuffer, this.draftStrokeVertexCount, this.strokePipeline);
@@ -242,6 +297,8 @@ export class PaintModelingRenderer {
         destroyVertexBuffer(this.draftStrokeBuffer);
         destroyVertexBuffer(this.triangleBuffer);
         destroyVertexBuffer(this.draftTriangleBuffer);
+        destroyRibbonDraws(this.ribbonDraws);
+        destroyRibbonDraws(this.draftRibbonDraws);
         this.depthTexture?.destroy();
         this.gridUniformBuffer.destroy();
         this.segmentUniformBuffer.destroy();
@@ -301,6 +358,18 @@ export class PaintModelingRenderer {
         pass.setBindGroup(0, this.triangleBindGroup);
         pass.setVertexBuffer(0, buffer.buffer);
         pass.draw(vertexCount);
+    }
+
+    private drawRibbonDraws(
+        pass: GPURenderPassEncoder,
+        draws: RibbonDrawState[],
+    ) {
+        if (draws.length === 0) return;
+        pass.setPipeline(this.ribbonPipeline);
+        for (const draw of draws) {
+            pass.setBindGroup(0, draw.bindGroup);
+            pass.draw(draw.vertexCount);
+        }
     }
 
     private ensureDepthTexture(width: number, height: number) {

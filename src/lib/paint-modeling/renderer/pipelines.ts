@@ -128,3 +128,31 @@ export const createTrianglePipeline = (
         depthWriteEnabled,
     },
 });
+
+export const createRibbonPipeline = (
+    device: GPUDevice,
+    layout: GPUPipelineLayout,
+    module: GPUShaderModule,
+    format: GPUTextureFormat,
+): GPURenderPipeline => device.createRenderPipeline({
+    label: "paint modeler ribbon pipeline",
+    layout,
+    vertex: {
+        module,
+        entryPoint: "ribbon_vertex",
+    },
+    fragment: {
+        module,
+        entryPoint: "ribbon_fragment",
+        targets: [createColorTarget(format)],
+    },
+    primitive: {
+        topology: "triangle-list",
+        cullMode: "none",
+    },
+    depthStencil: {
+        format: DEPTH_FORMAT,
+        depthCompare: "less-equal",
+        depthWriteEnabled: true,
+    },
+});
