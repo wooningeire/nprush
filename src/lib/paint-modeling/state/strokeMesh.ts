@@ -1,6 +1,8 @@
-﻿import {
+import {
     DEFORMATION_SUPPORT_OFFSET,
     RIBBON_BASE_COLUMNS,
+    RIBBON_EVALUATED_MIN_COLUMNS,
+    RIBBON_EVALUATED_MIN_ROWS,
 } from "./constants.ts";
 import {
     defaultDepthForPaintView,
@@ -125,6 +127,38 @@ export const addDeformationLineToStroke = (
     };
 };
 
+export const evaluatedStrokeMesh = (stroke: PaintStroke): PaintRibbonMesh => {
+    const columns = evaluatedRibbonColumns(stroke.mesh.columns);
+    const rows = evaluatedRibbonRows(stroke.mesh);
+    const vertices: PaintRibbonVertex[] = [];
+
+    for (let row = 0; row < rows; row++) {
+        const u = stroke.mesh.closed
+            ? row / rows
+            : row / Math.max(1, rows - 1);
+
+        for (const v of columns) {
+            vertices.push({
+                position: strokeWorldPointAtUv(stroke, { u, v }),
+                u,
+                v,
+            });
+        }
+    }
+
+    return {
+        rows,
+        columns,
+        closed: stroke.mesh.closed,
+        vertices,
+        faces: buildRibbonFaces(rows, columns.length, stroke.mesh.closed),
+    };
+};
+
+export const strokeWorldPointAtUv = (stroke: PaintStroke, uv: RibbonUv): Vec3 => {
+    return ribbonMeshPointAtUv(stroke.mesh, uv);
+};
+
 export const sculptStrokeMesh = (
     stroke: PaintStroke,
     center: RibbonUv,
@@ -136,7 +170,7 @@ export const sculptStrokeMesh = (
         ...stroke.mesh,
         columns: [...stroke.mesh.columns],
         vertices: stroke.mesh.vertices.map(vertex => {
-            const du = uvDelta(vertex.u, center.u);
+            const du = uDistance(stroke.mesh, vertex.u, center.u);
             const dv = vertex.v - center.v;
             const distance = Math.hypot(du, dv);
             if (distance > radiusSafe) return cloneRibbonVertex(vertex);
@@ -175,9 +209,10 @@ export const raycastStrokeSurface = (
         const object = objectById.get(stroke.objectId);
         if (!object?.visible || object.locked) continue;
 
-        for (let faceIndex = 0; faceIndex < stroke.mesh.faces.length; faceIndex++) {
-            const face = stroke.mesh.faces[faceIndex];
-            const vertices = face.map(index => stroke.mesh.vertices[index]);
+        const surface = evaluatedStrokeMesh(stroke);
+        for (let faceIndex = 0; faceIndex < surface.faces.length; faceIndex++) {
+            const face = surface.faces[faceIndex];
+            const vertices = face.map(index => surface.vertices[index]);
             const hitA = raycastTriangle(ray, vertices[0].position, vertices[1].position, vertices[2].position);
             const hitB = raycastTriangle(ray, vertices[0].position, vertices[2].position, vertices[3].position);
             const hit = hitA && (!hitB || hitA.distance <= hitB.distance)
@@ -241,6 +276,121 @@ export const meshConnectedComponentCount = (mesh: PaintRibbonMesh): number => {
         }
     }
     return count;
+};
+
+const evaluatedRibbonRows = (mesh: PaintRibbonMesh): number => {
+    return Math.max(mesh.rows, RIBBON_EVALUATED_MIN_ROWS);
+};
+
+const evaluatedRibbonColumns = (columns: number[]): number[] => {
+    const uniformColumns = Array.from({ length: RIBBON_EVALUATED_MIN_COLUMNS }, (_, index) => {
+        return -1 + index * 2 / Math.max(1, RIBBON_EVALUATED_MIN_COLUMNS - 1);
+    });
+    return normalizeColumns([...columns, ...uniformColumns]);
+};
+
+const ribbonMeshPointAtUv = (mesh: PaintRibbonMesh, uv: RibbonUv): Vec3 => {
+    const row = rowSampleAtU(mesh, uv.u);
+    const column = columnSampleAtV(mesh.columns, uv.v);
+    const a = lerp3(
+        meshVertexAt(mesh, row.lower, column.lower).position,
+        meshVertexAt(mesh, row.lower, column.upper).position,
+        column.t,
+    );
+    const b = lerp3(
+        meshVertexAt(mesh, row.upper, column.lower).position,
+        meshVertexAt(mesh, row.upper, column.upper).position,
+        column.t,
+    );
+    return lerp3(a, b, row.t);
+};
+
+type RibbonIndexSample = {
+    lower: number,
+    upper: number,
+    t: number,
+};
+
+const rowSampleAtU = (mesh: PaintRibbonMesh, u: number): RibbonIndexSample => {
+    if (mesh.rows <= 1) return { lower: 0, upper: 0, t: 0 };
+
+    const target = mesh.closed ? wrapUnit(u) : clamp(u, 0, 1);
+    const firstU = rowUAt(mesh, 0);
+
+    for (let row = 0; row < mesh.rows - 1; row++) {
+        const lowerU = rowUAt(mesh, row);
+        const upperU = rowUAt(mesh, row + 1);
+        if (target < lowerU || target > upperU) continue;
+        return {
+            lower: row,
+            upper: row + 1,
+            t: safeInverseLerp(lowerU, upperU, target),
+        };
+    }
+
+    if (!mesh.closed) {
+        const lastRow = mesh.rows - 1;
+        return target <= firstU
+            ? { lower: 0, upper: 0, t: 0 }
+            : { lower: lastRow, upper: lastRow, t: 0 };
+    }
+
+    const lastRow = mesh.rows - 1;
+    const lastU = rowUAt(mesh, lastRow);
+    const wrappedTarget = target < firstU ? target + 1 : target;
+    return {
+        lower: lastRow,
+        upper: 0,
+        t: safeInverseLerp(lastU, firstU + 1, wrappedTarget),
+    };
+};
+
+const columnSampleAtV = (columns: number[], v: number): RibbonIndexSample => {
+    if (columns.length <= 1) return { lower: 0, upper: 0, t: 0 };
+
+    const target = clamp(v, columns[0], columns.at(-1)!);
+    for (let column = 0; column < columns.length - 1; column++) {
+        const lower = columns[column];
+        const upper = columns[column + 1];
+        if (target < lower || target > upper) continue;
+        return {
+            lower: column,
+            upper: column + 1,
+            t: safeInverseLerp(lower, upper, target),
+        };
+    }
+
+    const lastColumn = columns.length - 1;
+    return target <= columns[0]
+        ? { lower: 0, upper: 0, t: 0 }
+        : { lower: lastColumn, upper: lastColumn, t: 0 };
+};
+
+const meshVertexAt = (mesh: PaintRibbonMesh, row: number, column: number): PaintRibbonVertex => {
+    return mesh.vertices[row * mesh.columns.length + column];
+};
+
+const rowUAt = (mesh: PaintRibbonMesh, row: number): number => {
+    return meshVertexAt(mesh, row, 0).u;
+};
+
+const uDistance = (mesh: PaintRibbonMesh, a: number, b: number): number => {
+    return mesh.closed ? uvDelta(a, b) : Math.abs(clamp(a, 0, 1) - clamp(b, 0, 1));
+};
+
+const safeInverseLerp = (a: number, b: number, value: number): number => {
+    return Math.abs(b - a) <= 1e-8 ? 0 : clamp((value - a) / (b - a), 0, 1);
+};
+
+const lerp3 = (a: Vec3, b: Vec3, t: number): Vec3 => [
+    lerp(a[0], b[0], t),
+    lerp(a[1], b[1], t),
+    lerp(a[2], b[2], t),
+];
+
+const wrapUnit = (value: number): number => {
+    const wrapped = value % 1;
+    return wrapped < 0 ? wrapped + 1 : wrapped;
 };
 
 const insertRibbonColumns = (mesh: PaintRibbonMesh, columns: number[]): PaintRibbonMesh => {

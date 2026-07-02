@@ -1,4 +1,4 @@
-﻿import type {
+import type {
     DeformationLine,
     PaintLayer,
     PaintObject,
@@ -55,5 +55,6 @@ const cloneDeformationLine = (line: DeformationLine): DeformationLine => ({
     ...line,
     points: line.points.map(point => ({ ...point })),
 });
+
 
 const cloneVec2 = (point: Vec2): Vec2 => ({ ...point });

@@ -29,13 +29,13 @@ type PaintStroke = {
 };
 ```
 
-`u` runs along the stroke. `v` runs across the stroke width. The initial ribbon columns are `[-1, 0, 1]`.
+`u` runs along the stroke. `v` runs across the stroke width. The initial base columns are `[-1, 0, 1]`.
 
 ## Stroke Commit
 
-On pointer up, the draft path is sampled into a 2D source path. The source view projects each sample into free space at the active interaction depth. The stroke builder creates a ribbon frame across the stroke width and emits a row of shared vertices for each centerline sample.
+On pointer up, the draft path is sampled into a 2D source path. The source view projects each sample into free space at the active interaction depth. The stroke builder creates a ribbon frame across the stroke width and emits a row of shared base vertices for each centerline sample.
 
-Adjacent rows share quad faces:
+Adjacent base rows share quad faces:
 
 ```text
 row i:     left_i   center_i   right_i
@@ -47,15 +47,21 @@ faces: [left_i, left_j, center_j, center_i]
 
 Closed source paths wrap the last row back to the first row. This makes ring-like strokes one connected surface, not many chart fragments.
 
+## Evaluated Surface
+
+The base mesh is the editable source. Rendering and picking use `evaluatedStrokeMesh(...)`, which samples a denser `(u, v)` surface from the base mesh.
+
+This keeps curve storage small while giving render and raycast one shared surface.
+
 ## Rendering
 
-Committed ribbons render from `stroke.mesh.faces`. Each quad emits two `RenderTriangle` primitives. Draft strokes use the same ribbon builder, but they are uploaded through the draft render path.
+Committed ribbons render from the evaluated surface. Each evaluated quad emits two `RenderTriangle` primitives. Draft strokes use the same ribbon builder, but they are uploaded through the draft render path.
 
 There is no chart upload store. There are no chart wire or surface-field primitives.
 
 ## Picking
 
-Picking raycasts the actual stroke mesh. A hit returns:
+Picking raycasts the evaluated stroke surface. A hit returns:
 
 ```ts
 type StrokeSurfaceHit = {
@@ -72,11 +78,11 @@ Future tools should use this hit instead of rebuilding chart coordinates.
 
 ## Sculpting
 
-Depth sculpting is direct ribbon deformation. The sculpt operation moves nearby ribbon vertices with falloff in `(u, v)` space and preserves the face list. This keeps the surface connected while changing its shape.
+Depth sculpting is direct ribbon deformation. The sculpt operation moves nearby base vertices with falloff in `(u, v)` space and preserves the face list.
 
 ## Deformation Lines
 
-A deformation line is a purpose-bearing support line in ribbon coordinates. Inserting one adds local support columns around the line's `v` value and regenerates connected faces. The current implementation treats deformation lines as smooth support loops. It refines across width without increasing resolution everywhere along a separate 2D chart grid.
+A deformation line is a purpose-bearing support line in ribbon coordinates. Inserting one adds local support columns around the line's `v` value and regenerates connected base faces. It refines across width without increasing resolution everywhere along a separate 2D chart grid.
 
 ## Current Boundaries
 

@@ -1,4 +1,4 @@
-﻿import { makeId } from "./sceneData.ts";
+import { makeId } from "./sceneData.ts";
 import { samplePaintStrokeSpline } from "./strokeSampling.ts";
 import { buildRibbonStrokeGeometry } from "./strokeMesh.ts";
 import type { PaintSceneSnapshot } from "./sceneHistory.ts";

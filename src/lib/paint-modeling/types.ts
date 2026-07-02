@@ -62,6 +62,7 @@ export type DeformationLine = {
     points: RibbonUv[],
 };
 
+
 export type PaintStroke = {
     id: string,
     objectId: string,

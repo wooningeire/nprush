@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
-import { meshConnectedComponentCount } from "./state/strokeMesh.ts";
+import {
+    evaluatedStrokeMesh,
+    meshConnectedComponentCount,
+} from "./state/strokeMesh.ts";
 import type {
-    PaintRibbonFace,
     PaintView,
     RenderPrimitive,
     RenderStroke,
@@ -88,7 +90,7 @@ describe("PaintModelingState stroke-owned ribbons", () => {
 
         const stroke = state.strokes[0];
         const verticesBefore = stroke.mesh.vertices.map(vertex => [...vertex.position] as Vec3);
-        const facesBefore = stroke.mesh.faces.map(face => [...face] as PaintRibbonFace);
+        const facesBefore = stroke.mesh.faces.map(face => [...face]);
         const moved = state.sculptStrokeAt(stroke.id, { u: 0.5, v: 0 }, [0, 0.08, 0], 0.24);
         const sculpted = state.strokes[0];
         const movement = sculpted.mesh.vertices.map((vertex, index) => distance3(vertex.position, verticesBefore[index]));
@@ -125,7 +127,7 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         expect(meshConnectedComponentCount(refined.mesh)).toBe(1);
     });
 
-    it("raycasts the actual ribbon mesh", () => {
+    it("raycasts the evaluated ribbon surface", () => {
         const state = new PaintModelingState();
         state.addObject();
         drawStroke(state, { x: -0.2, y: 0 }, { x: 0.2, y: 0 });
@@ -138,15 +140,16 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         expect(Math.abs(hit?.uv.v ?? 1)).toBeLessThan(0.2);
     });
 
-    it("renders committed ribbons as triangles", () => {
+    it("renders committed ribbons from the evaluated surface", () => {
         const state = new PaintModelingState();
         state.addObject();
         drawStroke(state, { x: -0.24, y: 0 }, { x: 0.24, y: 0 });
 
         const primitives = state.buildRenderSegments({ showDraftStroke: false });
         const triangles = primitives.filter(isRenderTriangle);
+        const evaluated = evaluatedStrokeMesh(state.strokes[0]);
 
-        expect(triangles.length).toBe(state.strokes[0].mesh.faces.length * 2);
+        expect(triangles.length).toBe(evaluated.faces.length * 2);
         expect(primitives.filter(isRenderStroke)).toHaveLength(0);
         expect(triangles.every(triangle => triangle.normal !== undefined)).toBe(true);
         expect(triangles.every(triangle => triangle.shade === 1)).toBe(true);

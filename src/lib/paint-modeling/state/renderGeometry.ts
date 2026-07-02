@@ -1,8 +1,9 @@
-﻿import {
+import {
     cross3,
     normalize3,
     sub3,
 } from "./vectorMath.ts";
+import { evaluatedStrokeMesh } from "./strokeMesh.ts";
 import type {
     PaintRibbonMesh,
     PaintStroke,
@@ -18,7 +19,7 @@ export const appendStrokeRenderTriangles = (
 ) => {
     appendRibbonMeshTriangles(
         segments,
-        stroke.mesh,
+        evaluatedStrokeMesh(stroke),
         parseColor(stroke.style.color, stroke.style.opacity),
         shadeRibbons ? 1 : 0,
     );
