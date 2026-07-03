@@ -14,6 +14,7 @@ export type RibbonDrawState = {
     closed: boolean,
     color: Vec4,
     shade: number,
+    depthBias: number,
 };
 
 export const createRibbonDraws = (
@@ -61,6 +62,7 @@ export const createRibbonDraws = (
             closed: ribbon.closed,
             color: ribbon.color,
             shade: ribbon.shade ?? 0,
+            depthBias: ribbon.depthBias ?? 0,
         });
     }
     return draws;
@@ -87,7 +89,7 @@ export const writeRibbonDrawUniforms = (
         data[36] = draw.rows;
         data[37] = draw.closed ? 1 : 0;
         data[38] = draw.shade;
-        data[39] = RIBBON_RENDER_COLUMNS;
+        data[39] = draw.depthBias;
         device.queue.writeBuffer(draw.uniformBuffer, 0, data);
     }
 };

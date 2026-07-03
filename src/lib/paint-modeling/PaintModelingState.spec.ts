@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
+import { RIBBON_RENDER_COLUMNS } from "./state/constants.ts";
 import type {
     PaintView,
     RenderPrimitive,
@@ -97,8 +98,25 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         expect(ribbons).toHaveLength(1);
         expect(ribbons[0].vertices).toBe(state.strokes[0].ribbon.vertices);
         expect(ribbons[0].shade).toBe(1);
+        expect(ribbons[0].depthBias ?? 0).toBe(0);
+        expect(RIBBON_RENDER_COLUMNS).toBe(2);
         expect(primitives.filter(isRenderTriangle)).toHaveLength(0);
         expect(primitives.filter(isRenderStroke)).toHaveLength(0);
+    });
+
+    it("renders draft ribbons as opaque depth-biased GPU primitives", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.beginStroke({ x: -0.24, y: 0 }, 800, 600);
+        state.appendStrokePoint({ x: 0.24, y: 0 });
+
+        const primitives = state.buildDraftRenderSegments();
+        const ribbons = primitives.filter(isRenderRibbon);
+
+        expect(ribbons).toHaveLength(1);
+        expect(ribbons[0].color[3]).toBe(1);
+        expect(ribbons[0].depthBias).toBeGreaterThan(0);
+        expect(primitives.filter(isRenderTriangle)).toHaveLength(0);
     });
 
     it("undoes a paint stroke together with auto-created object and view", () => {

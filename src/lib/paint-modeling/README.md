@@ -40,7 +40,7 @@ Closed source paths drop the duplicated closing source point and mark the ribbon
 
 Committed and draft ribbons render as `RenderRibbon` primitives. They upload only oriented vertices plus color and shading uniforms.
 
-The ribbon shader expands adjacent oriented vertices into columns and triangles with `vertex_index`. CPU code does not build ribbon faces, evaluated surfaces, render triangles, or raycast triangles.
+The ribbon shader expands adjacent oriented vertices into the two ribbon edges and triangles with `vertex_index`. CPU code does not build ribbon faces, evaluated surfaces, render triangles, or raycast triangles. Draft ribbons render opaque and use a small GPU clip-depth bias so preview strokes do not fight committed surfaces.
 
 There is no chart upload store. There are no chart wire or surface-field primitives.
 

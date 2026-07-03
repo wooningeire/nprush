@@ -100,6 +100,7 @@ export type RenderRibbon = {
     closed: boolean,
     color: Vec4,
     shade?: number,
+    depthBias?: number,
 };
 
 export type RenderPrimitive = RenderSegment | RenderTriangle | RenderStroke | RenderRibbon;

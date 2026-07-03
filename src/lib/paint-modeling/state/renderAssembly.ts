@@ -7,6 +7,7 @@ import {
     appendStrokeRenderRibbon,
     parseColor,
 } from "./renderGeometry.ts";
+import { DRAFT_RIBBON_DEPTH_BIAS } from "./constants.ts";
 import { BASE_PAINT_LAYER_ID } from "./paintLayers.ts";
 import { buildRibbonGeometryFromDraft } from "./strokeMesh.ts";
 import { dot3, sub3 } from "./vectorMath.ts";
@@ -143,6 +144,12 @@ const appendDraftStrokePreviewSegments = (
     const geometry = buildRibbonGeometryFromDraft(context.draftStroke, view, context.brush.width);
     if (!geometry) return;
 
-    const color = parseColor(context.brush.color, 0.72);
-    appendRibbonRenderPrimitive(segments, geometry.ribbon, color, shadeRibbons ? 1 : 0);
+    const color = parseColor(context.brush.color, 1);
+    appendRibbonRenderPrimitive(
+        segments,
+        geometry.ribbon,
+        color,
+        shadeRibbons ? 1 : 0,
+        DRAFT_RIBBON_DEPTH_BIAS,
+    );
 };

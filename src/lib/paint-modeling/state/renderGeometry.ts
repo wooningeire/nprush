@@ -24,6 +24,7 @@ export const appendRibbonRenderPrimitive = (
     ribbon: PaintRibbon,
     color: Vec4,
     shade: number,
+    depthBias = 0,
 ) => {
     segments.push({
         kind: "ribbon",
@@ -31,6 +32,7 @@ export const appendRibbonRenderPrimitive = (
         closed: ribbon.closed,
         color,
         shade,
+        depthBias,
     });
 };
 

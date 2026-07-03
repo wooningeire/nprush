@@ -1,3 +1,5 @@
+const RIBBON_RENDER_COLUMNS: u32 = 2u;
+
 struct RibbonUniforms {
     view_proj: mat4x4f,
     view: mat4x4f,
@@ -24,13 +26,44 @@ fn ribbon_column_v(column: u32, columns: u32) -> f32 {
     return -1.0 + f32(column) * 2.0 / f32(max(columns - 1u, 1u));
 }
 
+fn row_center(row: u32) -> vec3f {
+    return ribbon_vertices[row].position_u.xyz;
+}
+
 fn ribbon_position(row: u32, v: f32) -> vec3f {
     let vertex = ribbon_vertices[row];
     return vertex.position_u.xyz + vertex.side.xyz * v;
 }
 
-fn safe_normal(a: vec3f, b: vec3f, c: vec3f) -> vec3f {
-    let normal = cross(b - a, c - a);
+fn previous_row(row: u32, rows: u32, closed: bool) -> u32 {
+    if (row > 0u) {
+        return row - 1u;
+    }
+    if (closed) {
+        return rows - 1u;
+    }
+    return row;
+}
+
+fn next_row(row: u32, rows: u32, closed: bool) -> u32 {
+    if (row + 1u < rows) {
+        return row + 1u;
+    }
+    if (closed) {
+        return 0u;
+    }
+    return row;
+}
+
+fn segment_next_row(row: u32, rows: u32) -> u32 {
+    if (row + 1u >= rows) {
+        return 0u;
+    }
+    return row + 1u;
+}
+
+fn safe_normal(tangent: vec3f, side: vec3f) -> vec3f {
+    let normal = cross(tangent, side);
     let normal_length = length(normal);
     if (normal_length <= 0.0001) {
         return vec3f(0.0, 0.0, 1.0);
@@ -38,39 +71,62 @@ fn safe_normal(a: vec3f, b: vec3f, c: vec3f) -> vec3f {
     return normal / normal_length;
 }
 
+fn row_normal_view(row: u32, rows: u32, closed: bool) -> vec3f {
+    let prev = row_center(previous_row(row, rows, closed));
+    let next = row_center(next_row(row, rows, closed));
+    let side = ribbon_vertices[row].side.xyz;
+    let normal = safe_normal(next - prev, side);
+    var normal_view = (ribbon_uniforms.view * vec4f(normal, 0.0)).xyz;
+    if (normal_view.z < 0.0) {
+        normal_view = -normal_view;
+    }
+    return normal_view;
+}
+
 @vertex
 fn ribbon_vertex(@builtin(vertex_index) vertex_index: u32) -> RibbonVertexOut {
     let rows = max(u32(ribbon_uniforms.params.x), 2u);
-    let columns = max(u32(ribbon_uniforms.params.w), 2u);
+    let closed = ribbon_uniforms.params.y > 0.5;
+    let columns = RIBBON_RENDER_COLUMNS;
     let columns_per_row = columns - 1u;
     let quad_index = vertex_index / 6u;
     let corner = vertex_index - quad_index * 6u;
     let row_index = quad_index / columns_per_row;
     let column_index = quad_index - row_index * columns_per_row;
-    let next_row = select(row_index + 1u, 0u, row_index + 1u >= rows);
+    let next_segment_row = segment_next_row(row_index, rows);
 
     let v0 = ribbon_column_v(column_index, columns);
     let v1 = ribbon_column_v(column_index + 1u, columns);
     let a = ribbon_position(row_index, v0);
-    let b = ribbon_position(next_row, v0);
-    let c = ribbon_position(next_row, v1);
+    let b = ribbon_position(next_segment_row, v0);
+    let c = ribbon_position(next_segment_row, v1);
     let d = ribbon_position(row_index, v1);
 
     var position = a;
+    var normal_view = row_normal_view(row_index, rows, closed);
     if (corner == 1u) {
         position = b;
+        normal_view = row_normal_view(next_segment_row, rows, closed);
     } else if (corner == 2u) {
         position = c;
+        normal_view = row_normal_view(next_segment_row, rows, closed);
     } else if (corner == 4u) {
         position = c;
+        normal_view = row_normal_view(next_segment_row, rows, closed);
     } else if (corner == 5u) {
         position = d;
     }
 
+    let clip = ribbon_uniforms.view_proj * vec4f(position, 1.0);
     var out: RibbonVertexOut;
-    out.position = ribbon_uniforms.view_proj * vec4f(position, 1.0);
+    out.position = vec4f(
+        clip.x,
+        clip.y,
+        clip.z - ribbon_uniforms.params.w * clip.w,
+        clip.w,
+    );
     out.color = ribbon_uniforms.color;
-    out.normal_view = (ribbon_uniforms.view * vec4f(safe_normal(a, b, c), 0.0)).xyz;
+    out.normal_view = normal_view;
     out.shade = ribbon_uniforms.params.z;
     return out;
 }
