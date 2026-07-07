@@ -3,6 +3,7 @@ import { PaintModelingState } from "./PaintModelingState.svelte.ts";
 import { RIBBON_RENDER_COLUMNS } from "./state/constants.ts";
 import type {
     PaintView,
+    PaintRibbon,
     RenderPrimitive,
     RenderRibbon,
     RenderStroke,
@@ -79,6 +80,38 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         expect(ribbon.vertices.at(-1)?.u).toBeLessThan(1);
     });
 
+    it("toggles GPU ribbon snapping without changing brush style", () => {
+        const state = new PaintModelingState();
+
+        expect(state.brushSnapToRibbons).toBe(false);
+        state.setBrushSnapToRibbons(true);
+
+        expect(state.brushSnapToRibbons).toBe(true);
+        expect(state.brush.width).toBe(18);
+    });
+
+    it("commits a renderer-produced ribbon for snapped strokes", () => {
+        const state = new PaintModelingState();
+        state.addObject();
+        state.beginStroke({ x: -0.2, y: 0 }, 800, 600);
+        state.appendStrokePoint({ x: 0.2, y: 0.05 });
+        const sourcePoints = state.draftStrokeSourcePoints();
+        const ribbon: PaintRibbon = {
+            closed: false,
+            vertices: [
+                { position: [-0.1, 0, 0], side: [0, 0.02, 0], u: 0 },
+                { position: [0.1, 0, 0], side: [0, 0.02, 0], u: 1 },
+            ],
+        };
+
+        expect(sourcePoints).not.toBeNull();
+        expect(state.finishStrokeWithRibbon(sourcePoints!, ribbon)).toBe(true);
+
+        expect(state.strokes).toHaveLength(1);
+        expect(state.strokes[0].sourcePoints).toBe(sourcePoints);
+        expect(state.strokes[0].ribbon).toBe(ribbon);
+        expect(state.draftStroke).toBeNull();
+    });
     it("does not expose CPU ribbon raycast or deformation hooks", () => {
         const state = new PaintModelingState() as unknown as Record<string, unknown>;
 

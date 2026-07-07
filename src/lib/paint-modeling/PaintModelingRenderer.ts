@@ -3,7 +3,8 @@ import gridShaderSource from "./paint_modeler_grid.wgsl?raw";
 import segmentShaderSource from "./paint_modeler_segments.wgsl?raw";
 import triangleShaderSource from "./paint_modeler_triangles.wgsl?raw";
 import ribbonShaderSource from "./paint_modeler_ribbons.wgsl?raw";
-import type { RenderPrimitive } from "./types.ts";
+import { BrushPlacementManager } from "./renderer/brushPlacement.ts";
+import type { PaintRibbon, PaintView, RenderPrimitive, Vec2 } from "./types.ts";
 import {
     DEPTH_FORMAT,
     GRID_PLANE_Z,
@@ -60,6 +61,7 @@ export class PaintModelingRenderer {
     private readonly gridBindGroup: GPUBindGroup;
     private readonly segmentBindGroup: GPUBindGroup;
     private readonly triangleBindGroup: GPUBindGroup;
+    private readonly brushPlacement: BrushPlacementManager;
     private readonly segmentBuffer: VertexBufferState = createVertexBufferState();
     private readonly strokeBuffer: VertexBufferState = createVertexBufferState();
     private readonly draftSegmentBuffer: VertexBufferState = createVertexBufferState();
@@ -167,6 +169,7 @@ export class PaintModelingRenderer {
             this.triangleUniformBuffer,
             "paint modeler triangle bind group",
         );
+        this.brushPlacement = new BrushPlacementManager(device, format);
     }
 
     setSegments(segments: RenderPrimitive[]) {
@@ -174,6 +177,7 @@ export class PaintModelingRenderer {
         const strokes = segments.filter(isRenderStroke);
         const triangles = segments.filter(isRenderTriangle);
         const ribbons = segments.filter(isRenderRibbon);
+        this.brushPlacement.setBrushSnapTargets(ribbons);
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
         const strokeVertexCount = strokeStripVertexCount(strokes);
         const triangleVertexCount = triangles.length * VERTICES_PER_TRIANGLE;
@@ -242,10 +246,38 @@ export class PaintModelingRenderer {
         );
     }
 
+    setBrushPlacementInput(input: {
+        point: Vec2,
+        brushWidth: number,
+        viewportWidth: number,
+        viewportHeight: number,
+        snapToRibbons: boolean,
+    } | null) {
+        this.brushPlacement.setBrushPlacementInput(input);
+    }
+
+    buildPlacedRibbonFromSourcePoints(input: {
+        sourcePoints: Vec2[],
+        view: PaintView,
+        brushWidth: number,
+        snapToRibbons: boolean,
+    }): Promise<PaintRibbon | null> {
+        return this.brushPlacement.buildPlacedRibbonFromSourcePoints(input);
+    }
+
+    readBrushPlacementForTest(
+        viewProjMat: number[] | Float32Array,
+        viewProjInvMat: number[] | Float32Array,
+        viewInvMat: number[] | Float32Array,
+    ) {
+        return this.brushPlacement.readBrushPlacementForTest(viewProjMat, viewProjInvMat, viewInvMat);
+    }
+
     render(
         viewProjMat: number[] | Float32Array,
         viewProjInvMat: number[] | Float32Array,
         viewMat: number[] | Float32Array,
+        viewInvMat: number[] | Float32Array,
     ) {
         const width = Math.floor(this.context.canvas.width);
         const height = Math.floor(this.context.canvas.height);
@@ -257,6 +289,7 @@ export class PaintModelingRenderer {
         writeRibbonDrawUniforms(this.device, this.draftRibbonDraws, viewProjMat, viewMat);
 
         const encoder = this.device.createCommandEncoder({ label: "paint modeler render encoder" });
+        this.brushPlacement.encodeHoverPlacement(encoder, viewProjMat, viewProjInvMat, viewInvMat);
         const pass = encoder.beginRenderPass({
             label: "paint modeler render pass",
             colorAttachments: [{
@@ -285,6 +318,7 @@ export class PaintModelingRenderer {
         this.drawTriangleBuffer(pass, this.draftTriangleBuffer, this.draftTriangleVertexCount);
         this.drawSegmentBuffer(pass, this.draftSegmentBuffer, this.draftSegmentVertexCount, this.segmentPipeline);
         this.drawSegmentBuffer(pass, this.draftStrokeBuffer, this.draftStrokeVertexCount, this.strokePipeline);
+        this.brushPlacement.drawGuide(pass);
 
         pass.end();
         this.device.queue.submit([encoder.finish()]);
@@ -303,6 +337,7 @@ export class PaintModelingRenderer {
         this.gridUniformBuffer.destroy();
         this.segmentUniformBuffer.destroy();
         this.triangleUniformBuffer.destroy();
+        this.brushPlacement.destroy();
         this.device.destroy();
     }
 

@@ -6,6 +6,19 @@ import { PaintModelingState } from "./PaintModelingState.svelte.ts";
 import { clampNdcPoint, ndcFromClientPoint } from "../contour-modeler/contourGeometry.ts";
 import type { Vec2 } from "./types.ts";
 
+type BrushPlacementReadback = {
+    center: [number, number, number],
+    normal: [number, number, number],
+    depth: number,
+    snapped: boolean,
+};
+
+type PaintModelerDebugWindow = Window & typeof globalThis & {
+    __paintModelerDebug?: {
+        readBrushPlacement: () => Promise<BrushPlacementReadback | null>,
+    },
+};
+
 const modelerState = new PaintModelingState();
 
 let canvas = $state<HTMLCanvasElement | null>(null);
@@ -17,6 +30,7 @@ let renderFrameId: number | null = null;
 let uploadedStaticSceneKey: string | null = null;
 let uploadedDraftKey: string | null = null;
 let pointerMode = $state<"paint" | "orbit" | null>(null);
+let brushPointerPoint = $state<Vec2 | null>(null);
 let rendererError = $state<string | null>(null);
 let shadeRibbons = $state(true);
 
@@ -38,6 +52,9 @@ $effect(() => {
     modelerState.brush;
     modelerState.activePaintLayerId;
     modelerState.paintLayers.length;
+    modelerState.brushSnapToRibbons;
+    brushPointerPoint;
+    pointerMode;
     shadeRibbons;
     requestRender();
 });
@@ -46,6 +63,26 @@ $effect(() => {
     requestRender();
 });
 
+
+$effect(() => {
+    if (typeof window === "undefined") return;
+
+    const debugWindow = window as PaintModelerDebugWindow;
+    debugWindow.__paintModelerDebug = {
+        readBrushPlacement: async () => {
+            await render();
+            return renderer?.readBrushPlacementForTest(
+                modelerState.camera.viewProjMat,
+                modelerState.camera.viewProjInvMat,
+                modelerState.camera.viewInvMat,
+            ) ?? null;
+        },
+    };
+
+    return () => {
+        delete debugWindow.__paintModelerDebug;
+    };
+});
 onDestroy(() => {
     cancelRender();
     renderer?.destroy();
@@ -110,10 +147,18 @@ async function render() {
         renderer.setDraftSegments(modelerState.buildDraftRenderSegments());
         uploadedDraftKey = draftKey;
     }
+    renderer.setBrushPlacementInput(brushPointerPoint && pointerMode !== "orbit" ? {
+        point: brushPointerPoint,
+        brushWidth: modelerState.brush.width,
+        viewportWidth,
+        viewportHeight,
+        snapToRibbons: modelerState.brushSnapToRibbons,
+    } : null);
     renderer.render(
         modelerState.camera.viewProjMat,
         modelerState.camera.viewProjInvMat,
         modelerState.camera.viewMat,
+        modelerState.camera.viewInvMat,
     );
 }
 
@@ -128,6 +173,7 @@ function onPointerDown(event: PointerEvent) {
     const target = event.currentTarget as HTMLElement;
     target.setPointerCapture(event.pointerId);
     const point = pointerNdc(event, target);
+    brushPointerPoint = point;
 
     if (event.button === 0) {
         modelerState.beginStroke(point, target.clientWidth, target.clientHeight);
@@ -143,8 +189,12 @@ function onPointerDown(event: PointerEvent) {
 function onPointerMove(event: PointerEvent) {
     const target = event.currentTarget as HTMLElement;
     const point = pointerNdc(event, target);
+    brushPointerPoint = point;
 
-    if (pointerMode === null) return;
+    if (pointerMode === null) {
+        requestRender();
+        return;
+    }
 
     if (pointerMode === "paint") {
         modelerState.appendStrokePoint(point);
@@ -171,14 +221,38 @@ function onPointerUp(event: PointerEvent) {
     event.preventDefault();
 
     if (shouldFinishPaint) {
-        modelerState.finishStroke();
+        void finishPaintStroke().finally(requestRender);
+    } else {
+        requestRender();
     }
-    requestRender();
 }
 
 function onPointerLeave() {
     if (pointerMode !== null) return;
+    brushPointerPoint = null;
     requestRender();
+}
+
+async function finishPaintStroke() {
+    if (modelerState.brushSnapToRibbons && renderer) {
+        const sourcePoints = modelerState.draftStrokeSourcePoints();
+        const view = modelerState.strokePlacementView();
+        if (sourcePoints && view) {
+            try {
+                const ribbon = await renderer.buildPlacedRibbonFromSourcePoints({
+                    sourcePoints,
+                    view,
+                    brushWidth: modelerState.brush.width,
+                    snapToRibbons: true,
+                });
+                if (ribbon && modelerState.finishStrokeWithRibbon(sourcePoints, ribbon)) return;
+            } catch (error) {
+                console.warn("GPU brush placement failed; using view-plane stroke", error);
+            }
+        }
+    }
+
+    modelerState.finishStroke();
 }
 
 function pointerNdc(event: PointerEvent, target: HTMLElement): Vec2 {

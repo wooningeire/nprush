@@ -8,6 +8,7 @@ import type { PaintSceneSnapshot } from "./sceneHistory.ts";
 import type {
     BrushStyle,
     PaintObject,
+    PaintRibbon,
     PaintStroke,
     PaintView,
     Vec2,
@@ -24,6 +25,11 @@ export type FinishStrokeInput = {
     paintLayerId: string,
 };
 
+
+export type FinishStrokeWithRibbonInput = FinishStrokeInput & {
+    sourcePoints: Vec2[],
+    ribbon: PaintRibbon,
+};
 export type FinishStrokeResult =
     | {
         kind: "discard",
@@ -71,6 +77,48 @@ export const planFinishedStroke = ({
             sourceViewId: view.id,
             sourcePoints,
             ribbon: geometry.ribbon,
+            style: { ...brush },
+            paintOrder: nextPaintOrder(object.id),
+        },
+    };
+};
+
+export const planFinishedStrokeWithRibbon = ({
+    draftStroke,
+    pendingStrokeUndoSnapshot,
+    undoSnapshot,
+    object,
+    view,
+    brush,
+    nextPaintOrder,
+    paintLayerId,
+    sourcePoints,
+    ribbon,
+}: FinishStrokeWithRibbonInput): FinishStrokeResult => {
+    if (!draftStroke || draftStroke.length < 2 || sourcePoints.length < 2 || !object || !view) {
+        return {
+            kind: "discard",
+            restoreSnapshot: pendingStrokeUndoSnapshot ?? undefined,
+        };
+    }
+
+    if (ribbonSegmentCount(ribbon) === 0) {
+        return {
+            kind: "discard",
+            restoreSnapshot: undoSnapshot,
+        };
+    }
+
+    return {
+        kind: "stroke",
+        undoSnapshot,
+        stroke: {
+            id: makeId("stroke"),
+            objectId: object.id,
+            layerId: paintLayerId,
+            sourceViewId: view.id,
+            sourcePoints,
+            ribbon,
             style: { ...brush },
             paintOrder: nextPaintOrder(object.id),
         },

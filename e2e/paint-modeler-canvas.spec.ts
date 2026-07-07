@@ -86,6 +86,7 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
 
     await expect(page.getByLabel("Shade ribbons")).toBeChecked();
     await expect(page.getByLabel("Shade ribbons")).toBeEnabled();
+    await expect(page.getByLabel("Snap to ribbons")).not.toBeChecked();
     await expect(page.getByLabel("Width")).toHaveValue("18");
     await page.getByLabel("Width").evaluate(element => {
         const input = element as HTMLInputElement;
@@ -111,6 +112,12 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
 
     const rendererUnavailable = await page.getByText("WebGPU unavailable").isVisible().catch(() => false);
     if (!rendererUnavailable) {
+        await page.getByLabel("Snap to ribbons").check();
+        await page.mouse.move(center.x + 40, center.y + 8);
+        await waitForAnimationFrame(page);
+        const placement = await readBrushPlacement(page);
+        expect(placement?.snapped).toBe(true);
+
         const beforeOrbit = await page.locator("canvas").screenshot();
         await page.mouse.move(center.x, center.y);
         await page.mouse.down({ button: "middle" });
@@ -126,6 +133,21 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
     expect(consoleProblems).toEqual([]);
 });
 
+
+type BrushPlacementDebugResult = {
+    snapped: boolean,
+};
+
+const readBrushPlacement = async (page: Page): Promise<BrushPlacementDebugResult | null> => {
+    return await page.evaluate(async () => {
+        const debug = (window as typeof window & {
+            __paintModelerDebug?: {
+                readBrushPlacement: () => Promise<BrushPlacementDebugResult | null>,
+            },
+        }).__paintModelerDebug;
+        return await debug?.readBrushPlacement() ?? null;
+    });
+};
 const addObjectAndWait = async (page: Page, objectName: string): Promise<void> => {
     const objects = page.locator("section").filter({ hasText: "Objects" });
     const row = objects.getByRole("button", { name: new RegExp(`${objectName}\\s+0s`) });

@@ -104,6 +104,17 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
             />
             <span>Shade ribbons</span>
         </label>
+        <label class="toggle-row">
+            <input
+                type="checkbox"
+                checked={modelerState.brushSnapToRibbons}
+                onchange={(event) => {
+                    modelerState.setBrushSnapToRibbons((event.currentTarget as HTMLInputElement).checked);
+                    requestRender();
+                }}
+            />
+            <span>Snap to ribbons</span>
+        </label>
         <label class="color-row">
             <span>Color</span>
             <input

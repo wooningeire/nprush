@@ -1,6 +1,6 @@
 # Paint Modeling
 
-Paint modeling stores brushstrokes as continuous ribbon surfaces. A stroke owns a sparse ribbon source. Charts, surface references, chart depth, chart raycast, chart overlays, occlusion claims, CPU ribbon raycast, and CPU evaluated ribbon meshes are not part of the current model.
+Paint modeling stores brushstrokes as continuous ribbon surfaces. A stroke owns a sparse ribbon source. Charts, surface references, chart depth, chart overlays, occlusion claims, CPU ribbon raycast, and CPU evaluated ribbon meshes are not part of the current model. Brush placement can use a GPU snap pass against committed ribbon vertices.
 
 ## Core State
 
@@ -40,13 +40,13 @@ Closed source paths drop the duplicated closing source point and mark the ribbon
 
 Committed and draft ribbons render as `RenderRibbon` primitives. They upload only oriented vertices plus color and shading uniforms.
 
-The ribbon shader expands adjacent oriented vertices into the two ribbon edges and triangles with `vertex_index`. CPU code does not build ribbon faces, evaluated surfaces, render triangles, or raycast triangles. Draft ribbons render opaque and use a small GPU clip-depth bias so preview strokes do not fight committed surfaces.
+The ribbon shader expands adjacent oriented vertices into the two ribbon edges and triangles with `vertex_index`. CPU code does not build ribbon faces, evaluated surfaces, render triangles, brush guide geometry, or raycast triangles. Draft ribbons render opaque and use a small GPU clip-depth bias so preview strokes do not fight committed surfaces.
 
 There is no chart upload store. There are no chart wire or surface-field primitives.
 
 ## Picking
 
-There is no committed CPU ribbon picking path. Future picking should use a GPU-backed path or a deliberate source-level interaction model, not a CPU evaluated surface.
+There is no committed CPU ribbon picking path. Brush snapping uses a GPU-backed placement path that expands committed ribbon segments inside WGSL and returns only placement or final ribbon-vertex data to state. Future picking should follow that GPU boundary or use a deliberate source-level interaction model, not a CPU evaluated surface.
 
 ## Current Boundaries
 

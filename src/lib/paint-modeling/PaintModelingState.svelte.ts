@@ -29,13 +29,17 @@ import {
     buildPaintRenderSegments,
     type RenderAssemblyContext,
 } from "./state/renderAssembly.ts";
-import { planFinishedStroke } from "./state/strokeSession.ts";
+import {
+    planFinishedStroke,
+    planFinishedStrokeWithRibbon,
+} from "./state/strokeSession.ts";
 import { samplePaintStrokeSpline } from "./state/strokeSampling.ts";
 import { clamp } from "./state/vectorMath.ts";
 import type {
     BrushStyle,
     PaintLayer,
     PaintObject,
+    PaintRibbon,
     PaintStroke,
     PaintView,
     PaintRenderOptions,
@@ -61,6 +65,7 @@ export class PaintModelingState {
     activeViewId = $state<string | null>(null);
     activePaintLayerId = $state(BASE_PAINT_LAYER_ID);
     brush = $state<BrushStyle>({ ...DEFAULT_BRUSH });
+    brushSnapToRibbons = $state(false);
     draftStroke = $state<Vec2[] | null>(null);
     undoStack = $state<PaintSceneSnapshot[]>([]);
     ribbonVersion = $state(0);
@@ -182,6 +187,8 @@ export class PaintModelingState {
 
     setBrushOpacity(_opacity: number) { this.brush.opacity = 1; }
 
+    setBrushSnapToRibbons(value: boolean) { this.brushSnapToRibbons = value; }
+
     beginUndoGroup() {
         if (!this.undoGroup) {
             this.undoGroup = {
@@ -229,11 +236,13 @@ export class PaintModelingState {
 
     draftStrokeSourcePoints(): Vec2[] | null {
         const object = this.activeObject;
-        if (!this.draftStroke || this.draftStroke.length < 2 || !object || object.locked || !object.visible || !this.activeView) {
+        if (!this.draftStroke || this.draftStroke.length < 2 || !object || object.locked || !object.visible || !this.strokePlacementView()) {
             return null;
         }
         return samplePaintStrokeSpline(this.draftStroke);
     }
+
+    strokePlacementView(): PaintView | null { return this.pendingStrokeView ?? this.activeView; }
 
     finishStroke() {
         const result = planFinishedStroke({
@@ -258,6 +267,34 @@ export class PaintModelingState {
         this.pushUndoSnapshot(result.undoSnapshot);
         this.strokes = [...this.strokes, result.stroke];
         this.ribbonVersion += 1;
+    }
+
+    finishStrokeWithRibbon(sourcePoints: Vec2[], ribbon: PaintRibbon): boolean {
+        const result = planFinishedStrokeWithRibbon({
+            draftStroke: this.draftStroke,
+            pendingStrokeUndoSnapshot: this.pendingStrokeUndoSnapshot,
+            undoSnapshot: this.pendingStrokeUndoSnapshot ?? this.captureSceneSnapshot(),
+            object: this.activeObject,
+            view: this.pendingStrokeView ?? this.activeView,
+            brush: this.brush,
+            nextPaintOrder: objectId => this.nextPaintOrder(objectId),
+            paintLayerId: this.activePaintLayer?.id ?? BASE_PAINT_LAYER_ID,
+            sourcePoints,
+            ribbon,
+        });
+
+        this.draftStroke = null;
+        this.pendingStrokeUndoSnapshot = null;
+        this.pendingStrokeView = null;
+        if (result.kind === "discard") {
+            if (result.restoreSnapshot) this.restoreSceneSnapshot(result.restoreSnapshot);
+            return false;
+        }
+
+        this.pushUndoSnapshot(result.undoSnapshot);
+        this.strokes = [...this.strokes, result.stroke];
+        this.ribbonVersion += 1;
+        return true;
     }
 
     undo(): boolean {
