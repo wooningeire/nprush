@@ -33,6 +33,7 @@ let pointerMode = $state<"paint" | "orbit" | null>(null);
 let brushPointerPoint = $state<Vec2 | null>(null);
 let rendererError = $state<string | null>(null);
 let shadeRibbons = $state(true);
+let brushGuideVisible = $derived(brushPointerPoint !== null && pointerMode !== "orbit");
 
 $effect(() => {
     if (!canvas) return;
@@ -147,7 +148,7 @@ async function render() {
         renderer.setDraftSegments(modelerState.buildDraftRenderSegments());
         uploadedDraftKey = draftKey;
     }
-    renderer.setBrushPlacementInput(brushPointerPoint && pointerMode !== "orbit" ? {
+    renderer.setBrushPlacementInput(brushGuideVisible && brushPointerPoint ? {
         point: brushPointerPoint,
         brushWidth: modelerState.brush.width,
         viewportWidth,
@@ -298,6 +299,7 @@ function draftRenderKey(): string {
             requestRender();
             event.preventDefault();
         }}
+        class:brush-guide-visible={brushGuideVisible}
         role="application"
     >
         <canvas bind:this={canvas}></canvas>
@@ -326,6 +328,10 @@ paint-viewport {
     overflow: hidden;
     background: #090b0c;
     cursor: crosshair;
+
+    &.brush-guide-visible {
+        cursor: none;
+    }
 
     > :global(*) {
         grid-area: 1 / 1;

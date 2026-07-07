@@ -62,7 +62,10 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
         y: firstBox.y + firstBox.height * 0.5,
     };
 
+    await expect(viewport).toHaveCSS("cursor", "crosshair");
     await page.mouse.move(firstCenter.x, firstCenter.y);
+    await waitForAnimationFrame(page);
+    await expect(viewport).toHaveCSS("cursor", "none");
     await page.mouse.down({ button: "middle" });
     await page.mouse.move(firstCenter.x + 64, firstCenter.y + 18, { steps: 4 });
     await page.mouse.up({ button: "middle" });
