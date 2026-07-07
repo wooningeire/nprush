@@ -24,6 +24,8 @@ type BrushPlacementInput = {
 type BrushPlacementReadback = {
     center: Vec3,
     normal: Vec3,
+    tangent: Vec3,
+    bitangent: Vec3,
     depth: number,
     snapped: boolean,
 };
@@ -370,8 +372,10 @@ export class BrushPlacementManager {
         return {
             center: [data[0], data[1], data[2]],
             normal: [data[4], data[5], data[6]],
+            tangent: [data[8], data[9], data[10]],
             snapped: data[7] > 0.5,
             depth: data[11],
+            bitangent: [data[12], data[13], data[14]],
         };
     }
 

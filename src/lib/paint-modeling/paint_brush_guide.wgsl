@@ -1,5 +1,7 @@
 const GUIDE_CIRCLE_SEGMENTS: u32 = 48u;
 const GUIDE_VERTEX_COUNT: u32 = GUIDE_CIRCLE_SEGMENTS * 2u + 2u;
+const GUIDE_DEPTH_BIAS: f32 = 0.0008;
+const GUIDE_NORMAL_LENGTH_SCALE: f32 = 1.0;
 const PI: f32 = 3.141592653589793;
 
 struct PlacementUniforms {
@@ -27,11 +29,19 @@ struct GuideVertexOut {
 
 fn circle_position(placement: PlacementResult, segment: u32, endpoint: u32) -> vec3f {
     let angle = (f32(segment + endpoint) / f32(GUIDE_CIRCLE_SEGMENTS)) * PI * 2.0;
-    let lift = placement.normal.xyz * max(length(placement.tangent.xyz), length(placement.bitangent.xyz)) * 0.045;
     return placement.center.xyz
         + placement.tangent.xyz * cos(angle)
-        + placement.bitangent.xyz * sin(angle)
-        + lift;
+        + placement.bitangent.xyz * sin(angle);
+}
+
+fn guide_radius(placement: PlacementResult) -> f32 {
+    return max(length(placement.tangent.xyz), length(placement.bitangent.xyz));
+}
+
+fn guide_clip_position(position: vec3f) -> vec4f {
+    var clip = placement_uniforms.view_proj * vec4f(position, 1.0);
+    clip.z -= GUIDE_DEPTH_BIAS * clip.w;
+    return clip;
 }
 
 @vertex
@@ -58,14 +68,14 @@ fn guide_vertex(@builtin(vertex_index) vertex_index: u32) -> GuideVertexOut {
         );
     } else {
         let endpoint = vertex_index - GUIDE_CIRCLE_SEGMENTS * 2u;
-        let radius = max(length(placement.tangent.xyz), length(placement.bitangent.xyz));
-        let lift = placement.normal.xyz * radius * 0.045;
-        position = placement.center.xyz + lift + placement.normal.xyz * radius * 1.35 * f32(endpoint);
+        let radius = guide_radius(placement);
+        position = placement.center.xyz
+            + placement.normal.xyz * radius * GUIDE_NORMAL_LENGTH_SCALE * f32(endpoint);
         color = vec4f(0.54, 0.78, 1.0, 0.95);
     }
 
     var out: GuideVertexOut;
-    out.position = placement_uniforms.view_proj * vec4f(position, 1.0);
+    out.position = guide_clip_position(position);
     out.color = color;
     return out;
 }

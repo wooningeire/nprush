@@ -120,6 +120,8 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
         await waitForAnimationFrame(page);
         const placement = await readBrushPlacement(page);
         expect(placement?.snapped).toBe(true);
+        if (!placement) throw new Error("brush placement missing");
+        expectGuideBasisMatchesNormal(placement);
 
         const beforeOrbit = await page.locator("canvas").screenshot();
         await page.mouse.move(center.x, center.y);
@@ -127,6 +129,8 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
         await page.mouse.move(center.x + 120, center.y + 24, { steps: 8 });
         await page.mouse.up({ button: "middle" });
         await waitForAnimationFrame(page);
+        const tiltedPlacement = await findSnappedBrushPlacement(page, viewport);
+        expectGuideBasisMatchesNormal(tiltedPlacement);
         const afterOrbit = await page.locator("canvas").screenshot();
         expect(afterOrbit.equals(beforeOrbit)).toBe(false);
     }
@@ -137,7 +141,12 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
 });
 
 
+type Vec3Tuple = [number, number, number];
+
 type BrushPlacementDebugResult = {
+    normal: Vec3Tuple,
+    tangent: Vec3Tuple,
+    bitangent: Vec3Tuple,
     snapped: boolean,
 };
 
@@ -150,6 +159,54 @@ const readBrushPlacement = async (page: Page): Promise<BrushPlacementDebugResult
         }).__paintModelerDebug;
         return await debug?.readBrushPlacement() ?? null;
     });
+};
+const findSnappedBrushPlacement = async (page: Page, viewport: Locator): Promise<BrushPlacementDebugResult> => {
+    const box = await viewport.boundingBox();
+    if (!box) throw new Error("paint viewport missing");
+
+    const fractions = [0.34, 0.42, 0.50, 0.58, 0.66];
+    for (const yFraction of fractions) {
+        for (const xFraction of fractions) {
+            await page.mouse.move(
+                box.x + box.width * xFraction,
+                box.y + box.height * yFraction,
+            );
+            await waitForAnimationFrame(page);
+            const placement = await readBrushPlacement(page);
+            if (placement?.snapped) return placement;
+        }
+    }
+
+    throw new Error("Could not find snapped brush placement after orbit");
+};
+
+const expectGuideBasisMatchesNormal = (placement: BrushPlacementDebugResult): void => {
+    const normal = normalize3(placement.normal);
+    const tangent = placement.tangent;
+    const bitangent = placement.bitangent;
+    expect(length3(tangent)).toBeGreaterThan(0.000001);
+    expect(length3(bitangent)).toBeGreaterThan(0.000001);
+    expect(Math.abs(dot3(normal, tangent))).toBeLessThan(0.001);
+    expect(Math.abs(dot3(normal, bitangent))).toBeLessThan(0.001);
+    expect(dot3(normalize3(cross3(tangent, bitangent)), normal)).toBeGreaterThan(0.98);
+};
+
+const dot3 = (a: Vec3Tuple, b: Vec3Tuple): number => (
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+);
+
+const cross3 = (a: Vec3Tuple, b: Vec3Tuple): Vec3Tuple => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+];
+
+const length3 = (value: Vec3Tuple): number => Math.hypot(value[0], value[1], value[2]);
+
+const normalize3 = (value: Vec3Tuple): Vec3Tuple => {
+    const length = length3(value);
+    if (length <= 0.000001) return [0, 0, 0];
+    return [value[0] / length, value[1] / length, value[2] / length];
 };
 const addObjectAndWait = async (page: Page, objectName: string): Promise<void> => {
     const objects = page.locator("section").filter({ hasText: "Objects" });

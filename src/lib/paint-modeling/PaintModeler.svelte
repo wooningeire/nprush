@@ -9,6 +9,8 @@ import type { Vec2 } from "./types.ts";
 type BrushPlacementReadback = {
     center: [number, number, number],
     normal: [number, number, number],
+    tangent: [number, number, number],
+    bitangent: [number, number, number],
     depth: number,
     snapped: boolean,
 };

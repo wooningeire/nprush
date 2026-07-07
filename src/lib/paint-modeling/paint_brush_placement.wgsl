@@ -178,6 +178,41 @@ fn half_width_axis(center: vec3f, normal: vec3f, point: vec2f, offset: vec2f) ->
     return plane_point(ray, center, normal) - center;
 }
 
+fn normal_plane_axis(preferred: vec3f, normal: vec3f, fallback: vec3f) -> vec3f {
+    let preferred_axis = preferred - normal * dot(preferred, normal);
+    let preferred_length = length(preferred_axis);
+    if (preferred_length > 0.000001) {
+        return preferred_axis / preferred_length;
+    }
+
+    let fallback_axis = fallback - normal * dot(fallback, normal);
+    let fallback_length = length(fallback_axis);
+    if (fallback_length > 0.000001) {
+        return fallback_axis / fallback_length;
+    }
+
+    let view_right = placement_uniforms.view_inv[0].xyz;
+    let view_axis = view_right - normal * dot(view_right, normal);
+    let view_length = length(view_axis);
+    if (view_length > 0.000001) {
+        return view_axis / view_length;
+    }
+
+    let world_x = vec3f(1.0, 0.0, 0.0) - normal * normal.x;
+    let world_x_length = length(world_x);
+    if (world_x_length > 0.000001) {
+        return world_x / world_x_length;
+    }
+
+    let world_z = vec3f(0.0, 0.0, 1.0) - normal * normal.z;
+    let world_z_length = length(world_z);
+    if (world_z_length > 0.000001) {
+        return world_z / world_z_length;
+    }
+
+    return vec3f(0.0, 1.0, 0.0);
+}
+
 fn resolve_placement(point: vec2f) -> PlacementResult {
     let ray = make_ray(point);
     var center = default_center(ray);
@@ -193,8 +228,14 @@ fn resolve_placement(point: vec2f) -> PlacementResult {
 
     let viewport = max(placement_uniforms.viewport_counts.xy, vec2f(1.0));
     let brush_width = max(placement_uniforms.pointer.z, 1.0);
-    let tangent = half_width_axis(center, normal, point, vec2f(brush_width / viewport.x, 0.0));
-    let bitangent = half_width_axis(center, normal, point, vec2f(0.0, brush_width / viewport.y));
+    let guide_plane_normal = -view_forward();
+    let screen_tangent = half_width_axis(center, guide_plane_normal, point, vec2f(brush_width / viewport.x, 0.0));
+    let screen_bitangent = half_width_axis(center, guide_plane_normal, point, vec2f(0.0, brush_width / viewport.y));
+    let guide_radius = max(max(length(screen_tangent), length(screen_bitangent)), 0.000001);
+    let tangent_direction = normal_plane_axis(screen_tangent, normal, screen_bitangent);
+    let bitangent_direction = normalize(cross(normal, tangent_direction));
+    let tangent = tangent_direction * guide_radius;
+    let bitangent = bitangent_direction * guide_radius;
     let depth = dot(center - ray.origin, view_forward());
 
     return PlacementResult(
