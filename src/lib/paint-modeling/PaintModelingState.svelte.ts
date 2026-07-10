@@ -35,16 +35,27 @@ import {
 } from "./state/strokeSession.ts";
 import { samplePaintStrokeSpline } from "./state/strokeSampling.ts";
 import { clamp } from "./state/vectorMath.ts";
-import type {
-    BrushStyle,
-    PaintLayer,
-    PaintObject,
-    PaintRibbon,
-    PaintStroke,
-    PaintView,
-    PaintRenderOptions,
-    RenderPrimitive,
-    Vec2,
+import {
+    createDefaultConstructionPlane,
+    movePointToViewDepth,
+    normalizedPlane,
+    viewDepthForPoint,
+    viewFacingNormal,
+} from "./state/constructionPlane.ts";
+import {
+    BrushPlacementMode,
+    type BrushPlacementMode as BrushPlacementModeValue,
+    type BrushStyle,
+    type ConstructionPlane,
+    type PaintLayer,
+    type PaintObject,
+    type PaintRibbon,
+    type PaintStroke,
+    type PaintView,
+    type PaintRenderOptions,
+    type RenderPrimitive,
+    type Vec2,
+    type Vec3,
 } from "./types.ts";
 
 const DEFAULT_BRUSH: BrushStyle = {
@@ -65,7 +76,8 @@ export class PaintModelingState {
     activeViewId = $state<string | null>(null);
     activePaintLayerId = $state(BASE_PAINT_LAYER_ID);
     brush = $state<BrushStyle>({ ...DEFAULT_BRUSH });
-    brushSnapToRibbons = $state(false);
+    brushPlacementMode = $state<BrushPlacementModeValue>(BrushPlacementMode.View);
+    constructionPlane = $state<ConstructionPlane>(createDefaultConstructionPlane());
     draftStroke = $state<Vec2[] | null>(null);
     undoStack = $state<PaintSceneSnapshot[]>([]);
     ribbonVersion = $state(0);
@@ -187,7 +199,40 @@ export class PaintModelingState {
 
     setBrushOpacity(_opacity: number) { this.brush.opacity = 1; }
 
-    setBrushSnapToRibbons(value: boolean) { this.brushSnapToRibbons = value; }
+    setBrushPlacementMode(mode: BrushPlacementModeValue) { this.brushPlacementMode = mode; }
+
+    get constructionPlaneViewDepth(): number {
+        return viewDepthForPoint(this.camera.viewInvMat, this.constructionPlane.origin);
+    }
+
+    setConstructionPlaneViewDepth(depth: number) {
+        this.constructionPlane.origin = movePointToViewDepth(
+            this.camera.viewInvMat,
+            this.constructionPlane.origin,
+            depth,
+        );
+    }
+
+    setConstructionPlaneNormal(normal: Vec3) {
+        this.constructionPlane.normal = normalizedPlane(
+            this.constructionPlane.origin,
+            normal,
+            this.constructionPlane.normal,
+        ).normal;
+    }
+
+    setConstructionPlane(origin: Vec3, normal: Vec3) {
+        this.constructionPlane = normalizedPlane(origin, normal, this.constructionPlane.normal);
+    }
+
+    alignConstructionPlaneToView() {
+        this.constructionPlane.normal = viewFacingNormal(this.camera.viewInvMat);
+    }
+
+    flipConstructionPlaneNormal() {
+        const [x, y, z] = this.constructionPlane.normal;
+        this.constructionPlane.normal = [-x, -y, -z];
+    }
 
     beginUndoGroup() {
         if (!this.undoGroup) {

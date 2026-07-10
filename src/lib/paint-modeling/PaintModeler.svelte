@@ -4,7 +4,7 @@ import PaintModelerControls from "./PaintModelerControls.svelte";
 import { PaintModelingRenderer } from "./PaintModelingRenderer.ts";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
 import { clampNdcPoint, ndcFromClientPoint } from "../contour-modeler/contourGeometry.ts";
-import type { Vec2 } from "./types.ts";
+import { BrushPlacementMode, BrushPlacementProvenance, type BrushPlacementProvenance as BrushPlacementProvenanceValue, type Vec2 } from "./types.ts";
 
 type BrushPlacementReadback = {
     center: [number, number, number],
@@ -12,12 +12,19 @@ type BrushPlacementReadback = {
     tangent: [number, number, number],
     bitangent: [number, number, number],
     depth: number,
+    provenance: BrushPlacementProvenanceValue,
     snapped: boolean,
+};
+
+type StrokePlacementDebug = {
+    positions: [number, number, number][],
+    provenance: BrushPlacementProvenanceValue[],
 };
 
 type PaintModelerDebugWindow = Window & typeof globalThis & {
     __paintModelerDebug?: {
         readBrushPlacement: () => Promise<BrushPlacementReadback | null>,
+        readLastStrokePlacement: () => StrokePlacementDebug | null,
     },
 };
 
@@ -35,7 +42,10 @@ let pointerMode = $state<"paint" | "orbit" | null>(null);
 let brushPointerPoint = $state<Vec2 | null>(null);
 let rendererError = $state<string | null>(null);
 let shadeRibbons = $state(true);
-let brushGuideVisible = $derived(brushPointerPoint !== null && pointerMode !== "orbit");
+let planePickArmed = $state(false);
+let lastStrokePlacementProvenance = $state<BrushPlacementProvenanceValue[]>([]);
+let placementPointerVisible = $derived(brushPointerPoint !== null && pointerMode !== "orbit");
+let brushGuideVisible = $derived(placementPointerVisible && !planePickArmed);
 
 $effect(() => {
     if (!canvas) return;
@@ -55,9 +65,12 @@ $effect(() => {
     modelerState.brush;
     modelerState.activePaintLayerId;
     modelerState.paintLayers.length;
-    modelerState.brushSnapToRibbons;
+    modelerState.brushPlacementMode;
+    modelerState.constructionPlane.origin;
+    modelerState.constructionPlane.normal;
     brushPointerPoint;
     pointerMode;
+    planePickArmed;
     shadeRibbons;
     requestRender();
 });
@@ -79,6 +92,14 @@ $effect(() => {
                 modelerState.camera.viewProjInvMat,
                 modelerState.camera.viewInvMat,
             ) ?? null;
+        },
+        readLastStrokePlacement: () => {
+            const ribbon = modelerState.strokes.at(-1)?.ribbon;
+            if (!ribbon || !renderer) return null;
+            return {
+                positions: ribbon.vertices.map(vertex => [...vertex.position]),
+                provenance: renderer.readLastStrokeProvenanceForTest(),
+            };
         },
     };
 
@@ -128,6 +149,11 @@ function setShadeRibbons(value: boolean) {
     requestRender();
 }
 
+function setPlanePickArmed(value: boolean) {
+    planePickArmed = value;
+    requestRender();
+}
+
 async function render() {
     await ensureRenderer();
     if (!renderer) return;
@@ -150,12 +176,19 @@ async function render() {
         renderer.setDraftSegments(modelerState.buildDraftRenderSegments());
         uploadedDraftKey = draftKey;
     }
-    renderer.setBrushPlacementInput(brushGuideVisible && brushPointerPoint ? {
-        point: brushPointerPoint,
+    const showConstructionPlane = (
+        modelerState.brushPlacementMode === BrushPlacementMode.ConstructionPlane
+    );
+    renderer.setBrushPlacementInput(brushPointerPoint || showConstructionPlane ? {
+        point: brushPointerPoint ?? { x: 0, y: 0 },
         brushWidth: modelerState.brush.width,
         viewportWidth,
         viewportHeight,
-        snapToRibbons: modelerState.brushSnapToRibbons,
+        pointerVisible: placementPointerVisible,
+        planeSize: Math.max(0.35, modelerState.orbit.radius * 0.75),
+        startPoint: modelerState.draftStroke?.[0] ?? null,
+        placementMode: modelerState.brushPlacementMode,
+        constructionPlane: modelerState.constructionPlane,
     } : null);
     renderer.render(
         modelerState.camera.viewProjMat,
@@ -174,10 +207,19 @@ function cancelRender() {
 
 function onPointerDown(event: PointerEvent) {
     const target = event.currentTarget as HTMLElement;
-    target.setPointerCapture(event.pointerId);
     const point = pointerNdc(event, target);
     brushPointerPoint = point;
 
+    if (event.button === 0 && planePickArmed) {
+        void pickConstructionPlane(point).catch(error => {
+            console.warn("Could not pick construction plane", error);
+            requestRender();
+        });
+        event.preventDefault();
+        return;
+    }
+
+    target.setPointerCapture(event.pointerId);
     if (event.button === 0) {
         modelerState.beginStroke(point, target.clientWidth, target.clientHeight);
         pointerMode = "paint";
@@ -236,8 +278,38 @@ function onPointerLeave() {
     requestRender();
 }
 
+async function pickConstructionPlane(point: Vec2) {
+    await ensureRenderer();
+    if (!renderer) return;
+
+    renderer.setBrushPlacementInput({
+        point,
+        brushWidth: modelerState.brush.width,
+        viewportWidth,
+        viewportHeight,
+        pointerVisible: true,
+        planeSize: Math.max(0.35, modelerState.orbit.radius * 0.75),
+        startPoint: null,
+        placementMode: BrushPlacementMode.Surface,
+        constructionPlane: modelerState.constructionPlane,
+    });
+    const placement = await renderer.readBrushPlacementForTest(
+        modelerState.camera.viewProjMat,
+        modelerState.camera.viewProjInvMat,
+        modelerState.camera.viewInvMat,
+    );
+    if (placement?.provenance !== BrushPlacementProvenance.Surface) {
+        requestRender();
+        return;
+    }
+
+    modelerState.setConstructionPlane(placement.center, placement.normal);
+    planePickArmed = false;
+    requestRender();
+}
+
 async function finishPaintStroke() {
-    if (modelerState.brushSnapToRibbons && renderer) {
+    if (renderer) {
         const sourcePoints = modelerState.draftStrokeSourcePoints();
         const view = modelerState.strokePlacementView();
         if (sourcePoints && view) {
@@ -246,15 +318,20 @@ async function finishPaintStroke() {
                     sourcePoints,
                     view,
                     brushWidth: modelerState.brush.width,
-                    snapToRibbons: true,
+                    placementMode: modelerState.brushPlacementMode,
+                    constructionPlane: modelerState.constructionPlane,
                 });
-                if (ribbon && modelerState.finishStrokeWithRibbon(sourcePoints, ribbon)) return;
+                if (ribbon) {
+                    lastStrokePlacementProvenance = renderer.readLastStrokeProvenanceForTest();
+                    if (modelerState.finishStrokeWithRibbon(sourcePoints, ribbon)) return;
+                }
             } catch (error) {
                 console.warn("GPU brush placement failed; using view-plane stroke", error);
             }
         }
     }
 
+    lastStrokePlacementProvenance = [];
     modelerState.finishStroke();
 }
 
@@ -286,6 +363,8 @@ function draftRenderKey(): string {
         {shadeRibbons}
         {requestRender}
         {setShadeRibbons}
+        {planePickArmed}
+        {setPlanePickArmed}
     />
     <paint-viewport
         bind:clientWidth={() => viewportWidth, value => viewportWidth = value}
@@ -302,6 +381,8 @@ function draftRenderKey(): string {
             event.preventDefault();
         }}
         class:brush-guide-visible={brushGuideVisible}
+        class:plane-pick-armed={planePickArmed}
+        data-placement-provenance={lastStrokePlacementProvenance.join(",")}
         role="application"
     >
         <canvas bind:this={canvas}></canvas>
@@ -333,6 +414,10 @@ paint-viewport {
 
     &.brush-guide-visible {
         cursor: none;
+    }
+
+    &.plane-pick-armed {
+        cursor: crosshair;
     }
 
     > :global(*) {
@@ -368,4 +453,14 @@ canvas {
         font-size: 0.76rem;
     }
 }
+@media (max-width: 48rem) {
+    paint-modeler-content {
+        flex-direction: column;
+    }
+
+    paint-viewport {
+        min-height: 18rem;
+    }
+}
+
 </style>

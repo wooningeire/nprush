@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PaintModelingState } from "./PaintModelingState.svelte.ts";
+import { BrushPlacementMode } from "./types.ts";
 import { RIBBON_RENDER_COLUMNS } from "./state/constants.ts";
 import type {
     PaintView,
@@ -80,14 +81,41 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         expect(ribbon.vertices.at(-1)?.u).toBeLessThan(1);
     });
 
-    it("toggles GPU ribbon snapping without changing brush style", () => {
+    it("selects GPU brush placement modes without changing brush style", () => {
         const state = new PaintModelingState();
 
-        expect(state.brushSnapToRibbons).toBe(false);
-        state.setBrushSnapToRibbons(true);
+        expect(state.brushPlacementMode).toBe(BrushPlacementMode.View);
 
-        expect(state.brushSnapToRibbons).toBe(true);
+        for (const mode of [
+            BrushPlacementMode.StartDepth,
+            BrushPlacementMode.StartPlane,
+            BrushPlacementMode.Surface,
+            BrushPlacementMode.ConstructionPlane,
+        ]) {
+            state.setBrushPlacementMode(mode);
+            expect(state.brushPlacementMode).toBe(mode);
+        }
+
         expect(state.brush.width).toBe(18);
+    });
+
+    it("edits a normalized construction plane at camera-forward view depth", () => {
+        const state = new PaintModelingState();
+
+        state.setConstructionPlaneViewDepth(2.4);
+        expect(state.constructionPlaneViewDepth).toBeCloseTo(2.4, 5);
+
+        state.setConstructionPlaneNormal([0, 3, 4]);
+        expect(state.constructionPlane.normal).toEqual([0, 0.6, 0.8]);
+
+        state.flipConstructionPlaneNormal();
+        expect(state.constructionPlane.normal).toEqual([-0, -0.6, -0.8]);
+
+        const depthBeforeAlign = state.constructionPlaneViewDepth;
+        state.alignConstructionPlaneToView();
+
+        expect(Math.hypot(...state.constructionPlane.normal)).toBeCloseTo(1, 6);
+        expect(state.constructionPlaneViewDepth).toBeCloseTo(depthBeforeAlign, 6);
     });
 
     it("commits a renderer-produced ribbon for snapped strokes", () => {

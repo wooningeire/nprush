@@ -36,6 +36,32 @@ export type BrushStyle = {
     opacity: number,
 };
 
+export const BrushPlacementMode = {
+    View: "view",
+    StartDepth: "start-depth",
+    StartPlane: "start-plane",
+    Surface: "surface",
+    ConstructionPlane: "construction-plane",
+} as const;
+
+export type BrushPlacementMode = typeof BrushPlacementMode[keyof typeof BrushPlacementMode];
+
+export const BrushPlacementProvenance = {
+    View: "view",
+    Surface: "surface",
+    Bridge: "bridge",
+    StartDepth: "start-depth",
+    StartPlane: "start-plane",
+    ConstructionPlane: "construction-plane",
+} as const;
+
+export type BrushPlacementProvenance = typeof BrushPlacementProvenance[keyof typeof BrushPlacementProvenance];
+
+export type ConstructionPlane = {
+    origin: Vec3,
+    normal: Vec3,
+};
+
 export type PaintRibbonVertex = {
     position: Vec3,
     side: Vec3,

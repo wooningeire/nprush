@@ -26,6 +26,7 @@ test("paint modeler ribbon preview stays responsive after the first stroke", asy
     };
 
     await drawStraightStrokeUntilCount(page, center.x, center.y, 1);
+    await page.getByLabel("Paint on").selectOption("surface");
 
     await page.mouse.move(center.x - 210, center.y + 60);
     await page.mouse.down();
@@ -73,7 +74,9 @@ const drawStraightStrokeUntilCount = async (
 };
 
 const isExpectedStartupNoise = (text: string): boolean => {
-    return text.includes("ResizeObserver loop completed")
+    return text === "Failed to load resource: net::ERR_CONNECTION_CLOSED"
+        || text === "Failed to load resource: net::ERR_TIMED_OUT"
+        || text.includes("ResizeObserver loop completed")
         || text.includes("could not get gpu adapter");
 };
 

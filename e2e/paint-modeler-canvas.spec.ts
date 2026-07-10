@@ -89,7 +89,20 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
 
     await expect(page.getByLabel("Shade ribbons")).toBeChecked();
     await expect(page.getByLabel("Shade ribbons")).toBeEnabled();
-    await expect(page.getByLabel("Snap to ribbons")).not.toBeChecked();
+    const paintOn = page.getByLabel("Paint on");
+    await expect(paintOn).toHaveValue("view");
+    await expect(paintOn.locator("option")).toHaveText([
+        "View",
+        "Start depth",
+        "Start plane",
+        "Surface",
+        "Construction plane",
+    ]);
+    await paintOn.selectOption("start-depth");
+    await expect(paintOn).toHaveValue("start-depth");
+    await paintOn.selectOption("start-plane");
+    await expect(paintOn).toHaveValue("start-plane");
+    await paintOn.selectOption("view");
     await expect(page.getByLabel("Width")).toHaveValue("18");
     await page.getByLabel("Width").evaluate(element => {
         const input = element as HTMLInputElement;
@@ -113,12 +126,15 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
     await expect(paintLayers.getByRole("button", { name: /Layer 1\s+1s/ })).toBeVisible();
     await expect(objects.getByRole("button", { name: /Object 2\s+1s/ })).toBeVisible();
 
+    await paintOn.selectOption("surface");
+    await expect(paintOn).toHaveValue("surface");
+
     const rendererUnavailable = await page.getByText("WebGPU unavailable").isVisible().catch(() => false);
     if (!rendererUnavailable) {
-        await page.getByLabel("Snap to ribbons").check();
         await page.mouse.move(center.x + 40, center.y + 8);
         await waitForAnimationFrame(page);
         const placement = await readBrushPlacement(page);
+        expect(placement?.provenance).toBe("surface");
         expect(placement?.snapped).toBe(true);
         if (!placement) throw new Error("brush placement missing");
         expectGuideBasisMatchesNormal(placement);
@@ -129,10 +145,35 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
         await page.mouse.move(center.x + 120, center.y + 24, { steps: 8 });
         await page.mouse.up({ button: "middle" });
         await waitForAnimationFrame(page);
-        const tiltedPlacement = await findSnappedBrushPlacement(page, viewport);
-        expectGuideBasisMatchesNormal(tiltedPlacement);
+        const tiltedSurface = await findSurfaceBrushPlacement(page, viewport);
+        expectGuideBasisMatchesNormal(tiltedSurface.placement);
         const afterOrbit = await page.locator("canvas").screenshot();
         expect(afterOrbit.equals(beforeOrbit)).toBe(false);
+
+        await paintOn.selectOption("construction-plane");
+        await expect(page.getByLabel("Construction plane")).toBeVisible();
+        const depthInput = page.getByLabel("Construction plane depth");
+        await expect(depthInput).toBeVisible();
+        await depthInput.fill("1.35");
+        await depthInput.press("Tab");
+        expect(Number(await depthInput.inputValue())).toBeCloseTo(1.35, 6);
+
+        await page.getByLabel("Align construction plane to Z axis").click();
+        await page.mouse.move(tiltedSurface.point.x, tiltedSurface.point.y);
+        await waitForAnimationFrame(page);
+        const constructionPlacement = await readBrushPlacement(page);
+        expect(constructionPlacement?.provenance).toBe("construction-plane");
+        expect(constructionPlacement?.normal[0]).toBeCloseTo(0, 5);
+        expect(constructionPlacement?.normal[1]).toBeCloseTo(0, 5);
+        expect(constructionPlacement?.normal[2]).toBeCloseTo(1, 5);
+        const withConstructionGrid = await page.locator("canvas").screenshot();
+        expect(withConstructionGrid.equals(afterOrbit)).toBe(false);
+
+        const pickButton = page.getByRole("button", { name: "Pick" });
+        await pickButton.click();
+        await expect(pickButton).toHaveAttribute("aria-pressed", "true");
+        await page.mouse.click(tiltedSurface.point.x, tiltedSurface.point.y);
+        await expect(pickButton).toHaveAttribute("aria-pressed", "false");
     }
 
     await expect(page.getByRole("button", { name: "Chart wire" })).toHaveCount(0);
@@ -147,7 +188,13 @@ type BrushPlacementDebugResult = {
     normal: Vec3Tuple,
     tangent: Vec3Tuple,
     bitangent: Vec3Tuple,
+    provenance: string,
     snapped: boolean,
+};
+
+type FoundBrushPlacement = {
+    placement: BrushPlacementDebugResult,
+    point: { x: number, y: number },
 };
 
 const readBrushPlacement = async (page: Page): Promise<BrushPlacementDebugResult | null> => {
@@ -160,24 +207,27 @@ const readBrushPlacement = async (page: Page): Promise<BrushPlacementDebugResult
         return await debug?.readBrushPlacement() ?? null;
     });
 };
-const findSnappedBrushPlacement = async (page: Page, viewport: Locator): Promise<BrushPlacementDebugResult> => {
+const findSurfaceBrushPlacement = async (page: Page, viewport: Locator): Promise<FoundBrushPlacement> => {
     const box = await viewport.boundingBox();
     if (!box) throw new Error("paint viewport missing");
 
     const fractions = [0.34, 0.42, 0.50, 0.58, 0.66];
     for (const yFraction of fractions) {
         for (const xFraction of fractions) {
-            await page.mouse.move(
-                box.x + box.width * xFraction,
-                box.y + box.height * yFraction,
-            );
+            const point = {
+                x: box.x + box.width * xFraction,
+                y: box.y + box.height * yFraction,
+            };
+            await page.mouse.move(point.x, point.y);
             await waitForAnimationFrame(page);
             const placement = await readBrushPlacement(page);
-            if (placement?.snapped) return placement;
+            if (placement?.provenance === "surface") {
+                return { placement, point };
+            }
         }
     }
 
-    throw new Error("Could not find snapped brush placement after orbit");
+    throw new Error("Could not find surface brush placement after orbit");
 };
 
 const expectGuideBasisMatchesNormal = (placement: BrushPlacementDebugResult): void => {
@@ -260,7 +310,9 @@ const dragRowBefore = async (page: Page, source: Locator, target: Locator): Prom
 };
 
 const isExpectedStartupNoise = (text: string): boolean => {
-    return text.includes("ResizeObserver loop completed")
+    return text === "Failed to load resource: net::ERR_CONNECTION_CLOSED"
+        || text === "Failed to load resource: net::ERR_TIMED_OUT"
+        || text.includes("ResizeObserver loop completed")
         || text.includes("could not get gpu adapter");
 };
 

@@ -4,7 +4,14 @@ import segmentShaderSource from "./paint_modeler_segments.wgsl?raw";
 import triangleShaderSource from "./paint_modeler_triangles.wgsl?raw";
 import ribbonShaderSource from "./paint_modeler_ribbons.wgsl?raw";
 import { BrushPlacementManager } from "./renderer/brushPlacement.ts";
-import type { PaintRibbon, PaintView, RenderPrimitive, Vec2 } from "./types.ts";
+import type {
+    BrushPlacementMode,
+    ConstructionPlane,
+    PaintRibbon,
+    PaintView,
+    RenderPrimitive,
+    Vec2,
+} from "./types.ts";
 import {
     DEPTH_FORMAT,
     GRID_PLANE_Z,
@@ -177,7 +184,7 @@ export class PaintModelingRenderer {
         const strokes = segments.filter(isRenderStroke);
         const triangles = segments.filter(isRenderTriangle);
         const ribbons = segments.filter(isRenderRibbon);
-        this.brushPlacement.setBrushSnapTargets(ribbons);
+        this.brushPlacement.setBrushSurfaceTargets(ribbons);
         const segmentVertexCount = renderSegments.length * VERTICES_PER_SEGMENT;
         const strokeVertexCount = strokeStripVertexCount(strokes);
         const triangleVertexCount = triangles.length * VERTICES_PER_TRIANGLE;
@@ -251,7 +258,11 @@ export class PaintModelingRenderer {
         brushWidth: number,
         viewportWidth: number,
         viewportHeight: number,
-        snapToRibbons: boolean,
+        pointerVisible: boolean,
+        planeSize: number,
+        startPoint: Vec2 | null,
+        placementMode: BrushPlacementMode,
+        constructionPlane: ConstructionPlane,
     } | null) {
         this.brushPlacement.setBrushPlacementInput(input);
     }
@@ -260,7 +271,8 @@ export class PaintModelingRenderer {
         sourcePoints: Vec2[],
         view: PaintView,
         brushWidth: number,
-        snapToRibbons: boolean,
+        placementMode: BrushPlacementMode,
+        constructionPlane: ConstructionPlane,
     }): Promise<PaintRibbon | null> {
         return this.brushPlacement.buildPlacedRibbonFromSourcePoints(input);
     }
@@ -271,6 +283,10 @@ export class PaintModelingRenderer {
         viewInvMat: number[] | Float32Array,
     ) {
         return this.brushPlacement.readBrushPlacementForTest(viewProjMat, viewProjInvMat, viewInvMat);
+    }
+
+    readLastStrokeProvenanceForTest() {
+        return this.brushPlacement.readLastStrokeProvenanceForTest();
     }
 
     render(

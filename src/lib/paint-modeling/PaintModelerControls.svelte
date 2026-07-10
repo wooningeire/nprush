@@ -1,7 +1,9 @@
 <script lang="ts">
 import { flip } from "svelte/animate";
 import { circOut } from "svelte/easing";
+import ConstructionPlaneControls from "./ConstructionPlaneControls.svelte";
 import type { PaintModelingState } from "./PaintModelingState.svelte.ts";
+import { BrushPlacementMode, type BrushPlacementMode as BrushPlacementModeValue } from "./types.ts";
 
 let {
     modelerState,
@@ -9,17 +11,29 @@ let {
     shadeRibbons,
     requestRender,
     setShadeRibbons,
+    planePickArmed,
+    setPlanePickArmed,
 }: {
     modelerState: PaintModelingState,
     rendererError: string | null,
     shadeRibbons: boolean,
     requestRender: () => void,
     setShadeRibbons: (value: boolean) => void,
+    planePickArmed: boolean,
+    setPlanePickArmed: (value: boolean) => void,
 } = $props();
 
 let sortedPaintLayers = $derived([...modelerState.paintLayers].sort((a, b) => a.order - b.order));
 let sortedObjects = $derived([...modelerState.objects].sort((a, b) => a.layerIndex - b.layerIndex));
 let sortedViews = $derived([...modelerState.views].sort((a, b) => a.order - b.order));
+
+const placementModeOptions: { mode: BrushPlacementModeValue, label: string }[] = [
+    { mode: BrushPlacementMode.View, label: "View" },
+    { mode: BrushPlacementMode.StartDepth, label: "Start depth" },
+    { mode: BrushPlacementMode.StartPlane, label: "Start plane" },
+    { mode: BrushPlacementMode.Surface, label: "Surface" },
+    { mode: BrushPlacementMode.ConstructionPlane, label: "Construction plane" },
+];
 
 const layerStrokeCount = (layerId: string, layerOrder: number): number =>
     modelerState.strokes.filter(stroke =>
@@ -104,18 +118,32 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
             />
             <span>Shade ribbons</span>
         </label>
-        <label class="toggle-row">
-            <input
-                type="checkbox"
-                checked={modelerState.brushSnapToRibbons}
+        <label class="control-row">
+            <span>Paint on</span>
+            <select
+                aria-label="Paint on"
+                value={modelerState.brushPlacementMode}
                 onchange={(event) => {
-                    modelerState.setBrushSnapToRibbons((event.currentTarget as HTMLInputElement).checked);
+                    modelerState.setBrushPlacementMode(
+                        (event.currentTarget as HTMLSelectElement).value as BrushPlacementModeValue,
+                    );
+                    setPlanePickArmed(false);
                     requestRender();
                 }}
-            />
-            <span>Snap to ribbons</span>
+            >
+                {#each placementModeOptions as option}
+                    <option value={option.mode}>{option.label}</option>
+                {/each}
+            </select>
         </label>
-        <label class="color-row">
+        {#if modelerState.brushPlacementMode === BrushPlacementMode.ConstructionPlane}
+            <ConstructionPlaneControls
+                {modelerState}
+                {planePickArmed}
+                {requestRender}
+                {setPlanePickArmed}
+            />
+        {/if}        <label class="color-row">
             <span>Color</span>
             <input
                 type="color"
@@ -293,6 +321,7 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
 .control-panel {
     width: 18rem;
     flex: 0 0 18rem;
+    box-sizing: border-box;
     overflow-y: auto;
     padding: 1rem;
     border-right: 1px solid rgba(255, 255, 255, 0.12);
@@ -368,6 +397,20 @@ button {
 
 .color-row,
 .range-row,
+.control-row {
+    grid-template-columns: 4.8rem minmax(0, 1fr);
+}
+
+.control-row select {
+    min-width: 0;
+    height: 1.8rem;
+    padding: 0 0.4rem;
+    border: 1px solid oklch(78% 0.018 210 / 0.22);
+    border-radius: 4px;
+    background: oklch(18% 0.018 210 / 0.86);
+    color: oklch(92% 0.012 210);
+    font: inherit;
+}
 .toggle-row {
     display: grid;
     align-items: center;
@@ -397,6 +440,20 @@ button {
     }
 }
 
+.control-row {
+    grid-template-columns: 4.8rem minmax(0, 1fr);
+}
+
+.control-row select {
+    min-width: 0;
+    height: 1.8rem;
+    padding: 0 0.4rem;
+    border: 1px solid oklch(78% 0.018 210 / 0.22);
+    border-radius: 4px;
+    background: oklch(18% 0.018 210 / 0.86);
+    color: oklch(92% 0.012 210);
+    font: inherit;
+}
 .toggle-row {
     grid-template-columns: auto 1fr;
 
@@ -483,4 +540,14 @@ button {
     color: #ffb4a8;
     font-size: 0.82rem;
 }
+@media (max-width: 48rem) {
+    .control-panel {
+        width: 100%;
+        max-height: 44vh;
+        flex: 0 0 auto;
+        border-right: 0;
+        border-bottom: 1px solid oklch(78% 0.018 210 / 0.2);
+    }
+}
+
 </style>

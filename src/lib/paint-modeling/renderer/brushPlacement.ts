@@ -1,53 +1,59 @@
 import brushGuideShaderSource from "../paint_brush_guide.wgsl?raw";
-import brushPlacementShaderSource from "../paint_brush_placement.wgsl?raw";
-import type { PaintRibbon, PaintRibbonVertex, PaintView, RenderRibbon, Vec2, Vec3 } from "../types.ts";
+import brushPlacementKernelShaderSource from "../paint_brush_placement.wgsl?raw";
+import brushPlacementPreludeShaderSource from "../paint_brush_placement_prelude.wgsl?raw";
+
 import {
-    DEPTH_FORMAT,
-    FLOATS_PER_RIBBON_VERTEX,
-} from "./constants.ts";
+    BrushPlacementMode,
+    BrushPlacementProvenance,
+    type BrushPlacementMode as BrushPlacementModeValue,
+    type BrushPlacementProvenance as BrushPlacementProvenanceValue,
+    type ConstructionPlane,
+    type PaintRibbon,
+    type PaintRibbonVertex,
+    type RenderRibbon,
+    type Vec2,
+} from "../types.ts";
+import { FLOATS_PER_RIBBON_VERTEX } from "./constants.ts";
+import {
+    GUIDE_VERTEX_COUNT,
+    PLACEMENT_RESULT_FLOATS,
+    PLACEMENT_UNIFORM_FLOATS,
+    TARGET_INFO_UINTS,
+    WORKGROUP_SIZE,
+    placementModeUniformValue,
+    placementModeUsesTargets,
+    provenanceFromUniformValue,
+    type BrushPlacementInput,
+    type BrushPlacementReadback,
+    type StrokePlacementInput,
+} from "./brushPlacementContract.ts";
+import {
+    createBrushGuidePipeline,
+    createBuffer,
+    createLoggedShaderModule,
+    createSourcePointBuffer,
+    destroyBuffers,
+} from "./brushPlacementGpu.ts";
+import { createBrushSurfaceTargetData } from "./brushPlacementTargets.ts";
 
-const PLACEMENT_UNIFORM_FLOATS = 56;
-const PLACEMENT_RESULT_FLOATS = 16;
-const SOURCE_POINT_FLOATS = 4;
-const TARGET_INFO_UINTS = 4;
-const GUIDE_VERTEX_COUNT = 48 * 2 + 2;
-const WORKGROUP_SIZE = 64;
-
-type BrushPlacementInput = {
-    point: Vec2,
-    brushWidth: number,
-    viewportWidth: number,
-    viewportHeight: number,
-    snapToRibbons: boolean,
-};
-
-type BrushPlacementReadback = {
-    center: Vec3,
-    normal: Vec3,
-    tangent: Vec3,
-    bitangent: Vec3,
-    depth: number,
-    snapped: boolean,
-};
-
-type StrokePlacementInput = {
-    sourcePoints: Vec2[],
-    view: PaintView,
-    brushWidth: number,
-    snapToRibbons: boolean,
-};
+const brushPlacementShaderSource = [
+    brushPlacementPreludeShaderSource,
+    brushPlacementKernelShaderSource,
+].join(String.fromCharCode(10));
 
 export class BrushPlacementManager {
     private readonly device: GPUDevice;
     private readonly computeBindGroupLayout: GPUBindGroupLayout;
     private readonly guideBindGroupLayout: GPUBindGroupLayout;
     private readonly computePipeline: GPUComputePipeline;
+    private readonly directStrokeComputePipeline: GPUComputePipeline;
     private readonly strokeComputePipeline: GPUComputePipeline;
+    private readonly guideXrayPipeline: GPURenderPipeline;
     private readonly guidePipeline: GPURenderPipeline;
     private readonly hoverUniformBuffer: GPUBuffer;
     private readonly hoverResultBuffer: GPUBuffer;
     private readonly dummyReadBuffer: GPUBuffer;
-    private readonly dummyResultBuffer: GPUBuffer;
+
     private readonly dummyOutputBuffer: GPUBuffer;
     private readonly dummyMetaBuffer: GPUBuffer;
     private targetVertexBuffer: GPUBuffer | null = null;
@@ -56,6 +62,7 @@ export class BrushPlacementManager {
     private hoverInput: BrushPlacementInput | null = null;
     private hoverComputeBindGroup: GPUBindGroup | null = null;
     private guideBindGroup: GPUBindGroup | null = null;
+    private lastStrokeProvenance: BrushPlacementProvenanceValue[] = [];
 
     constructor(device: GPUDevice, format: GPUTextureFormat) {
         this.device = device;
@@ -142,6 +149,14 @@ export class BrushPlacementManager {
                 entryPoint: "compute_hover",
             },
         });
+        this.directStrokeComputePipeline = device.createComputePipeline({
+            label: "paint brush direct surface placement pipeline",
+            layout: computePipelineLayout,
+            compute: {
+                module: placementModule,
+                entryPoint: "compute_direct_stroke",
+            },
+        });
         this.strokeComputePipeline = device.createComputePipeline({
             label: "paint brush stroke placement pipeline",
             layout: computePipelineLayout,
@@ -150,42 +165,24 @@ export class BrushPlacementManager {
                 entryPoint: "compute_stroke",
             },
         });
-        this.guidePipeline = device.createRenderPipeline({
-            label: "paint brush guide pipeline",
-            layout: guidePipelineLayout,
-            vertex: {
-                module: guideModule,
-                entryPoint: "guide_vertex",
-            },
-            fragment: {
-                module: guideModule,
-                entryPoint: "guide_fragment",
-                targets: [{
-                    format,
-                    blend: {
-                        color: {
-                            operation: "add",
-                            srcFactor: "src-alpha",
-                            dstFactor: "one-minus-src-alpha",
-                        },
-                        alpha: {
-                            operation: "add",
-                            srcFactor: "src-alpha",
-                            dstFactor: "one-minus-src-alpha",
-                        },
-                    },
-                }],
-            },
-            primitive: {
-                topology: "line-list",
-                cullMode: "none",
-            },
-            depthStencil: {
-                format: DEPTH_FORMAT,
-                depthCompare: "less-equal",
-                depthWriteEnabled: false,
-            },
-        });
+        this.guideXrayPipeline = createBrushGuidePipeline(
+            device,
+            guidePipelineLayout,
+            guideModule,
+            format,
+            "guide_fragment_xray",
+            "always",
+            "paint construction plane xray guide pipeline",
+        );
+        this.guidePipeline = createBrushGuidePipeline(
+            device,
+            guidePipelineLayout,
+            guideModule,
+            format,
+            "guide_fragment",
+            "less-equal",
+            "paint brush guide pipeline",
+        );
 
         this.hoverUniformBuffer = createBuffer(
             device,
@@ -205,12 +202,7 @@ export class BrushPlacementManager {
             GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
             "paint brush placement dummy read storage",
         );
-        this.dummyResultBuffer = createBuffer(
-            device,
-            PLACEMENT_RESULT_FLOATS * Float32Array.BYTES_PER_ELEMENT,
-            GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-            "paint brush placement dummy result storage",
-        );
+
         this.dummyOutputBuffer = createBuffer(
             device,
             PLACEMENT_RESULT_FLOATS * Float32Array.BYTES_PER_ELEMENT,
@@ -233,7 +225,7 @@ export class BrushPlacementManager {
         }
     }
 
-    setBrushSnapTargets(ribbons: RenderRibbon[]) {
+    setBrushSurfaceTargets(ribbons: RenderRibbon[]) {
         this.targetVertexBuffer?.destroy();
         this.targetInfoBuffer?.destroy();
         this.targetVertexBuffer = null;
@@ -242,56 +234,26 @@ export class BrushPlacementManager {
         this.hoverComputeBindGroup = null;
         this.guideBindGroup = null;
 
-        const targetInfos: number[] = [];
-        const targetVertices: number[] = [];
+        const targets = createBrushSurfaceTargetData(ribbons);
+        if (!targets) return;
 
-        for (const ribbon of ribbons) {
-            const segmentCount = ribbonSegmentCount(ribbon);
-            if (segmentCount === 0) continue;
-
-            targetInfos.push(
-                targetVertices.length / FLOATS_PER_RIBBON_VERTEX,
-                ribbon.vertices.length,
-                ribbon.closed ? 1 : 0,
-                0,
-            );
-
-            for (const vertex of ribbon.vertices) {
-                targetVertices.push(
-                    vertex.position[0],
-                    vertex.position[1],
-                    vertex.position[2],
-                    vertex.u,
-                    vertex.side[0],
-                    vertex.side[1],
-                    vertex.side[2],
-                    0,
-                );
-            }
-        }
-
-        this.targetCount = targetInfos.length / TARGET_INFO_UINTS;
-        if (this.targetCount === 0) return;
-
-        const vertexData = new Float32Array(targetVertices);
+        this.targetCount = targets.count;
         this.targetVertexBuffer = createBuffer(
             this.device,
-            vertexData.byteLength,
+            targets.vertices.byteLength,
             GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-            "paint brush snap target vertices",
+            "paint brush surface target vertices",
         );
-        this.device.queue.writeBuffer(this.targetVertexBuffer, 0, vertexData);
+        this.device.queue.writeBuffer(this.targetVertexBuffer, 0, targets.vertices);
 
-        const infoData = new Uint32Array(targetInfos);
         this.targetInfoBuffer = createBuffer(
             this.device,
-            infoData.byteLength,
+            targets.infos.byteLength,
             GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-            "paint brush snap target infos",
+            "paint brush surface target infos",
         );
-        this.device.queue.writeBuffer(this.targetInfoBuffer, 0, infoData);
+        this.device.queue.writeBuffer(this.targetInfoBuffer, 0, targets.infos);
     }
-
     encodeHoverPlacement(
         encoder: GPUCommandEncoder,
         viewProjMat: number[] | Float32Array,
@@ -309,9 +271,13 @@ export class BrushPlacementManager {
             this.hoverInput.brushWidth,
             this.hoverInput.viewportWidth,
             this.hoverInput.viewportHeight,
-            this.hoverInput.snapToRibbons ? this.targetCount : 0,
+            placementModeUsesTargets(this.hoverInput.placementMode) ? this.targetCount : 0,
             0,
-            true,
+            this.hoverInput.placementMode,
+            this.hoverInput.constructionPlane,
+            this.hoverInput.pointerVisible,
+            this.hoverInput.planeSize,
+            this.hoverInput.startPoint,
         );
 
         this.hoverComputeBindGroup = this.createComputeBindGroup(
@@ -331,8 +297,10 @@ export class BrushPlacementManager {
 
     drawGuide(pass: GPURenderPassEncoder) {
         if (!this.hoverInput || !this.guideBindGroup) return;
-        pass.setPipeline(this.guidePipeline);
         pass.setBindGroup(0, this.guideBindGroup);
+        pass.setPipeline(this.guideXrayPipeline);
+        pass.draw(GUIDE_VERTEX_COUNT);
+        pass.setPipeline(this.guidePipeline);
         pass.draw(GUIDE_VERTEX_COUNT);
     }
 
@@ -369,13 +337,18 @@ export class BrushPlacementManager {
         readback.destroy();
 
         if (data[3] <= 0.5) return null;
+        const provenance = provenanceFromUniformValue(Math.round(data[7]));
         return {
             center: [data[0], data[1], data[2]],
             normal: [data[4], data[5], data[6]],
             tangent: [data[8], data[9], data[10]],
-            snapped: data[7] > 0.5,
             depth: data[11],
             bitangent: [data[12], data[13], data[14]],
+            provenance,
+            snapped: provenance === BrushPlacementProvenance.Surface
+                || provenance === BrushPlacementProvenance.Bridge
+                || provenance === BrushPlacementProvenance.StartDepth
+                || provenance === BrushPlacementProvenance.StartPlane,
         };
     }
 
@@ -383,11 +356,19 @@ export class BrushPlacementManager {
         sourcePoints,
         view,
         brushWidth,
-        snapToRibbons,
+        placementMode,
+        constructionPlane,
     }: StrokePlacementInput): Promise<PaintRibbon | null> {
+        this.lastStrokeProvenance = [];
         if (sourcePoints.length < 2) return null;
 
         const sourceBuffer = createSourcePointBuffer(this.device, sourcePoints);
+        const directResultBuffer = createBuffer(
+            this.device,
+            sourcePoints.length * PLACEMENT_RESULT_FLOATS * Float32Array.BYTES_PER_ELEMENT,
+            GPUBufferUsage.STORAGE,
+            "paint brush direct surface placement results",
+        );
         const outputBuffer = createBuffer(
             this.device,
             sourcePoints.length * FLOATS_PER_RIBBON_VERTEX * Float32Array.BYTES_PER_ELEMENT,
@@ -428,14 +409,18 @@ export class BrushPlacementManager {
             brushWidth,
             view.width,
             view.height,
-            snapToRibbons ? this.targetCount : 0,
+            placementModeUsesTargets(placementMode) ? this.targetCount : 0,
             sourcePoints.length,
+            placementMode,
+            constructionPlane,
             true,
+            Math.max(0.35, view.radius * 0.75),
+            null,
         );
 
         const bindGroup = this.createComputeBindGroup(
             uniformBuffer,
-            this.dummyResultBuffer,
+            directResultBuffer,
             sourceBuffer,
             outputBuffer,
             metaBuffer,
@@ -446,11 +431,22 @@ export class BrushPlacementManager {
         const encoder = this.device.createCommandEncoder({
             label: "paint brush placed stroke encoder",
         });
-        const pass = encoder.beginComputePass({ label: "paint brush placed stroke pass" });
-        pass.setPipeline(this.strokeComputePipeline);
-        pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(sourcePoints.length / WORKGROUP_SIZE));
-        pass.end();
+        const workgroupCount = Math.ceil(sourcePoints.length / WORKGROUP_SIZE);
+        const directPass = encoder.beginComputePass({
+            label: "paint brush direct surface placement pass",
+        });
+        directPass.setPipeline(this.directStrokeComputePipeline);
+        directPass.setBindGroup(0, bindGroup);
+        directPass.dispatchWorkgroups(workgroupCount);
+        directPass.end();
+
+        const placementPass = encoder.beginComputePass({
+            label: "paint brush resolved stroke placement pass",
+        });
+        placementPass.setPipeline(this.strokeComputePipeline);
+        placementPass.setBindGroup(0, bindGroup);
+        placementPass.dispatchWorkgroups(workgroupCount);
+        placementPass.end();
         encoder.copyBufferToBuffer(outputBuffer, 0, outputReadback, 0, outputBytes);
         encoder.copyBufferToBuffer(
             metaBuffer,
@@ -471,6 +467,7 @@ export class BrushPlacementManager {
         metaReadback.unmap();
         destroyBuffers([
             sourceBuffer,
+            directResultBuffer,
             outputBuffer,
             metaBuffer,
             outputReadback,
@@ -482,6 +479,7 @@ export class BrushPlacementManager {
         if (rows < 2 || rows > sourcePoints.length) return null;
 
         const vertices: PaintRibbonVertex[] = [];
+        const provenance: BrushPlacementProvenanceValue[] = [];
         for (let index = 0; index < rows; index++) {
             const offset = index * FLOATS_PER_RIBBON_VERTEX;
             vertices.push({
@@ -489,12 +487,18 @@ export class BrushPlacementManager {
                 u: output[offset + 3],
                 side: [output[offset + 4], output[offset + 5], output[offset + 6]],
             });
+            provenance.push(provenanceFromUniformValue(Math.round(output[offset + 7])));
         }
+        this.lastStrokeProvenance = provenance;
 
         return {
             closed: meta[1] !== 0,
             vertices,
         };
+    }
+
+    readLastStrokeProvenanceForTest(): BrushPlacementProvenanceValue[] {
+        return [...this.lastStrokeProvenance];
     }
 
     destroy() {
@@ -503,7 +507,6 @@ export class BrushPlacementManager {
         this.hoverUniformBuffer.destroy();
         this.hoverResultBuffer.destroy();
         this.dummyReadBuffer.destroy();
-        this.dummyResultBuffer.destroy();
         this.dummyOutputBuffer.destroy();
         this.dummyMetaBuffer.destroy();
     }
@@ -519,7 +522,11 @@ export class BrushPlacementManager {
         viewportHeight: number,
         targetCount: number,
         sourceCount: number,
-        visible: boolean,
+        placementMode: BrushPlacementModeValue,
+        constructionPlane: ConstructionPlane,
+        pointerVisible: boolean,
+        planeSize: number,
+        startPoint: Vec2 | null,
     ) {
         const data = new Float32Array(PLACEMENT_UNIFORM_FLOATS);
         data.set(viewProjMat, 0);
@@ -528,11 +535,21 @@ export class BrushPlacementManager {
         data[48] = point.x;
         data[49] = point.y;
         data[50] = brushWidth;
-        data[51] = visible ? 1 : 0;
+        data[51] = pointerVisible ? 1 : 0;
         data[52] = Math.max(1, viewportWidth);
         data[53] = Math.max(1, viewportHeight);
         data[54] = targetCount;
         data[55] = sourceCount;
+        data[56] = placementModeUniformValue(placementMode);
+        data[57] = placementMode === BrushPlacementMode.ConstructionPlane ? 1 : 0;
+        data.set(constructionPlane.origin, 60);
+        data[63] = Math.max(0.01, planeSize);
+        data.set(constructionPlane.normal, 64);
+        if (startPoint) {
+            data[68] = startPoint.x;
+            data[69] = startPoint.y;
+            data[70] = 1;
+        }
         this.device.queue.writeBuffer(buffer, 0, data);
     }
 
@@ -569,64 +586,3 @@ export class BrushPlacementManager {
         });
     }
 }
-
-const createSourcePointBuffer = (
-    device: GPUDevice,
-    sourcePoints: Vec2[],
-): GPUBuffer => {
-    const data = new Float32Array(Math.max(1, sourcePoints.length) * SOURCE_POINT_FLOATS);
-    for (let index = 0; index < sourcePoints.length; index++) {
-        const offset = index * SOURCE_POINT_FLOATS;
-        data[offset] = sourcePoints[index].x;
-        data[offset + 1] = sourcePoints[index].y;
-    }
-
-    const buffer = createBuffer(
-        device,
-        data.byteLength,
-        GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        "paint brush source points",
-    );
-    device.queue.writeBuffer(buffer, 0, data);
-    return buffer;
-};
-
-const ribbonSegmentCount = (ribbon: RenderRibbon): number => {
-    if (ribbon.vertices.length < 2) return 0;
-    return ribbon.closed ? ribbon.vertices.length : ribbon.vertices.length - 1;
-};
-
-const createBuffer = (
-    device: GPUDevice,
-    size: number,
-    usage: GPUBufferUsageFlags,
-    label: string,
-): GPUBuffer => device.createBuffer({
-    label,
-    size: Math.max(16, alignTo(size, 16)),
-    usage,
-});
-
-const alignTo = (value: number, alignment: number): number => (
-    Math.ceil(value / alignment) * alignment
-);
-
-const destroyBuffers = (buffers: GPUBuffer[]) => {
-    for (const buffer of buffers) {
-        buffer.destroy();
-    }
-};
-
-const createLoggedShaderModule = (
-    device: GPUDevice,
-    label: string,
-    code: string,
-): GPUShaderModule => {
-    const module = device.createShaderModule({ label, code });
-    void module.getCompilationInfo().then(info => {
-        for (const message of info.messages) {
-            console.warn(`[${label}] ${message.type}: ${message.message} (line ${message.lineNum})`);
-        }
-    });
-    return module;
-};

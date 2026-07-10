@@ -1,251 +1,3 @@
-const MIN_DEPTH: f32 = 0.06;
-
-struct PlacementUniforms {
-    view_proj: mat4x4f,
-    view_proj_inv: mat4x4f,
-    view_inv: mat4x4f,
-    pointer: vec4f,
-    viewport_counts: vec4f,
-};
-
-struct RibbonTarget {
-    start: u32,
-    rows: u32,
-    closed: u32,
-    _pad: u32,
-};
-
-struct RibbonVertex {
-    position_u: vec4f,
-    side: vec4f,
-};
-
-struct PlacementResult {
-    center: vec4f,
-    normal: vec4f,
-    tangent: vec4f,
-    bitangent: vec4f,
-};
-
-struct Ray {
-    origin: vec3f,
-    direction: vec3f,
-};
-
-struct TriangleHit {
-    hit: f32,
-    distance: f32,
-    normal: vec3f,
-};
-
-@group(0) @binding(0) var<uniform> placement_uniforms: PlacementUniforms;
-@group(0) @binding(1) var<storage, read> target_vertices: array<RibbonVertex>;
-@group(0) @binding(2) var<storage, read> target_infos: array<RibbonTarget>;
-@group(0) @binding(3) var<storage, read> source_points: array<vec4f>;
-@group(0) @binding(4) var<storage, read_write> placement_results: array<PlacementResult>;
-@group(0) @binding(5) var<storage, read_write> placed_vertices: array<RibbonVertex>;
-@group(0) @binding(6) var<storage, read_write> placed_meta: array<vec4u>;
-
-fn unproject_ndc(point: vec3f) -> vec3f {
-    let world = placement_uniforms.view_proj_inv * vec4f(point, 1.0);
-    return world.xyz / max(abs(world.w), 0.000001) * sign(world.w);
-}
-
-fn make_ray(point: vec2f) -> Ray {
-    let near = unproject_ndc(vec3f(point, -1.0));
-    let far = unproject_ndc(vec3f(point, 1.0));
-    return Ray(
-        placement_uniforms.view_inv[3].xyz,
-        normalize(far - near),
-    );
-}
-
-fn view_forward() -> vec3f {
-    return make_ray(vec2f(0.0)).direction;
-}
-
-fn default_center(ray: Ray) -> vec3f {
-    let forward = view_forward();
-    let depth = max(MIN_DEPTH, dot(-ray.origin, forward));
-    let denominator = dot(ray.direction, forward);
-    if (abs(denominator) <= 0.000001) {
-        return ray.origin + forward * depth;
-    }
-    return ray.origin + ray.direction * (depth / denominator);
-}
-
-fn ribbon_row(ribbon_info: RibbonTarget, row: u32) -> RibbonVertex {
-    return target_vertices[ribbon_info.start + row];
-}
-
-fn next_target_row(row: u32, rows: u32) -> u32 {
-    if (row + 1u >= rows) {
-        return 0u;
-    }
-    return row + 1u;
-}
-
-fn intersect_triangle(ray: Ray, a: vec3f, b: vec3f, c: vec3f) -> TriangleHit {
-    let edge1 = b - a;
-    let edge2 = c - a;
-    let h = cross(ray.direction, edge2);
-    let determinant = dot(edge1, h);
-    if (abs(determinant) <= 0.000001) {
-        return TriangleHit(0.0, 0.0, vec3f(0.0, 0.0, 1.0));
-    }
-
-    let inverse_determinant = 1.0 / determinant;
-    let s = ray.origin - a;
-    let u = inverse_determinant * dot(s, h);
-    if (u < 0.0 || u > 1.0) {
-        return TriangleHit(0.0, 0.0, vec3f(0.0, 0.0, 1.0));
-    }
-
-    let q = cross(s, edge1);
-    let v = inverse_determinant * dot(ray.direction, q);
-    if (v < 0.0 || u + v > 1.0) {
-        return TriangleHit(0.0, 0.0, vec3f(0.0, 0.0, 1.0));
-    }
-
-    let distance = inverse_determinant * dot(edge2, q);
-    if (distance <= 0.000001) {
-        return TriangleHit(0.0, 0.0, vec3f(0.0, 0.0, 1.0));
-    }
-
-    var normal = normalize(cross(edge1, edge2));
-    if (dot(normal, ray.direction) > 0.0) {
-        normal = -normal;
-    }
-    return TriangleHit(1.0, distance, normal);
-}
-
-fn target_segment_hit(ray: Ray, ribbon_info: RibbonTarget, row: u32, best_distance: f32) -> TriangleHit {
-    let next_row = next_target_row(row, ribbon_info.rows);
-    let a_vertex = ribbon_row(ribbon_info, row);
-    let b_vertex = ribbon_row(ribbon_info, next_row);
-    let a0 = a_vertex.position_u.xyz - a_vertex.side.xyz;
-    let a1 = a_vertex.position_u.xyz + a_vertex.side.xyz;
-    let b0 = b_vertex.position_u.xyz - b_vertex.side.xyz;
-    let b1 = b_vertex.position_u.xyz + b_vertex.side.xyz;
-    let first = intersect_triangle(ray, a0, b0, b1);
-    let second = intersect_triangle(ray, a0, b1, a1);
-
-    var best = TriangleHit(0.0, best_distance, vec3f(0.0, 0.0, 1.0));
-    if (first.hit > 0.5 && first.distance < best.distance) {
-        best = first;
-    }
-    if (second.hit > 0.5 && second.distance < best.distance) {
-        best = second;
-    }
-    return best;
-}
-
-fn snapped_hit(ray: Ray) -> TriangleHit {
-    let target_count = u32(max(placement_uniforms.viewport_counts.z, 0.0));
-    var best = TriangleHit(0.0, 1000000000.0, vec3f(0.0, 0.0, 1.0));
-    for (var target_index = 0u; target_index < target_count; target_index++) {
-        let ribbon_info = target_infos[target_index];
-        if (ribbon_info.rows < 2u) {
-            continue;
-        }
-
-        let segment_count = select(ribbon_info.rows - 1u, ribbon_info.rows, ribbon_info.closed != 0u);
-        for (var row = 0u; row < segment_count; row++) {
-            let hit = target_segment_hit(ray, ribbon_info, row, best.distance);
-            if (hit.hit > 0.5 && hit.distance < best.distance) {
-                best = hit;
-            }
-        }
-    }
-    return best;
-}
-
-fn plane_point(ray: Ray, center: vec3f, normal: vec3f) -> vec3f {
-    let denominator = dot(ray.direction, normal);
-    if (abs(denominator) <= 0.000001) {
-        return center;
-    }
-
-    let distance = dot(center - ray.origin, normal) / denominator;
-    if (distance <= 0.000001) {
-        return center;
-    }
-    return ray.origin + ray.direction * distance;
-}
-
-fn half_width_axis(center: vec3f, normal: vec3f, point: vec2f, offset: vec2f) -> vec3f {
-    let ray = make_ray(point + offset);
-    return plane_point(ray, center, normal) - center;
-}
-
-fn normal_plane_axis(preferred: vec3f, normal: vec3f, fallback: vec3f) -> vec3f {
-    let preferred_axis = preferred - normal * dot(preferred, normal);
-    let preferred_length = length(preferred_axis);
-    if (preferred_length > 0.000001) {
-        return preferred_axis / preferred_length;
-    }
-
-    let fallback_axis = fallback - normal * dot(fallback, normal);
-    let fallback_length = length(fallback_axis);
-    if (fallback_length > 0.000001) {
-        return fallback_axis / fallback_length;
-    }
-
-    let view_right = placement_uniforms.view_inv[0].xyz;
-    let view_axis = view_right - normal * dot(view_right, normal);
-    let view_length = length(view_axis);
-    if (view_length > 0.000001) {
-        return view_axis / view_length;
-    }
-
-    let world_x = vec3f(1.0, 0.0, 0.0) - normal * normal.x;
-    let world_x_length = length(world_x);
-    if (world_x_length > 0.000001) {
-        return world_x / world_x_length;
-    }
-
-    let world_z = vec3f(0.0, 0.0, 1.0) - normal * normal.z;
-    let world_z_length = length(world_z);
-    if (world_z_length > 0.000001) {
-        return world_z / world_z_length;
-    }
-
-    return vec3f(0.0, 1.0, 0.0);
-}
-
-fn resolve_placement(point: vec2f) -> PlacementResult {
-    let ray = make_ray(point);
-    var center = default_center(ray);
-    var normal = -view_forward();
-    var snapped = 0.0;
-
-    let hit = snapped_hit(ray);
-    if (hit.hit > 0.5) {
-        center = ray.origin + ray.direction * hit.distance;
-        normal = hit.normal;
-        snapped = 1.0;
-    }
-
-    let viewport = max(placement_uniforms.viewport_counts.xy, vec2f(1.0));
-    let brush_width = max(placement_uniforms.pointer.z, 1.0);
-    let guide_plane_normal = -view_forward();
-    let screen_tangent = half_width_axis(center, guide_plane_normal, point, vec2f(brush_width / viewport.x, 0.0));
-    let screen_bitangent = half_width_axis(center, guide_plane_normal, point, vec2f(0.0, brush_width / viewport.y));
-    let guide_radius = max(max(length(screen_tangent), length(screen_bitangent)), 0.000001);
-    let tangent_direction = normal_plane_axis(screen_tangent, normal, screen_bitangent);
-    let bitangent_direction = normalize(cross(normal, tangent_direction));
-    let tangent = tangent_direction * guide_radius;
-    let bitangent = bitangent_direction * guide_radius;
-    let depth = dot(center - ray.origin, view_forward());
-
-    return PlacementResult(
-        vec4f(center, placement_uniforms.pointer.w),
-        vec4f(normal, snapped),
-        vec4f(tangent, depth),
-        vec4f(bitangent, 0.0),
-    );
-}
-
 fn source_count() -> u32 {
     return u32(max(placement_uniforms.viewport_counts.w, 0.0));
 }
@@ -272,6 +24,290 @@ fn source_point(index: u32, rows: u32, closed: bool) -> vec2f {
         return source_points[0].xy;
     }
     return source_points[rows - 1u].xy;
+}
+
+fn direct_hit_at(index: u32) -> bool {
+    return placement_results[index].normal.w == PLACEMENT_KIND_SURFACE;
+}
+
+fn source_segment_distance_px(a: vec2f, b: vec2f) -> f32 {
+    let viewport = max(placement_uniforms.viewport_counts.xy, vec2f(1.0));
+    return max(length((b - a) * viewport * 0.5), 0.000001);
+}
+
+fn next_source_index(index: u32, rows: u32, closed: bool) -> u32 {
+    if (index + 1u < rows) {
+        return index + 1u;
+    }
+    if (closed) {
+        return 0u;
+    }
+    return index;
+}
+
+fn previous_source_index(index: u32, rows: u32, closed: bool) -> u32 {
+    if (index > 0u) {
+        return index - 1u;
+    }
+    if (closed) {
+        return rows - 1u;
+    }
+    return index;
+}
+
+fn find_hit_neighbors(index: u32, rows: u32, closed: bool) -> HitNeighbors {
+    var previous = index;
+    var next = index;
+    var has_previous = 0u;
+    var has_next = 0u;
+
+    if (closed) {
+        for (var step = 1u; step < rows; step++) {
+            let candidate = (index + rows - step) % rows;
+            if (direct_hit_at(candidate)) {
+                previous = candidate;
+                has_previous = 1u;
+                break;
+            }
+        }
+        for (var step = 1u; step < rows; step++) {
+            let candidate = (index + step) % rows;
+            if (direct_hit_at(candidate)) {
+                next = candidate;
+                has_next = 1u;
+                break;
+            }
+        }
+    } else {
+        var candidate = index;
+        loop {
+            if (candidate == 0u) {
+                break;
+            }
+            candidate -= 1u;
+            if (direct_hit_at(candidate)) {
+                previous = candidate;
+                has_previous = 1u;
+                break;
+            }
+        }
+
+        candidate = index;
+        loop {
+            if (candidate + 1u >= rows) {
+                break;
+            }
+            candidate += 1u;
+            if (direct_hit_at(candidate)) {
+                next = candidate;
+                has_next = 1u;
+                break;
+            }
+        }
+    }
+
+    return HitNeighbors(previous, next, has_previous, has_next);
+}
+
+fn forward_arc_distance(start_index: u32, end_index: u32, rows: u32, closed: bool) -> f32 {
+    if (start_index == end_index) {
+        return 0.0;
+    }
+
+    var total = 0.0;
+    var current = start_index;
+    for (var step = 0u; step < rows; step++) {
+        let next = next_source_index(current, rows, closed);
+        if (next == current) {
+            break;
+        }
+        total += source_segment_distance_px(
+            source_point(current, rows, closed),
+            source_point(next, rows, closed),
+        );
+        current = next;
+        if (current == end_index) {
+            break;
+        }
+    }
+    return total;
+}
+
+fn plane_derivative_before(index: u32, rows: u32, closed: bool) -> PlaneDerivative {
+    let previous = previous_source_index(index, rows, closed);
+    if (previous == index || !direct_hit_at(previous)) {
+        return PlaneDerivative(vec3f(0.0), vec3f(0.0));
+    }
+
+    let current_plane = placement_results[index];
+    let previous_plane = placement_results[previous];
+    let distance_px = source_segment_distance_px(
+        source_point(previous, rows, closed),
+        source_point(index, rows, closed),
+    );
+    let origin_derivative = (current_plane.center.xyz - previous_plane.center.xyz) / distance_px;
+    var previous_normal = previous_plane.normal.xyz;
+    if (dot(previous_normal, current_plane.normal.xyz) < 0.0) {
+        previous_normal = -previous_normal;
+    }
+    var normal_derivative = (current_plane.normal.xyz - previous_normal) / distance_px;
+    normal_derivative -= current_plane.normal.xyz * dot(normal_derivative, current_plane.normal.xyz);
+    return PlaneDerivative(origin_derivative, normal_derivative);
+}
+
+fn plane_derivative_after(index: u32, rows: u32, closed: bool) -> PlaneDerivative {
+    let next = next_source_index(index, rows, closed);
+    if (next == index || !direct_hit_at(next)) {
+        return PlaneDerivative(vec3f(0.0), vec3f(0.0));
+    }
+
+    let current_plane = placement_results[index];
+    let next_plane = placement_results[next];
+    let distance_px = source_segment_distance_px(
+        source_point(index, rows, closed),
+        source_point(next, rows, closed),
+    );
+    let origin_derivative = (next_plane.center.xyz - current_plane.center.xyz) / distance_px;
+    var next_normal = next_plane.normal.xyz;
+    if (dot(next_normal, current_plane.normal.xyz) < 0.0) {
+        next_normal = -next_normal;
+    }
+    var normal_derivative = (next_normal - current_plane.normal.xyz) / distance_px;
+    normal_derivative -= current_plane.normal.xyz * dot(normal_derivative, current_plane.normal.xyz);
+    return PlaneDerivative(origin_derivative, normal_derivative);
+}
+
+fn clamp_vector_length(value: vec3f, maximum: f32) -> vec3f {
+    let value_length = length(value);
+    if (value_length <= maximum || value_length <= 0.000001) {
+        return value;
+    }
+    return value * (maximum / value_length);
+}
+
+fn hermite_vec3(
+    a: vec3f,
+    tangent_a: vec3f,
+    b: vec3f,
+    tangent_b: vec3f,
+    u: f32,
+) -> vec3f {
+    let u2 = u * u;
+    let u3 = u2 * u;
+    let h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
+    let h10 = u3 - 2.0 * u2 + u;
+    let h01 = -2.0 * u3 + 3.0 * u2;
+    let h11 = u3 - u2;
+    return h00 * a + h10 * tangent_a + h01 * b + h11 * tangent_b;
+}
+
+fn resolve_surface_stroke_placement(
+    point: vec2f,
+    index: u32,
+    rows: u32,
+    closed: bool,
+) -> PlacementResult {
+    if (direct_hit_at(index)) {
+        return placement_results[index];
+    }
+
+    let neighbors = find_hit_neighbors(index, rows, closed);
+    if (neighbors.has_previous != 0u && neighbors.has_next != 0u) {
+        let a = placement_results[neighbors.previous];
+        let b = placement_results[neighbors.next];
+        if (neighbors.previous == neighbors.next) {
+            return resolve_plane_placement(point, a.center.xyz, a.normal.xyz, PLACEMENT_KIND_BRIDGE);
+        }
+
+        let distance_from_a = forward_arc_distance(neighbors.previous, index, rows, closed);
+        let distance_to_b = forward_arc_distance(index, neighbors.next, rows, closed);
+        let gap_distance = max(distance_from_a + distance_to_b, 0.000001);
+        let u = clamp(distance_from_a / gap_distance, 0.0, 1.0);
+        let derivative_a = plane_derivative_before(neighbors.previous, rows, closed);
+        var derivative_b = plane_derivative_after(neighbors.next, rows, closed);
+        var normal_b = b.normal.xyz;
+        if (dot(a.normal.xyz, normal_b) < 0.0) {
+            normal_b = -normal_b;
+            derivative_b.normal = -derivative_b.normal;
+        }
+
+        let chord_length = length(b.center.xyz - a.center.xyz);
+        let tangent_limit = max(chord_length * 1.5, 0.001);
+        let origin = hermite_vec3(
+            a.center.xyz,
+            clamp_vector_length(derivative_a.origin * gap_distance, tangent_limit),
+            b.center.xyz,
+            clamp_vector_length(derivative_b.origin * gap_distance, tangent_limit),
+            u,
+        );
+        let normal_candidate = hermite_vec3(
+            a.normal.xyz,
+            clamp_vector_length(derivative_a.normal * gap_distance, 1.25),
+            normal_b,
+            clamp_vector_length(derivative_b.normal * gap_distance, 1.25),
+            u,
+        );
+        var normal = normalize(mix(a.normal.xyz, normal_b, u));
+        if (length(normal_candidate) > 0.000001) {
+            normal = normalize(normal_candidate);
+        }
+        return resolve_plane_placement(point, origin, normal, PLACEMENT_KIND_BRIDGE);
+    }
+
+    if (neighbors.has_previous != 0u) {
+        let plane = placement_results[neighbors.previous];
+        return resolve_plane_placement(point, plane.center.xyz, plane.normal.xyz, PLACEMENT_KIND_BRIDGE);
+    }
+    if (neighbors.has_next != 0u) {
+        let plane = placement_results[neighbors.next];
+        return resolve_plane_placement(point, plane.center.xyz, plane.normal.xyz, PLACEMENT_KIND_BRIDGE);
+    }
+    return resolve_view_placement(point);
+}
+
+fn resolve_stroke_placement(
+    point: vec2f,
+    index: u32,
+    rows: u32,
+    closed: bool,
+) -> PlacementResult {
+    let mode = placement_mode();
+    if (mode < PLACEMENT_MODE_START_DEPTH) {
+        return resolve_view_placement(point);
+    }
+    if (mode < PLACEMENT_MODE_START_PLANE) {
+        let anchor = placement_results[0];
+        if (!direct_hit_at(0u)) {
+            return resolve_view_placement(point);
+        }
+        return resolve_plane_placement(
+            point,
+            anchor.center.xyz,
+            -view_forward(),
+            PLACEMENT_KIND_START_DEPTH,
+        );
+    }
+    if (mode < PLACEMENT_MODE_SURFACE) {
+        let anchor = placement_results[0];
+        if (!direct_hit_at(0u)) {
+            return resolve_view_placement(point);
+        }
+        return resolve_plane_placement(
+            point,
+            anchor.center.xyz,
+            anchor.normal.xyz,
+            PLACEMENT_KIND_START_PLANE,
+        );
+    }
+    if (mode < PLACEMENT_MODE_CONSTRUCTION_PLANE) {
+        return resolve_surface_stroke_placement(point, index, rows, closed);
+    }
+    return resolve_plane_placement(
+        point,
+        placement_uniforms.construction_origin.xyz,
+        placement_uniforms.construction_normal.xyz,
+        PLACEMENT_KIND_CONSTRUCTION_PLANE,
+    );
 }
 
 fn stroke_side_offset(index: u32, rows: u32, closed: bool) -> vec2f {
@@ -308,16 +344,40 @@ fn stroke_side_offset(index: u32, rows: u32, closed: bool) -> vec2f {
 @compute @workgroup_size(1)
 fn compute_hover() {
     if (placement_uniforms.pointer.w <= 0.5) {
-        placement_results[0] = PlacementResult(
-            vec4f(0.0),
-            vec4f(0.0),
-            vec4f(0.0),
-            vec4f(0.0),
-        );
+        placement_results[0] = zero_placement();
         return;
     }
 
-    placement_results[0] = resolve_placement(placement_uniforms.pointer.xy);
+    placement_results[0] = resolve_hover_placement(placement_uniforms.pointer.xy);
+}
+
+@compute @workgroup_size(64)
+fn compute_direct_stroke(@builtin(global_invocation_id) global_id: vec3u) {
+    let count = source_count();
+    if (count < 2u) {
+        return;
+    }
+
+    let closed = stroke_closed(count);
+    let rows = row_count(count, closed);
+    if (global_id.x >= rows) {
+        return;
+    }
+
+    let mode = placement_mode();
+    let index = global_id.x;
+    if (
+        mode < PLACEMENT_MODE_START_DEPTH
+        || mode >= PLACEMENT_MODE_CONSTRUCTION_PLANE
+        || (mode < PLACEMENT_MODE_SURFACE && index != 0u)
+    ) {
+        placement_results[index] = zero_placement();
+        return;
+    }
+
+    placement_results[index] = resolve_direct_surface_placement(
+        source_point(index, rows, closed),
+    );
 }
 
 @compute @workgroup_size(64)
@@ -341,7 +401,7 @@ fn compute_stroke(@builtin(global_invocation_id) global_id: vec3u) {
 
     let index = global_id.x;
     let point = source_point(index, rows, closed);
-    let placement = resolve_placement(point);
+    let placement = resolve_stroke_placement(point, index, rows, closed);
     let side_ray = make_ray(point + stroke_side_offset(index, rows, closed));
     let side_point = plane_point(side_ray, placement.center.xyz, placement.normal.xyz);
     let u = select(
@@ -352,6 +412,6 @@ fn compute_stroke(@builtin(global_invocation_id) global_id: vec3u) {
 
     placed_vertices[index] = RibbonVertex(
         vec4f(placement.center.xyz, u),
-        vec4f(side_point - placement.center.xyz, 0.0),
+        vec4f(side_point - placement.center.xyz, placement.normal.w),
     );
 }
