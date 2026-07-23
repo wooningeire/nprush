@@ -3,7 +3,6 @@ import { PaintModelingState } from "./PaintModelingState.svelte.ts";
 import { BrushPlacementMode } from "./types.ts";
 import { RIBBON_RENDER_COLUMNS } from "./state/constants.ts";
 import type {
-    PaintView,
     PaintRibbon,
     RenderPrimitive,
     RenderRibbon,
@@ -20,26 +19,46 @@ const drawStroke = (state: PaintModelingState, a: Vec2, b: Vec2) => {
 };
 
 describe("PaintModelingState stroke-owned ribbons", () => {
-    it("uses viewport aspect when calibrating paint-view rays", () => {
-        const state = new PaintModelingState();
+    it("captures viewport aspect in transient stroke projections", () => {
+        const wideState = new PaintModelingState();
+        const tallState = new PaintModelingState();
 
-        const wideView = state.saveCurrentView(1200, 600, false);
-        const tallView = state.saveCurrentView(600, 1200, false);
+        wideState.beginStroke({ x: 0, y: 0 }, 1200, 600);
+        tallState.beginStroke({ x: 0, y: 0 }, 600, 1200);
+        const wideProjection = wideState.strokePlacementProjection();
+        const tallProjection = tallState.strokePlacementProjection();
 
-        expect(projectedSpanAspect(wideView.viewProjInvMat)).toBeCloseTo(2, 5);
-        expect(projectedSpanAspect(tallView.viewProjInvMat)).toBeCloseTo(0.5, 5);
+        expect(wideProjection).not.toBeNull();
+        expect(tallProjection).not.toBeNull();
+        expect(projectedSpanAspect(wideProjection!.viewProjInvMat)).toBeCloseTo(2, 5);
+        expect(projectedSpanAspect(tallProjection!.viewProjInvMat)).toBeCloseTo(0.5, 5);
     });
 
-    it("treats resized paint views as a different calibrated projection", () => {
+    it("holds the source projection stable for the active stroke", () => {
         const state = new PaintModelingState();
 
-        state.saveCurrentView(1200, 600, false);
-        expect(state.isCameraAtActiveView).toBe(true);
+        state.beginStroke({ x: -0.2, y: 0 }, 1200, 600);
+        const projection = state.strokePlacementProjection();
+        const viewProjInvMat = [...projection!.viewProjInvMat];
 
         state.viewportWidth = 600;
-        state.viewportHeight = 600;
+        state.viewportHeight = 1200;
+        state.orbit.turn({ x: 24, y: 12 });
 
-        expect(state.isCameraAtActiveView).toBe(false);
+        expect(state.strokePlacementProjection()).toBe(projection);
+        expect(state.strokePlacementProjection()?.width).toBe(1200);
+        expect(state.strokePlacementProjection()?.height).toBe(600);
+        expect(state.strokePlacementProjection()?.viewProjInvMat).toEqual(viewProjInvMat);
+    });
+
+    it("does not persist projection snapshots as scene objects", () => {
+        const state = new PaintModelingState();
+        drawStroke(state, { x: -0.14, y: 0 }, { x: 0.14, y: 0 });
+
+        expect(state.strokePlacementProjection()).toBeNull();
+        expect(state.strokes[0]).not.toHaveProperty("sourceViewId");
+        expect(state).not.toHaveProperty("views");
+        expect(state).not.toHaveProperty("activeViewId");
     });
 
     it("creates an oriented-vertex ribbon for a brushstroke", () => {
@@ -180,36 +199,29 @@ describe("PaintModelingState stroke-owned ribbons", () => {
         expect(primitives.filter(isRenderTriangle)).toHaveLength(0);
     });
 
-    it("undoes a paint stroke together with auto-created object and view", () => {
+    it("undoes a paint stroke together with its auto-created object", () => {
         const state = new PaintModelingState();
         drawStroke(state, { x: -0.14, y: 0 }, { x: 0.14, y: 0 });
 
         expect(state.objects).toHaveLength(1);
-        expect(state.views).toHaveLength(1);
         expect(state.strokes).toHaveLength(1);
 
         expect(state.undo()).toBe(true);
 
         expect(state.objects).toHaveLength(0);
-        expect(state.views).toHaveLength(0);
         expect(state.strokes).toHaveLength(0);
         expect(state.activeObjectId).toBeNull();
-        expect(state.activeViewId).toBeNull();
     });
 
-    it("deletes objects and views with their ribbons", () => {
+    it("deletes objects with their ribbons", () => {
         const state = new PaintModelingState();
         state.addObject("First");
         const objectId = state.activeObjectId!;
         drawStroke(state, { x: -0.14, y: 0 }, { x: 0.14, y: 0 });
-        const viewId = state.activeViewId!;
-
-        expect(state.deleteView(viewId)).toBe(true);
-        expect(state.views).toHaveLength(0);
-        expect(state.strokes).toHaveLength(0);
 
         state.addObject("Second");
         drawStroke(state, { x: -0.1, y: 0 }, { x: 0.1, y: 0 });
+        expect(state.strokes).toHaveLength(2);
         expect(state.deleteObject(objectId)).toBe(true);
         expect(state.objects.some(object => object.name === "First")).toBe(false);
         expect(state.strokes).toHaveLength(1);

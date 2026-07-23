@@ -354,7 +354,7 @@ export class BrushPlacementManager {
 
     async buildPlacedRibbonFromSourcePoints({
         sourcePoints,
-        view,
+        sourceProjection,
         brushWidth,
         placementMode,
         constructionPlane,
@@ -402,19 +402,20 @@ export class BrushPlacementManager {
 
         this.writeUniforms(
             uniformBuffer,
-            view.viewProjMat,
-            view.viewProjInvMat,
-            view.viewInvMat,
+            sourceProjection.viewProjMat,
+            sourceProjection.viewProjInvMat,
+            sourceProjection.viewInvMat,
             sourcePoints[0],
             brushWidth,
-            view.width,
-            view.height,
+            sourceProjection.width,
+            sourceProjection.height,
             placementModeUsesTargets(placementMode) ? this.targetCount : 0,
             sourcePoints.length,
             placementMode,
             constructionPlane,
             true,
-            Math.max(0.35, view.radius * 0.75),
+            // Batch placement does not draw the hover guide, so its guide-only radius is unused.
+            1,
             null,
         );
 

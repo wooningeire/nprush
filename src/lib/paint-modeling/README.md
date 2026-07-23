@@ -4,7 +4,7 @@ Paint modeling stores brushstrokes as continuous ribbon surfaces. A stroke owns 
 
 ## Core State
 
-A saved view is a calibrated camera. It records the camera matrices and viewport size used when the stroke was drawn.
+An active stroke owns a transient `ProjectionSnapshot`. It freezes the camera matrices and viewport size used to turn the 2D source path into world-space ribbon vertices. The snapshot is discarded after commit.
 
 A paint object owns strokes through `PaintStroke.objectId`. It no longer owns charts.
 
@@ -14,7 +14,6 @@ A paint stroke stores:
 type PaintStroke = {
     id: string,
     objectId: string,
-    sourceViewId: string,
     layerId: string,
     sourcePoints: Vec2[],
     ribbon: {
@@ -46,7 +45,7 @@ The construction-plane editor exposes camera-forward view depth and a normalized
 
 ## Stroke Commit
 
-On pointer up, the draft path is sampled into a 2D source path. GPU placement emits one oriented ribbon vertex per centerline sample for every placement mode. The CPU reads only the completed sparse ribbon. A view-plane CPU path remains as an error fallback.
+On pointer down, the state captures the current projection for that stroke. On pointer up, the draft path is sampled into a 2D source path. GPU placement emits one oriented ribbon vertex per centerline sample for every placement mode. The CPU reads only the completed sparse ribbon. A view-plane CPU path remains as an error fallback.
 
 Closed source paths drop the duplicated closing source point and mark the ribbon as closed. The GPU wraps the last oriented vertex back to the first one when it expands the ribbon.
 
@@ -66,6 +65,6 @@ There is no committed CPU ribbon picking path. Surface placement expands committ
 
 ## Current Boundaries
 
-View-claim locking is deferred. Strokes remember their source view, but up to three claimed views are not implemented yet.
+There are no saved-view scene objects. `View` is only a brush placement mode. A future pinning feature should introduce explicit view records and stroke assignments instead of exposing transient projection snapshots.
 
 Billboard paint is not a committed surface mode. The renderer keeps generic stroke primitives for guide and legacy render paths, but committed paint strokes are ribbons.

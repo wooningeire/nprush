@@ -13,21 +13,12 @@ export type PaintLayer = {
     visible: boolean,
 };
 
-export type PaintView = {
-    id: string,
-    name: string,
-    order: number,
-    long: number,
-    lat: number,
-    radius: number,
-    offset: Vec3,
+export type ProjectionSnapshot = {
     width: number,
     height: number,
     viewProjMat: number[],
     viewProjInvMat: number[],
-    viewMat: number[],
     viewInvMat: number[],
-    createdAt: number,
 };
 
 export type BrushStyle = {
@@ -77,7 +68,6 @@ export type PaintStroke = {
     id: string,
     objectId: string,
     layerId?: string,
-    sourceViewId: string,
     sourcePoints: Vec2[],
     ribbon: PaintRibbon,
     style: BrushStyle,

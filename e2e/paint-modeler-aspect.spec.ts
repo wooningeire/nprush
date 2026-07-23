@@ -60,9 +60,16 @@ test("paint modeler projection follows viewport aspect without layout overflow",
 const browserProjectionAspects = async (page: Page): Promise<ProjectionAspects> => {
     return page.evaluate(async () => {
         const { PaintModelingState } = await import("/src/lib/paint-modeling/PaintModelingState.svelte.ts");
-        const state = new PaintModelingState();
-        const wideView = state.saveCurrentView(1200, 600, false);
-        const tallView = state.saveCurrentView(600, 1200, false);
+        const wideState = new PaintModelingState();
+        const tallState = new PaintModelingState();
+
+        wideState.beginStroke({ x: 0, y: 0 }, 1200, 600);
+        tallState.beginStroke({ x: 0, y: 0 }, 600, 1200);
+        const wideProjection = wideState.strokePlacementProjection();
+        const tallProjection = tallState.strokePlacementProjection();
+        if (!wideProjection || !tallProjection) {
+            throw new Error("Stroke projection snapshot missing");
+        }
 
         const distance3 = (a: [number, number, number], b: [number, number, number]): number => {
             return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
@@ -94,8 +101,8 @@ const browserProjectionAspects = async (page: Page): Promise<ProjectionAspects> 
         };
 
         return {
-            wide: projectedSpanAspect(wideView.viewProjInvMat),
-            tall: projectedSpanAspect(tallView.viewProjInvMat),
+            wide: projectedSpanAspect(wideProjection.viewProjInvMat),
+            tall: projectedSpanAspect(tallProjection.viewProjInvMat),
         };
     });
 };

@@ -9,21 +9,15 @@ import {
     createBasePaintLayer,
     createPaintLayer,
 } from "./state/paintLayers.ts";
-import { reorderPaintLayers, reorderPaintObjects, reorderPaintViews } from "./state/reorder.ts";
+import { reorderPaintLayers, reorderPaintObjects } from "./state/reorder.ts";
 import { makeId } from "./state/sceneData.ts";
-import {
-    cameraMovedFromPaintView,
-    capturePaintView,
-    deletePaintObject,
-    deletePaintView,
-    selectPaintView,
-    viewHasAuthoredContent,
-} from "./state/sceneLifecycle.ts";
+import { deletePaintObject } from "./state/sceneLifecycle.ts";
 import {
     capturePaintSceneSnapshot,
     restorePaintSceneSnapshot,
     type PaintSceneSnapshot,
 } from "./state/sceneHistory.ts";
+import { captureProjectionSnapshot } from "./state/projectionSnapshot.ts";
 import {
     buildDraftPaintRenderSegments,
     buildPaintRenderSegments,
@@ -51,8 +45,8 @@ import {
     type PaintObject,
     type PaintRibbon,
     type PaintStroke,
-    type PaintView,
     type PaintRenderOptions,
+    type ProjectionSnapshot,
     type RenderPrimitive,
     type Vec2,
     type Vec3,
@@ -68,12 +62,10 @@ export class PaintModelingState {
     viewportWidth = $state(1);
     viewportHeight = $state(1);
 
-    views = $state<PaintView[]>([]);
     objects = $state<PaintObject[]>([]);
     paintLayers = $state<PaintLayer[]>([createBasePaintLayer()]);
     strokes = $state<PaintStroke[]>([]);
     activeObjectId = $state<string | null>(null);
-    activeViewId = $state<string | null>(null);
     activePaintLayerId = $state(BASE_PAINT_LAYER_ID);
     brush = $state<BrushStyle>({ ...DEFAULT_BRUSH });
     brushPlacementMode = $state<BrushPlacementModeValue>(BrushPlacementMode.View);
@@ -82,7 +74,7 @@ export class PaintModelingState {
     undoStack = $state<PaintSceneSnapshot[]>([]);
     ribbonVersion = $state(0);
     private pendingStrokeUndoSnapshot: PaintSceneSnapshot | null = null;
-    private pendingStrokeView: PaintView | null = null;
+    private pendingStrokeProjection: ProjectionSnapshot | null = null;
     private undoGroup: { snapshot: PaintSceneSnapshot; dirty: boolean } | null = null;
 
     readonly orbit = new CameraOrbit();
@@ -96,8 +88,6 @@ export class PaintModelingState {
     });
 
     get activeObject(): PaintObject | null { return this.objects.find(object => object.id === this.activeObjectId) ?? null; }
-
-    get activeView(): PaintView | null { return this.views.find(view => view.id === this.activeViewId) ?? null; }
 
     get activePaintLayer(): PaintLayer | null {
         return this.paintLayers.find(layer => layer.id === this.activePaintLayerId)
@@ -117,24 +107,10 @@ export class PaintModelingState {
         ].join(":");
     }
 
-    get isCameraAtActiveView(): boolean {
-        const view = this.activeView;
-        return !!view
-            && !this.cameraMovedFrom(view)
-            && view.width === this.viewportWidth
-            && view.height === this.viewportHeight;
-    }
-
-    get currentViewName(): string {
-        if (this.isCameraAtActiveView) return this.activeView?.name ?? "No saved view";
-        return this.activeView ? "New view" : "No saved view";
-    }
-
     get canUndo(): boolean { return this.undoStack.length > 0; }
 
     addObject(name?: string, recordHistory = true) {
         if (recordHistory) this.recordUndoSnapshot();
-        this.ensureActiveView(this.viewportWidth, this.viewportHeight, false);
         const index = this.objects.length + 1;
         const object: PaintObject = {
             id: makeId("object"),
@@ -181,15 +157,6 @@ export class PaintModelingState {
         this.recordUndoSnapshot();
         this.objects = objects;
         this.ribbonVersion += 1;
-        return true;
-    }
-
-    reorderView(viewId: string, targetViewId: string): boolean {
-        const views = reorderPaintViews(this.views, viewId, targetViewId);
-        if (!views) return false;
-
-        this.recordUndoSnapshot();
-        this.views = views;
         return true;
     }
 
@@ -260,12 +227,11 @@ export class PaintModelingState {
         const object = this.activeObject;
         if (!object || object.locked || !object.visible) {
             this.pendingStrokeUndoSnapshot = null;
-            this.pendingStrokeView = null;
+            this.pendingStrokeProjection = null;
             return;
         }
 
-        this.ensureActiveView(width, height, false);
-        this.pendingStrokeView = this.activeView;
+        this.pendingStrokeProjection = this.currentProjectionSnapshot();
         this.draftStroke = [point];
         this.pendingStrokeUndoSnapshot = undoSnapshot;
     }
@@ -281,13 +247,20 @@ export class PaintModelingState {
 
     draftStrokeSourcePoints(): Vec2[] | null {
         const object = this.activeObject;
-        if (!this.draftStroke || this.draftStroke.length < 2 || !object || object.locked || !object.visible || !this.strokePlacementView()) {
+        if (
+            !this.draftStroke
+            || this.draftStroke.length < 2
+            || !object
+            || object.locked
+            || !object.visible
+            || !this.strokePlacementProjection()
+        ) {
             return null;
         }
         return samplePaintStrokeSpline(this.draftStroke);
     }
 
-    strokePlacementView(): PaintView | null { return this.pendingStrokeView ?? this.activeView; }
+    strokePlacementProjection(): ProjectionSnapshot | null { return this.pendingStrokeProjection; }
 
     finishStroke() {
         const result = planFinishedStroke({
@@ -295,7 +268,7 @@ export class PaintModelingState {
             pendingStrokeUndoSnapshot: this.pendingStrokeUndoSnapshot,
             undoSnapshot: this.pendingStrokeUndoSnapshot ?? this.captureSceneSnapshot(),
             object: this.activeObject,
-            view: this.pendingStrokeView ?? this.activeView,
+            sourceProjection: this.pendingStrokeProjection,
             brush: this.brush,
             nextPaintOrder: objectId => this.nextPaintOrder(objectId),
             paintLayerId: this.activePaintLayer?.id ?? BASE_PAINT_LAYER_ID,
@@ -303,7 +276,7 @@ export class PaintModelingState {
 
         this.draftStroke = null;
         this.pendingStrokeUndoSnapshot = null;
-        this.pendingStrokeView = null;
+        this.pendingStrokeProjection = null;
         if (result.kind === "discard") {
             if (result.restoreSnapshot) this.restoreSceneSnapshot(result.restoreSnapshot);
             return;
@@ -320,7 +293,7 @@ export class PaintModelingState {
             pendingStrokeUndoSnapshot: this.pendingStrokeUndoSnapshot,
             undoSnapshot: this.pendingStrokeUndoSnapshot ?? this.captureSceneSnapshot(),
             object: this.activeObject,
-            view: this.pendingStrokeView ?? this.activeView,
+            sourceProjection: this.pendingStrokeProjection,
             brush: this.brush,
             nextPaintOrder: objectId => this.nextPaintOrder(objectId),
             paintLayerId: this.activePaintLayer?.id ?? BASE_PAINT_LAYER_ID,
@@ -330,7 +303,7 @@ export class PaintModelingState {
 
         this.draftStroke = null;
         this.pendingStrokeUndoSnapshot = null;
-        this.pendingStrokeView = null;
+        this.pendingStrokeProjection = null;
         if (result.kind === "discard") {
             if (result.restoreSnapshot) this.restoreSceneSnapshot(result.restoreSnapshot);
             return false;
@@ -368,74 +341,10 @@ export class PaintModelingState {
         this.strokes = deletion.strokes;
         this.activeObjectId = deletion.activeObjectId;
         this.draftStroke = null;
-        this.pendingStrokeView = null;
+        this.pendingStrokeProjection = null;
         this.ribbonVersion += 1;
         return true;
     }
-
-    deleteActiveView(): boolean { return this.activeViewId ? this.deleteView(this.activeViewId) : false; }
-
-    deleteView(viewId: string): boolean {
-        const deletion = deletePaintView(
-            viewId,
-            this.views,
-            this.strokes,
-            this.activeViewId,
-        );
-        if (!deletion) return false;
-
-        this.recordUndoSnapshot();
-        this.views = deletion.views;
-        this.strokes = deletion.strokes;
-        this.activeViewId = null;
-        if (deletion.selectViewId) {
-            this.selectView(deletion.selectViewId);
-        }
-        this.draftStroke = null;
-        this.pendingStrokeView = null;
-        this.ribbonVersion += 1;
-        return true;
-    }
-
-    saveCurrentView(width = this.viewportWidth, height = this.viewportHeight, recordHistory = true): PaintView {
-        if (recordHistory) this.recordUndoSnapshot();
-        this.viewportWidth = Math.max(1, width);
-        this.viewportHeight = Math.max(1, height);
-        const view = this.captureCurrentView(`View ${this.views.length + 1}`, width, height);
-        this.views = [...this.views, view];
-        this.activeViewId = view.id;
-        return view;
-    }
-
-    selectView(viewId: string) {
-        const view = selectPaintView(this.views, this.orbit, viewId);
-        if (!view) return;
-        this.activeViewId = view.id;
-    }
-
-    ensureActiveView(width = this.viewportWidth, height = this.viewportHeight, recordHistory = true) {
-        this.viewportWidth = Math.max(1, width);
-        this.viewportHeight = Math.max(1, height);
-        const active = this.activeView;
-        if (active && !this.cameraMovedFrom(active)) {
-            if (active.width === this.viewportWidth && active.height === this.viewportHeight) return;
-            if (!viewHasAuthoredContent(active.id, this.strokes)) {
-                const refreshedView = this.captureCurrentView(active.name, this.viewportWidth, this.viewportHeight);
-                this.views = this.views.map(view => view.id === active.id
-                    ? {
-                        ...refreshedView,
-                        id: active.id,
-                        order: active.order,
-                        createdAt: active.createdAt,
-                    }
-                    : view);
-                return;
-            }
-        }
-        this.saveCurrentView(width, height, recordHistory);
-    }
-
-    cameraMovedFrom(view: PaintView): boolean { return cameraMovedFromPaintView(view, this.orbit); }
 
     buildRenderSegments(options: boolean | PaintRenderOptions = true): RenderPrimitive[] {
         return buildPaintRenderSegments(this.renderAssemblyContext(), options);
@@ -446,36 +355,27 @@ export class PaintModelingState {
     private renderAssemblyContext(): RenderAssemblyContext {
         return {
             objects: this.objects,
-            views: this.views,
             strokes: this.strokes,
             paintLayers: this.paintLayers,
-            renderView: this.currentEffectView(),
+            renderProjection: this.currentProjectionSnapshot(),
             activeObject: this.activeObject,
-            activeView: this.pendingStrokeView ?? this.activeView,
+            activeProjection: this.pendingStrokeProjection,
             draftStroke: this.draftStroke,
             brush: this.brush,
         };
     }
 
-    private currentEffectView(): PaintView | null {
-        const width = Math.max(1, this.viewportWidth);
-        const height = Math.max(1, this.viewportHeight);
-        const active = this.activeView;
-        if (active && !this.cameraMovedFrom(active) && active.width === width && active.height === height) {
-            return active;
-        }
-        return this.captureCurrentView("Interaction view", width, height);
-    }
-
-    private captureCurrentView(name: string, width: number, height: number): PaintView {
-        return capturePaintView(name, this.nextViewOrder(), width, height, this.orbit, this.camera);
+    private currentProjectionSnapshot(): ProjectionSnapshot {
+        return captureProjectionSnapshot(
+            this.viewportWidth,
+            this.viewportHeight,
+            this.camera,
+        );
     }
 
     private nextLayerIndex(): number { return this.objects.reduce((max, object) => Math.max(max, object.layerIndex), -1) + 1; }
 
     private nextPaintLayerOrder(): number { return this.paintLayers.reduce((max, layer) => Math.max(max, layer.order), -1) + 1; }
-
-    private nextViewOrder(): number { return this.views.reduce((max, view) => Math.max(max, view.order), -1) + 1; }
 
     private nextPaintOrder(objectId: string): number {
         return this.strokes
@@ -499,11 +399,8 @@ export class PaintModelingState {
         Object.assign(this, restorePaintSceneSnapshot(snapshot));
         this.draftStroke = null;
         this.pendingStrokeUndoSnapshot = null;
-        this.pendingStrokeView = null;
+        this.pendingStrokeProjection = null;
         this.undoGroup = null;
-
-        const activeView = this.activeView;
-        if (activeView) selectPaintView(this.views, this.orbit, activeView.id);
         this.ribbonVersion += 1;
     }
 }

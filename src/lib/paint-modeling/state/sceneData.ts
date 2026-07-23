@@ -4,21 +4,9 @@ import type {
     PaintRibbon,
     PaintRibbonVertex,
     PaintStroke,
-    PaintView,
     Vec2,
     Vec3,
 } from "../types.ts";
-
-export const cloneView = (view: PaintView): PaintView => {
-    return {
-        ...view,
-        offset: [...view.offset] as Vec3,
-        viewProjMat: [...view.viewProjMat],
-        viewProjInvMat: [...view.viewProjInvMat],
-        viewMat: [...view.viewMat],
-        viewInvMat: [...view.viewInvMat],
-    };
-};
 
 export const cloneObject = (object: PaintObject): PaintObject => ({ ...object });
 

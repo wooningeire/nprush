@@ -79,13 +79,11 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
     );
     await expect(objects.locator(".list-row").first()).toContainText("Object 2");
 
-    const views = page.locator("section").filter({ hasText: "Views" });
-    await dragRowBefore(
-        page,
-        views.locator(".list-row").filter({ hasText: "View 2" }),
-        views.locator(".list-row").filter({ hasText: "View 1" }),
-    );
-    await expect(views.locator(".list-row").first()).toContainText("View 2");
+    await expect(
+        page.locator("section").filter({
+            has: page.getByText("Views", { exact: true }),
+        }),
+    ).toHaveCount(0);
 
     await expect(page.getByLabel("Shade ribbons")).toBeChecked();
     await expect(page.getByLabel("Shade ribbons")).toBeEnabled();
@@ -126,10 +124,25 @@ test("paint modeler canvas supports stroke-owned ribbon surfaces", async ({ page
     await expect(paintLayers.getByRole("button", { name: /Layer 1\s+1s/ })).toBeVisible();
     await expect(objects.getByRole("button", { name: /Object 2\s+1s/ })).toBeVisible();
 
+    const rendererUnavailable = await page.getByText("WebGPU unavailable").isVisible().catch(() => false);
+    if (!rendererUnavailable) {
+        await deferNextStrokePlacement(page);
+        await drawRibbon(page, center.x + 10, center.y + 70);
+        await expect(viewport).toHaveAttribute("aria-busy", "true");
+        await expect(page.locator("aside.control-panel")).toHaveAttribute("inert", "");
+
+        await drawRibbon(page, center.x + 10, center.y - 70);
+        await releaseDeferredStrokePlacement(page);
+        await expect(page.getByText("Strokes 2")).toBeVisible();
+        await expect(viewport).toHaveAttribute("aria-busy", "false");
+        await expect(page.locator("aside.control-panel")).not.toHaveAttribute("inert", "");
+
+        await drawRibbonUntilStrokeCount(page, center.x + 10, center.y - 70, 3);
+    }
+
     await paintOn.selectOption("surface");
     await expect(paintOn).toHaveValue("surface");
 
-    const rendererUnavailable = await page.getByText("WebGPU unavailable").isVisible().catch(() => false);
     if (!rendererUnavailable) {
         await page.mouse.move(center.x + 40, center.y + 8);
         await waitForAnimationFrame(page);
@@ -296,6 +309,40 @@ const drawRibbon = async (page: Page, cx: number, cy: number): Promise<void> => 
     }
     await page.mouse.up();
     await waitForAnimationFrame(page);
+};
+
+const deferNextStrokePlacement = async (page: Page): Promise<void> => {
+    await page.evaluate(async () => {
+        const { PaintModelingRenderer } = await import(
+            "/src/lib/paint-modeling/PaintModelingRenderer.ts"
+        );
+        const prototype = PaintModelingRenderer.prototype;
+        const original = prototype.buildPlacedRibbonFromSourcePoints;
+        let releasePlacement = (): void => {};
+        const releasePromise = new Promise<void>(resolve => {
+            releasePlacement = resolve;
+        });
+        const debugWindow = window as typeof window & {
+            __releasePaintStrokePlacement?: () => void,
+        };
+        debugWindow.__releasePaintStrokePlacement = releasePlacement;
+
+        prototype.buildPlacedRibbonFromSourcePoints = async function(input) {
+            prototype.buildPlacedRibbonFromSourcePoints = original;
+            await releasePromise;
+            return await original.call(this, input);
+        };
+    });
+};
+
+const releaseDeferredStrokePlacement = async (page: Page): Promise<void> => {
+    await page.evaluate(() => {
+        const debugWindow = window as typeof window & {
+            __releasePaintStrokePlacement?: () => void,
+        };
+        debugWindow.__releasePaintStrokePlacement?.();
+        delete debugWindow.__releasePaintStrokePlacement;
+    });
 };
 
 const isStrokeCountVisible = async (page: Page, count: number): Promise<boolean> => {

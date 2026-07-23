@@ -1,5 +1,5 @@
 import {
-    defaultDepthForPaintView,
+    defaultDepthForProjection,
     viewPointToWorldAtDepth,
 } from "./projection.ts";
 import { distance2d, samplePaintStrokeSpline } from "./strokeSampling.ts";
@@ -10,7 +10,7 @@ import {
 import type {
     PaintRibbon,
     PaintRibbonVertex,
-    PaintView,
+    ProjectionSnapshot,
     Vec2,
     Vec3,
 } from "../types.ts";
@@ -21,16 +21,16 @@ export type RibbonBuildResult = {
 
 export const buildRibbonStrokeGeometry = (
     sourcePoints: Vec2[],
-    sourceView: PaintView,
+    sourceProjection: ProjectionSnapshot,
     width: number,
 ): RibbonBuildResult | null => {
     const closed = isClosedSourceStroke(sourcePoints);
     const points = closed ? sourcePoints.slice(0, -1) : sourcePoints;
     if (points.length < 2) return null;
 
-    const depth = defaultDepthForPaintView(sourceView);
+    const depth = defaultDepthForProjection(sourceProjection);
     const centers = points
-        .map(point => viewPointToWorldAtDepth(sourceView, point, depth))
+        .map(point => viewPointToWorldAtDepth(sourceProjection, point, depth))
         .filter((point): point is Vec3 => point !== null);
     if (centers.length < 2) return null;
 
@@ -38,10 +38,10 @@ export const buildRibbonStrokeGeometry = (
     const vertices: PaintRibbonVertex[] = centers.map((center, index) => ({
         position: center,
         side: sideVectorAt(
-            sourceView,
+            sourceProjection,
             points[index],
             depth,
-            ribbonSideOffsetAt(points, index, sourceView, width, closed),
+            ribbonSideOffsetAt(points, index, sourceProjection, width, closed),
             center,
         ),
         u: uValues[index],
@@ -57,11 +57,11 @@ export const buildRibbonStrokeGeometry = (
 
 export const buildRibbonGeometryFromDraft = (
     draftStroke: Vec2[],
-    sourceView: PaintView,
+    sourceProjection: ProjectionSnapshot,
     width: number,
 ): RibbonBuildResult | null => buildRibbonStrokeGeometry(
     samplePaintStrokeSpline(draftStroke),
-    sourceView,
+    sourceProjection,
     width,
 );
 
@@ -89,7 +89,7 @@ const normalizedPolylineU = (points: Vec3[], closed: boolean): number[] => {
 const ribbonSideOffsetAt = (
     points: Vec2[],
     index: number,
-    view: PaintView,
+    projection: ProjectionSnapshot,
     width: number,
     closed: boolean,
 ): Vec2 => {
@@ -104,27 +104,27 @@ const ribbonSideOffsetAt = (
         : closed
             ? points[0]
             : current;
-    const dxPx = (next.x - previous.x) * view.width * 0.5;
-    const dyPx = (next.y - previous.y) * view.height * 0.5;
+    const dxPx = (next.x - previous.x) * projection.width * 0.5;
+    const dyPx = (next.y - previous.y) * projection.height * 0.5;
     const lengthPx = Math.hypot(dxPx, dyPx);
-    if (lengthPx <= 1e-6) return { x: 0, y: Math.max(width, 1) / view.height };
+    if (lengthPx <= 1e-6) return { x: 0, y: Math.max(width, 1) / projection.height };
 
     const halfWidthPx = Math.max(width, 1) * 0.5;
     return {
-        x: -dyPx / lengthPx * halfWidthPx * 2 / view.width,
-        y: dxPx / lengthPx * halfWidthPx * 2 / view.height,
+        x: -dyPx / lengthPx * halfWidthPx * 2 / projection.width,
+        y: dxPx / lengthPx * halfWidthPx * 2 / projection.height,
     };
 };
 
 const sideVectorAt = (
-    sourceView: PaintView,
+    sourceProjection: ProjectionSnapshot,
     sourcePoint: Vec2,
     depth: number,
     sideOffset: Vec2,
     center: Vec3,
 ): Vec3 => {
     const sideWorld = viewPointToWorldAtDepth(
-        sourceView,
+        sourceProjection,
         {
             x: sourcePoint.x + sideOffset.x,
             y: sourcePoint.y + sideOffset.y,

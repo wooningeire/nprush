@@ -13,6 +13,7 @@ let {
     setShadeRibbons,
     planePickArmed,
     setPlanePickArmed,
+    interactionLocked,
 }: {
     modelerState: PaintModelingState,
     rendererError: string | null,
@@ -21,11 +22,11 @@ let {
     setShadeRibbons: (value: boolean) => void,
     planePickArmed: boolean,
     setPlanePickArmed: (value: boolean) => void,
+    interactionLocked: boolean,
 } = $props();
 
 let sortedPaintLayers = $derived([...modelerState.paintLayers].sort((a, b) => a.order - b.order));
 let sortedObjects = $derived([...modelerState.objects].sort((a, b) => a.layerIndex - b.layerIndex));
-let sortedViews = $derived([...modelerState.views].sort((a, b) => a.order - b.order));
 
 const placementModeOptions: { mode: BrushPlacementModeValue, label: string }[] = [
     { mode: BrushPlacementMode.View, label: "View" },
@@ -43,15 +44,14 @@ const layerStrokeCount = (layerId: string, layerOrder: number): number =>
 const objectStrokeCount = (objectId: string): number =>
     modelerState.strokes.filter(stroke => stroke.objectId === objectId).length;
 
-type ReorderList = "paint-layer" | "object" | "view";
+type ReorderList = "paint-layer" | "object";
 
 let draggingList = $state<ReorderList | null>(null);
 let draggingId = $state<string | null>(null);
 
 const reorderDraggedItem = (list: ReorderList, sourceId: string, targetId: string): boolean => {
     if (list === "paint-layer") return modelerState.reorderPaintLayer(sourceId, targetId);
-    if (list === "object") return modelerState.reorderObject(sourceId, targetId);
-    return modelerState.reorderView(sourceId, targetId);
+    return modelerState.reorderObject(sourceId, targetId);
 };
 
 const beginDragReorder = (list: ReorderList, id: string, event: DragEvent): void => {
@@ -85,7 +85,7 @@ const dropReorderTarget = (event: DragEvent): void => {
 const isDragging = (list: ReorderList, id: string): boolean => draggingList === list && draggingId === id;
 </script>
 
-<aside class="control-panel">
+<aside class="control-panel" inert={interactionLocked} aria-busy={interactionLocked}>
     <section>
         <div class="section-title">Paint Modeler</div>
         <div class="subtle">Stroke-owned ribbon prototype</div>
@@ -247,54 +247,6 @@ const isDragging = (list: ReorderList, id: string): boolean => draggingList === 
                             title={`Delete ${object.name}`}
                             onclick={() => {
                                 modelerState.deleteObject(object.id);
-                                requestRender();
-                            }}
-                        >
-                            Delete
-                        </button>
-                    </div>
-                {/each}
-            </div>
-        {/if}
-    </section>
-
-    <div class="separator"></div>
-
-    <section>
-        <div class="section-title">Views</div>
-        {#if sortedViews.length === 0}
-            <div class="subtle">No saved views</div>
-        {:else}
-            <div class="list">
-                {#each sortedViews as view (view.id)}
-                    <div
-                        class="list-row sortable-row"
-                        class:dragging={isDragging("view", view.id)}
-                        role="group"
-                        aria-label={`Drag ${view.name}`}
-                        draggable="true"
-                        ondragstart={(event) => beginDragReorder("view", view.id, event)}
-                        ondragover={(event) => dragOverReorderTarget("view", view.id, event)}
-                        ondrop={dropReorderTarget}
-                        ondragend={finishDragReorder}
-                        animate:flip={{duration: 200, easing: circOut}}
-                    >
-                        <button
-                            class="select-row"
-                            class:active={view.id === modelerState.activeViewId && modelerState.isCameraAtActiveView}
-                            onclick={() => {
-                                modelerState.selectView(view.id);
-                                requestRender();
-                            }}
-                        >
-                            <span>{view.name}</span>
-                            <small>{view.width}x{view.height}</small>
-                        </button>
-                        <button
-                            class="delete-row"
-                            title={`Delete ${view.name}`}
-                            onclick={() => {
-                                modelerState.deleteView(view.id);
                                 requestRender();
                             }}
                         >

@@ -10,7 +10,7 @@ import type {
     PaintObject,
     PaintRibbon,
     PaintStroke,
-    PaintView,
+    ProjectionSnapshot,
     Vec2,
 } from "../types.ts";
 
@@ -19,7 +19,7 @@ export type FinishStrokeInput = {
     pendingStrokeUndoSnapshot: PaintSceneSnapshot | null,
     undoSnapshot: PaintSceneSnapshot,
     object: PaintObject | null,
-    view: PaintView | null,
+    sourceProjection: ProjectionSnapshot | null,
     brush: BrushStyle,
     nextPaintOrder: (objectId: string) => number,
     paintLayerId: string,
@@ -46,12 +46,12 @@ export const planFinishedStroke = ({
     pendingStrokeUndoSnapshot,
     undoSnapshot,
     object,
-    view,
+    sourceProjection,
     brush,
     nextPaintOrder,
     paintLayerId,
 }: FinishStrokeInput): FinishStrokeResult => {
-    if (!draftStroke || draftStroke.length < 2 || !object || !view) {
+    if (!draftStroke || draftStroke.length < 2 || !object || !sourceProjection) {
         return {
             kind: "discard",
             restoreSnapshot: pendingStrokeUndoSnapshot ?? undefined,
@@ -59,7 +59,7 @@ export const planFinishedStroke = ({
     }
 
     const sourcePoints = samplePaintStrokeSpline(draftStroke);
-    const geometry = buildRibbonStrokeGeometry(sourcePoints, view, brush.width);
+    const geometry = buildRibbonStrokeGeometry(sourcePoints, sourceProjection, brush.width);
     if (!geometry || ribbonSegmentCount(geometry.ribbon) === 0) {
         return {
             kind: "discard",
@@ -74,7 +74,6 @@ export const planFinishedStroke = ({
             id: makeId("stroke"),
             objectId: object.id,
             layerId: paintLayerId,
-            sourceViewId: view.id,
             sourcePoints,
             ribbon: geometry.ribbon,
             style: { ...brush },
@@ -88,14 +87,14 @@ export const planFinishedStrokeWithRibbon = ({
     pendingStrokeUndoSnapshot,
     undoSnapshot,
     object,
-    view,
+    sourceProjection,
     brush,
     nextPaintOrder,
     paintLayerId,
     sourcePoints,
     ribbon,
 }: FinishStrokeWithRibbonInput): FinishStrokeResult => {
-    if (!draftStroke || draftStroke.length < 2 || sourcePoints.length < 2 || !object || !view) {
+    if (!draftStroke || draftStroke.length < 2 || sourcePoints.length < 2 || !object || !sourceProjection) {
         return {
             kind: "discard",
             restoreSnapshot: pendingStrokeUndoSnapshot ?? undefined,
@@ -116,7 +115,6 @@ export const planFinishedStrokeWithRibbon = ({
             id: makeId("stroke"),
             objectId: object.id,
             layerId: paintLayerId,
-            sourceViewId: view.id,
             sourcePoints,
             ribbon,
             style: { ...brush },

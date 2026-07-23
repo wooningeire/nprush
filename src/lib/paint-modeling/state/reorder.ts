@@ -1,4 +1,4 @@
-import type { PaintLayer, PaintObject, PaintView } from "../types.ts";
+import type { PaintLayer, PaintObject } from "../types.ts";
 
 type OrderedItemReorderOptions<T> = {
     items: T[],
@@ -59,17 +59,4 @@ export const reorderPaintObjects = (
     idFor: object => object.id,
     orderFor: object => object.layerIndex,
     withOrder: (object, layerIndex) => ({ ...object, layerIndex }),
-});
-
-export const reorderPaintViews = (
-    views: PaintView[],
-    sourceId: string,
-    targetId: string,
-): PaintView[] | null => reorderOrderedItems({
-    items: views,
-    sourceId,
-    targetId,
-    idFor: view => view.id,
-    orderFor: view => view.order,
-    withOrder: (view, order) => ({ ...view, order }),
 });

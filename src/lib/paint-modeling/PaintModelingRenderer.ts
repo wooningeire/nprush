@@ -8,7 +8,7 @@ import type {
     BrushPlacementMode,
     ConstructionPlane,
     PaintRibbon,
-    PaintView,
+    ProjectionSnapshot,
     RenderPrimitive,
     Vec2,
 } from "./types.ts";
@@ -269,7 +269,7 @@ export class PaintModelingRenderer {
 
     buildPlacedRibbonFromSourcePoints(input: {
         sourcePoints: Vec2[],
-        view: PaintView,
+        sourceProjection: ProjectionSnapshot,
         brushWidth: number,
         placementMode: BrushPlacementMode,
         constructionPlane: ConstructionPlane,

@@ -39,13 +39,14 @@ let renderFrameId: number | null = null;
 let uploadedStaticSceneKey: string | null = null;
 let uploadedDraftKey: string | null = null;
 let pointerMode = $state<"paint" | "orbit" | null>(null);
+let strokeCommitPending = $state(false);
 let brushPointerPoint = $state<Vec2 | null>(null);
 let rendererError = $state<string | null>(null);
 let shadeRibbons = $state(true);
 let planePickArmed = $state(false);
 let lastStrokePlacementProvenance = $state<BrushPlacementProvenanceValue[]>([]);
 let placementPointerVisible = $derived(brushPointerPoint !== null && pointerMode !== "orbit");
-let brushGuideVisible = $derived(placementPointerVisible && !planePickArmed);
+let brushGuideVisible = $derived(placementPointerVisible && !planePickArmed && !strokeCommitPending);
 
 $effect(() => {
     if (!canvas) return;
@@ -59,7 +60,6 @@ $effect(() => {
 
 $effect(() => {
     modelerState.ribbonVersion;
-    modelerState.activeViewId;
     modelerState.activeObjectId;
     modelerState.draftStroke;
     modelerState.brush;
@@ -71,6 +71,7 @@ $effect(() => {
     brushPointerPoint;
     pointerMode;
     planePickArmed;
+    strokeCommitPending;
     shadeRibbons;
     requestRender();
 });
@@ -210,6 +211,12 @@ function onPointerDown(event: PointerEvent) {
     const point = pointerNdc(event, target);
     brushPointerPoint = point;
 
+    if (event.button === 0 && strokeCommitPending) {
+        requestRender();
+        event.preventDefault();
+        return;
+    }
+
     if (event.button === 0 && planePickArmed) {
         void pickConstructionPlane(point).catch(error => {
             console.warn("Could not pick construction plane", error);
@@ -266,7 +273,11 @@ function onPointerUp(event: PointerEvent) {
     event.preventDefault();
 
     if (shouldFinishPaint) {
-        void finishPaintStroke().finally(requestRender);
+        strokeCommitPending = true;
+        void finishPaintStroke().finally(() => {
+            strokeCommitPending = false;
+            requestRender();
+        });
     } else {
         requestRender();
     }
@@ -311,12 +322,12 @@ async function pickConstructionPlane(point: Vec2) {
 async function finishPaintStroke() {
     if (renderer) {
         const sourcePoints = modelerState.draftStrokeSourcePoints();
-        const view = modelerState.strokePlacementView();
-        if (sourcePoints && view) {
+        const projection = modelerState.strokePlacementProjection();
+        if (sourcePoints && projection) {
             try {
                 const ribbon = await renderer.buildPlacedRibbonFromSourcePoints({
                     sourcePoints,
-                    view,
+                    sourceProjection: projection,
                     brushWidth: modelerState.brush.width,
                     placementMode: modelerState.brushPlacementMode,
                     constructionPlane: modelerState.constructionPlane,
@@ -365,6 +376,7 @@ function draftRenderKey(): string {
         {setShadeRibbons}
         {planePickArmed}
         {setPlanePickArmed}
+        interactionLocked={strokeCommitPending}
     />
     <paint-viewport
         bind:clientWidth={() => viewportWidth, value => viewportWidth = value}
@@ -382,14 +394,15 @@ function draftRenderKey(): string {
         }}
         class:brush-guide-visible={brushGuideVisible}
         class:plane-pick-armed={planePickArmed}
+        class:stroke-commit-pending={strokeCommitPending}
         data-placement-provenance={lastStrokePlacementProvenance.join(",")}
+        aria-busy={strokeCommitPending}
         role="application"
     >
         <canvas bind:this={canvas}></canvas>
 
         <div class="viewport-hud">
             <span>{modelerState.activeObject?.name ?? "No object"}</span>
-            <span>{modelerState.currentViewName}</span>
         </div>
     </paint-viewport>
 </paint-modeler-content>
@@ -418,6 +431,10 @@ paint-viewport {
 
     &.plane-pick-armed {
         cursor: crosshair;
+    }
+
+    &.stroke-commit-pending {
+        cursor: progress;
     }
 
     > :global(*) {

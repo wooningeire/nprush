@@ -4,7 +4,7 @@ import {
     type BrushPlacementMode as BrushPlacementModeValue,
     type BrushPlacementProvenance as BrushPlacementProvenanceValue,
     type ConstructionPlane,
-    type PaintView,
+    type ProjectionSnapshot,
     type Vec2,
     type Vec3,
 } from "../types.ts";
@@ -67,6 +67,6 @@ export type BrushPlacementReadback = {
 
 export type StrokePlacementInput = PlacementSettings & {
     sourcePoints: Vec2[],
-    view: PaintView,
+    sourceProjection: ProjectionSnapshot,
     brushWidth: number,
 };

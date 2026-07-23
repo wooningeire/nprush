@@ -17,19 +17,18 @@ import type {
     PaintObject,
     PaintRenderOptions,
     PaintStroke,
-    PaintView,
+    ProjectionSnapshot,
     RenderPrimitive,
     Vec2,
 } from "../types.ts";
 
 export type RenderAssemblyContext = {
     objects: PaintObject[],
-    views: PaintView[],
     strokes: PaintStroke[],
     paintLayers: PaintLayer[],
-    renderView: PaintView | null,
+    renderProjection: ProjectionSnapshot,
     activeObject: PaintObject | null,
-    activeView: PaintView | null,
+    activeProjection: ProjectionSnapshot | null,
     draftStroke: Vec2[] | null,
     brush: BrushStyle,
 };
@@ -46,7 +45,7 @@ export const buildPaintRenderSegments = (
         context.strokes,
         objectById,
         context.paintLayers,
-        context.renderView,
+        context.renderProjection,
     )) {
         appendStrokeRenderRibbon(segments, stroke, renderOptions.shadeRibbons);
     }
@@ -81,7 +80,7 @@ const sortedStrokesForRender = (
     strokes: PaintStroke[],
     objectById: Map<string, PaintObject>,
     paintLayers: PaintLayer[],
-    renderView: PaintView | null,
+    renderProjection: ProjectionSnapshot,
 ): PaintStroke[] => {
     const layerById = new Map(paintLayers.map(layer => [layer.id, layer]));
     const layerOrderForStroke = (stroke: PaintStroke): number => {
@@ -100,7 +99,7 @@ const sortedStrokesForRender = (
         })
         .map(stroke => ({
             stroke,
-            depth: strokeDepthForRender(stroke, renderView),
+            depth: strokeDepthForRender(stroke, renderProjection),
         }))
         .sort((a, b) =>
             layerOrderForStroke(a.stroke) - layerOrderForStroke(b.stroke)
@@ -114,11 +113,10 @@ const sortedStrokesForRender = (
 
 const strokeDepthForRender = (
     stroke: PaintStroke,
-    renderView: PaintView | null,
+    renderProjection: ProjectionSnapshot,
 ): number => {
-    if (!renderView) return 0;
-    const origin = cameraCenter(renderView);
-    const forward = viewForward(renderView);
+    const origin = cameraCenter(renderProjection);
+    const forward = viewForward(renderProjection);
     let total = 0;
     let count = 0;
 
@@ -138,10 +136,16 @@ const appendDraftStrokePreviewSegments = (
     shadeRibbons: boolean,
 ) => {
     const object = context.activeObject;
-    const view = context.activeView;
-    if (!context.draftStroke || context.draftStroke.length < 2 || !object?.visible || object.locked || !view) return;
+    const projection = context.activeProjection;
+    if (
+        !context.draftStroke
+        || context.draftStroke.length < 2
+        || !object?.visible
+        || object.locked
+        || !projection
+    ) return;
 
-    const geometry = buildRibbonGeometryFromDraft(context.draftStroke, view, context.brush.width);
+    const geometry = buildRibbonGeometryFromDraft(context.draftStroke, projection, context.brush.width);
     if (!geometry) return;
 
     const color = parseColor(context.brush.color, 1);
