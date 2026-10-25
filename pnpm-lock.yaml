@@ -12,8 +12,8 @@ importers:
         specifier: ^0.3.0
         version: 0.3.0(postcss@8.5.31)(sass@1.106.1)(svelte@5.57.2)(typescript@6.0.3)
       '@vaie/wgsl-templates':
-        specifier: link:..\wgsl-templates
-        version: link:../wgsl-templates
+        specifier: ^0.0.5
+        version: 0.0.5
       wgpu-matrix:
         specifier: ^3.4.2
         version: 3.4.2
@@ -313,6 +313,9 @@ packages:
     resolution: {integrity: sha512-OLZpq3w+I6ZH6Ys7aFb72Pv35cXzBlWjAZHCOJY/B8ln8P3CjthXUg42IB1/SYyF+YQ0J05gY33ZycecY1lXQQ==}
     peerDependencies:
       svelte: ^5.0.0
+
+  '@vaie/wgsl-templates@0.0.5':
+    resolution: {integrity: sha512-CRI3p2y1nlKr4gTc22W8cbIOIekf2E90lczf0w16jHA4Nauoci6w//iRkNF631wZnsYK8PPOHIYHN0jNUa8ahQ==}
 
   '@vitest/browser-playwright@5.0.5':
     resolution: {integrity: sha512-lcdThFUUcMV9mGGV1SUiZXPxfjgW4CssA7o3STxzh8WK0tT2r526kc12tZIBRZfoLMwkhxjLmMXkWXONzdsDQw==}
@@ -1014,6 +1017,8 @@ snapshots:
       - stylus
       - sugarss
       - typescript
+
+  '@vaie/wgsl-templates@0.0.5': {}
 
   '@vitest/browser-playwright@5.0.5(playwright@1.64.1)(vite@8.3.5(sass@1.106.1))(vitest@5.0.5)':
     dependencies:

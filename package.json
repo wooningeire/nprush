@@ -19,7 +19,7 @@
 	},
 	"dependencies": {
 		"@vaie/hui": "^0.3.0",
-		"@vaie/wgsl-templates": "link:..\\wgsl-templates",
+		"@vaie/wgsl-templates": "^0.0.5",
 		"wgpu-matrix": "^3.4.2"
 	},
 	"devDependencies": {
