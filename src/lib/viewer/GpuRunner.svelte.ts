@@ -1,6 +1,6 @@
 import type { Camera } from "./Camera.svelte.ts";
-import { GpuUniformsBufferManager } from "$/gpu/GpuUniformsBufferManager.ts";
-import { GpuMeshRenderPipelineManager } from "$/gpu/GpuMeshRenderPipelineManager.ts";
+import { GpuUniformsBufferManager } from "#/gpu/GpuUniformsBufferManager.ts";
+import { GpuMeshRenderPipelineManager } from "#/gpu/GpuMeshRenderPipelineManager.ts";
 import { GpuSplatOptimizerManager } from "../gpu/splat/GpuSplatOptimizerManager.ts";
 import { GpuBezierOptimizerManager } from "../gpu/bezier/GpuBezierOptimizerManager.ts";
 import { GpuSplatForwardPipelineManager } from "../gpu/splat/GpuSplatForwardPipelineManager.ts";
@@ -14,10 +14,10 @@ import type { MeshData } from "../gpu/file-load/loadGlb.ts";
 import type { ViewerState } from "./ViewerState.svelte.ts";
 import { RENDER_MODE_MULTIVIEW } from "./renderMode.ts";
 import { TurntableController } from "./turntable/TurntableController.ts";
-import { GpuPerformanceMeasurementBufferManager } from "$/gpu/performanceMeasurement/GpuPerformanceMeasurementBufferManager.ts";
+import { GpuPerformanceMeasurementBufferManager } from "#/gpu/performanceMeasurement/GpuPerformanceMeasurementBufferManager.ts";
 import { vec3 } from "wgpu-matrix";
-import { constants } from "$/gpu/constants.ts";
-import { readTextureToImageData, imageDataToBlob } from "$/gpu/file-save/readback.ts";
+import { constants } from "#/gpu/constants.ts";
+import { readTextureToImageData, imageDataToBlob } from "#/gpu/file-save/readback.ts";
 import { GpuTextureManager } from "./GpuTextureManager.ts";
 
 

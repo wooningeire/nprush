@@ -1,4 +1,4 @@
-import { requestGpu } from "$/gpu/setup/requestGpu";
+import { requestGpu } from "#/gpu/setup/requestGpu";
 import gridShaderSource from "./paint_modeler_grid.wgsl?raw";
 import segmentShaderSource from "./paint_modeler_segments.wgsl?raw";
 import triangleShaderSource from "./paint_modeler_triangles.wgsl?raw";

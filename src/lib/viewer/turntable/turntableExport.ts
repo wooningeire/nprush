@@ -1,4 +1,4 @@
-import type { FrameWriter } from "$/util/export.ts";
+import type { FrameWriter } from "#/util/export.ts";
 import type { TurntableOrbitSample } from "./turntablePath.ts";
 
 export interface TurntableOrbitWritable {

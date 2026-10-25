@@ -3,15 +3,27 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import { sveltekit } from '@sveltejs/kit/vite';
+import adapter from '@sveltejs/adapter-static';
+import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-	plugins: [sveltekit()],
+	plugins: [sveltekit({
+		// Consult https://svelte.dev/docs/kit/integrations
+		// for more information about preprocessors
+		preprocess: vitePreprocess(),
+
+		// adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.
+		// If your environment is not supported, or you settled on a specific environment, switch out the adapter.
+		// See https://svelte.dev/docs/kit/adapters for more information about adapters.
+		adapter: adapter(),
+	})],
+	
 	resolve: {
 		alias: {
 			// Explicit for Vitest / esbuild dep-pre-bundling; mirrors svelte.config.js kit.alias `$`.
-			$: path.resolve(projectRoot, 'src/lib'),
+			"#": path.resolve(projectRoot, 'src/lib'),
 		},
 	},
 

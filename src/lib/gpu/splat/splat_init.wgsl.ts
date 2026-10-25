@@ -1,7 +1,7 @@
-import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
+import { interpolateWgslTemplate } from "@vaie/wgsl-templates";
 import { Splat } from "./Splat.wgsl.ts";
 
-export default interpolateWgslTemplate`
+export default interpolateWgslTemplate/* wgsl */`
 struct SplatArray {
     splats: array<${Splat}, {@NUM_SPLATS}u>,
 }

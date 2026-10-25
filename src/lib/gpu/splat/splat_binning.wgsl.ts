@@ -1,4 +1,4 @@
-import { interpolateWgslTemplate } from "../wgsl-templates/interpolateWgslTemplate.ts";
+import { interpolateWgslTemplate } from "@vaie/wgsl-templates";
 import { Splat } from "./Splat.wgsl.ts";
 
 export default interpolateWgslTemplate/* wgsl */`

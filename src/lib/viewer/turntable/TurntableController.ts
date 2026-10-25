@@ -1,16 +1,16 @@
 import type { Camera } from "../Camera.svelte.ts";
 import type { ViewerState } from "../ViewerState.svelte.ts";
-import type { GpuPathTracePipelineManager } from "$/gpu/pathtrace/GpuPathTracePipelineManager.ts";
-import type { GpuSplatOptimizerManager } from "$/gpu/splat/GpuSplatOptimizerManager.ts";
-import type { GpuBezierOptimizerManager } from "$/gpu/bezier/GpuBezierOptimizerManager.ts";
-import type { GpuBezierForwardPipelineManager } from "$/gpu/bezier/GpuBezierForwardPipelineManager.ts";
-import type { GpuUniformsBufferManager } from "$/gpu/GpuUniformsBufferManager.ts";
+import type { GpuPathTracePipelineManager } from "#/gpu/pathtrace/GpuPathTracePipelineManager.ts";
+import type { GpuSplatOptimizerManager } from "#/gpu/splat/GpuSplatOptimizerManager.ts";
+import type { GpuBezierOptimizerManager } from "#/gpu/bezier/GpuBezierOptimizerManager.ts";
+import type { GpuBezierForwardPipelineManager } from "#/gpu/bezier/GpuBezierForwardPipelineManager.ts";
+import type { GpuUniformsBufferManager } from "#/gpu/GpuUniformsBufferManager.ts";
 import { evaluateTurntablePath } from "./turntablePath.ts";
 import { compositeTurntableLayers } from "./turntableComposite.ts";
 import { TurntableFrameCaptureQueue } from "./turntableFrameCapture.ts";
 import { MultiviewDataset } from "../MultiviewDataset.ts";
 import { RENDER_MODE_MULTIVIEW } from "../renderMode.ts";
-import { readTextureToImageData } from "$/gpu/file-save/readback.ts";
+import { readTextureToImageData } from "#/gpu/file-save/readback.ts";
 import type { Mat4 } from "wgpu-matrix";
 
 /** Per-frame view state resolved by the turntable controller. */

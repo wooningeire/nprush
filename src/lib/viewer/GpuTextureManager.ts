@@ -1,6 +1,6 @@
-import { MESH_DEPTH_FORMAT } from "$/gpu/GpuMeshRenderPipelineManager.ts";
-import { computeOptimizationTextureSize } from "$/gpu/optimizationTextureSize.ts";
-import { constants } from "$/gpu/constants.ts";
+import { MESH_DEPTH_FORMAT } from "#/gpu/GpuMeshRenderPipelineManager.ts";
+import { computeOptimizationTextureSize } from "#/gpu/optimizationTextureSize.ts";
+import { constants } from "#/gpu/constants.ts";
 
 const OPTIMIZATION_SHORT = constants.OPTIMIZATION_SHORT;
 

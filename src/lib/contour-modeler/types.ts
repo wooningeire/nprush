@@ -1,4 +1,4 @@
-import type { MeshData } from "$/gpu/file-load/loadGlb";
+import type { MeshData } from "#/gpu/file-load/loadGlb";
 
 export type LegacyContourRole = "exterior" | "interior" | "occluded";
 export type ContourStrokeKind = "edge" | "contour";

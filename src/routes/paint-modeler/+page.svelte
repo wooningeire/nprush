@@ -1,5 +1,5 @@
 <script lang="ts">
-import PaintModeler from "$/paint-modeling/PaintModeler.svelte";
+import PaintModeler from "#/paint-modeling/PaintModeler.svelte";
 </script>
 
 <PaintModeler />

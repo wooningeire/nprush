@@ -1,8 +1,8 @@
 <script lang="ts">
 import "./index.scss";
-import favicon from '$lib/assets/favicon.svg';
+import favicon from "#/assets/favicon.svg";
 import { page } from '$app/state';
-import Toasts from "$/viewer/Toasts.svelte";
+import Toasts from "#/viewer/Toasts.svelte";
 import WorkspaceNav from "./WorkspaceNav.svelte";
 
 let { children } = $props();

@@ -1,5 +1,5 @@
 import type { ImplicitShape } from "./types.ts";
-import { requestGpu } from "$/gpu/setup/requestGpu";
+import { requestGpu } from "#/gpu/setup/requestGpu";
 
 const SHADER = /* wgsl */`
 struct Uniforms {

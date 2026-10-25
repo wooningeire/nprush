@@ -1,4 +1,4 @@
-import { WgslConstant } from "./wgsl-templates/WgslConstant.ts";
+import { WgslConstant } from "@vaie/wgsl-templates";
 
 
 export const constants = {

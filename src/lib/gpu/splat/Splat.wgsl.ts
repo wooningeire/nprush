@@ -1,4 +1,4 @@
-import { WgslStruct } from "../wgsl-templates/WgslStruct.ts";
+import { WgslStruct } from "@vaie/wgsl-templates";
 
 export const Splat = WgslStruct.fromCode(/* wgsl */`\
 struct Splat {

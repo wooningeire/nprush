@@ -1,4 +1,4 @@
-import type { MeshData } from "$/gpu/file-load/loadGlb";
+import type { MeshData } from "#/gpu/file-load/loadGlb";
 import { bodyAxes, implicitBodyNormal, implicitBodyPoint } from "./implicitBody.ts";
 import type { ImplicitBodyParams } from "./types.ts";
 
